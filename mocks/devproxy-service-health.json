@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dotnet/dev-proxy/main/schemas/v3.3.1/mockresponseplugin.mocksfile.schema.json",
+  "mocks": [
+    {
+      "request": {
+        "url": "https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/healthOverviews*",
+        "method": "GET"
+      },
+      "response": {
+        "statusCode": 200,
+        "headers": [{ "name": "Content-Type", "value": "application/json" }],
+        "body": {
+          "value": [{ "id": "Exchange", "service": "Exchange Online", "status": "serviceOperational", "issues": [] }]
+        }
+      }
+    }
+  ]
+}

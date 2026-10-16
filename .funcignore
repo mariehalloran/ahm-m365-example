@@ -1,0 +1,10 @@
+node_modules/
+tests/
+src/
+docs/
+infra/
+mocks/
+.azure/
+ahm-m365-example/
+local.settings.json
+*.zip

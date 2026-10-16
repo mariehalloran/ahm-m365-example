@@ -1,0 +1,1 @@
+{ "status": 429, "body": { "error": { "code": "TooManyRequests", "message": "Synthetic throttling scenario" } } }

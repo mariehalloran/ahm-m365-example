@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.azure/
+local.settings.json
+.env
+*.zip
+**/bin/
+**/obj/
+.DS_Store
