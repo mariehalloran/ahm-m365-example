@@ -6,7 +6,7 @@ Each service process runs its configured test and emits raw results plus OTel me
 
 OpenTelemetry runs in that **same process/container**. Deploying a separate telemetry worker, Collector, or AKS cluster is not required for the selected Application Insights export path. Exchange, Teams, and SharePoint use separate configs/cadences and are intended for separate Container Apps. Container hosting is not deployed yet.
 
-Use the [shared worker guide](../utils/README.md) for commands and strict config fields. Each root service owns its entry, actions/journey, config, tests and queries. Checked-in configs use simulation/console mode and make no live mutations or Azure exports.
+Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey, config, tests and queries; shared code and Node tooling also live in that project. Checked-in configs use simulation/console mode and make no live mutations or Azure exports.
 
 ## Scheduling and shutdown
 
@@ -40,7 +40,7 @@ The mailbox identity and telemetry destination are independent. Approve cross-te
 
 Each attempt exports one OTel result log, a success sample of 1 or 0, and durations. Every executed named action also exports `synthetic.step.success` (1/0) and `synthetic.step.duration` (seconds). Failed prerequisites block later actions, reported as skipped with no fabricated metric. Cleanup still runs after mutation using an independent ten-second budget. A cleanup failure preserves earlier successful step observations but makes overall success zero. No application-side sampling is applied. The SDK uses bounded memory buffers, not a persistent outbox; offline disk storage is disabled. Failed/missing exports are not service successes. Crashes/network failures can lose telemetry, with no exactly-once guarantee.
 
-[Shared measurement semantics](../utils/README.md#measurements-and-queries) explain average success × 100, weighted mean duration and reporting gaps. Queries are service-owned: [Exchange](../exchange/queries/), [Teams](../teams/queries/), [SharePoint](../sharepoint/queries/), each with `analytics/` and `health-model/`. They never combine services, enumerate target IDs, or require raw-result joins. Filter simulation separately and keep unexecutable attempts visible.
+[Shared measurement semantics](../synthetic-tests/utils/README.md#measurements-and-queries) explain average success × 100, weighted mean duration and reporting gaps. Queries are service-owned: [Exchange](../synthetic-tests/exchange/queries/), [Teams](../synthetic-tests/teams/queries/), [SharePoint](../synthetic-tests/sharepoint/queries/), each with `analytics/` and `health-model/`. They never combine services, enumerate target IDs, or require raw-result joins. Filter simulation separately and keep unexecutable attempts visible.
 
 Log Analytics does not analyze continuously just because it receives data. The model's query signals evaluate live-only data on a refresh schedule. Alert delivery is a separate configuration; a query signal alone does not notify anyone.
 
@@ -52,7 +52,7 @@ Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_S
 
 Each configured source runs once per worker cycle, independently bounded to 30 seconds and five exact-origin/version/path pages. Check `m365-provider-collection-failed` logs and `service-cycle-summary.providers.failed`; successful journeys can coexist with provider failures. Simulation records skipped sources without Graph credentials/network or fabricated Microsoft health. All historical beta values are Logger-only snapshots; no provider value enters synthetic or step measurements. `--once` flushes these logs and shuts down the same embedded SDK.
 
-See the [strict schema, limits, exact AppTraces fields and first-party references](../utils/README.md#optional-provider-collectors). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
+See the [strict schema, limits, exact AppTraces fields and first-party references](../synthetic-tests/utils/README.md#optional-provider-collectors). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
 
 ## Timing, retries, and cleanup
 

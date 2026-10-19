@@ -26,11 +26,11 @@ var serviceSignals = [
     journey: 'send-receive-mail'
     entityName: 'exchange-global'
     timeGrain: 'PT5M'
-    successQuery: loadTextContent('../../exchange/queries/health-model/success-percentage.kql')
-    latencyQuery: loadTextContent('../../exchange/queries/health-model/mean-latency.kql')
-    stepSuccessQuery: loadTextContent('../../exchange/queries/health-model/step-success.kql')
-    stepDurationQuery: loadTextContent('../../exchange/queries/health-model/step-duration.kql')
-    serviceHealthQuery: loadTextContent('../../exchange/queries/health-model/service-health-status.kql')
+    successQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/success-percentage.kql')
+    latencyQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/mean-latency.kql')
+    stepSuccessQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/step-success.kql')
+    stepDurationQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/step-duration.kql')
+    serviceHealthQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/service-health-status.kql')
     steps: [
       { name: 'authenticate', displayName: 'Authenticate' }
       { name: 'create-draft', displayName: 'Create email' }
@@ -44,11 +44,11 @@ var serviceSignals = [
     journey: 'publish-channel-message'
     entityName: 'teams-global'
     timeGrain: 'PT5M'
-    successQuery: loadTextContent('../../teams/queries/health-model/success-percentage.kql')
-    latencyQuery: loadTextContent('../../teams/queries/health-model/mean-latency.kql')
-    stepSuccessQuery: loadTextContent('../../teams/queries/health-model/step-success.kql')
-    stepDurationQuery: loadTextContent('../../teams/queries/health-model/step-duration.kql')
-    serviceHealthQuery: loadTextContent('../../teams/queries/health-model/service-health-status.kql')
+    successQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/success-percentage.kql')
+    latencyQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/mean-latency.kql')
+    stepSuccessQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/step-success.kql')
+    stepDurationQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/step-duration.kql')
+    serviceHealthQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/service-health-status.kql')
     steps: [
       { name: 'authenticate', displayName: 'Authenticate' }
       { name: 'post-message', displayName: 'Post message' }
@@ -61,11 +61,11 @@ var serviceSignals = [
     journey: 'save-reopen-file'
     entityName: 'sharepoint-global'
     timeGrain: 'PT15M'
-    successQuery: loadTextContent('../../sharepoint/queries/health-model/success-percentage.kql')
-    latencyQuery: loadTextContent('../../sharepoint/queries/health-model/mean-latency.kql')
-    stepSuccessQuery: loadTextContent('../../sharepoint/queries/health-model/step-success.kql')
-    stepDurationQuery: loadTextContent('../../sharepoint/queries/health-model/step-duration.kql')
-    serviceHealthQuery: loadTextContent('../../sharepoint/queries/health-model/service-health-status.kql')
+    successQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/success-percentage.kql')
+    latencyQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/mean-latency.kql')
+    stepSuccessQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/step-success.kql')
+    stepDurationQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/step-duration.kql')
+    serviceHealthQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/service-health-status.kql')
     steps: [
       { name: 'authenticate', displayName: 'Authenticate' }
       { name: 'verify-drive', displayName: 'Verify library' }

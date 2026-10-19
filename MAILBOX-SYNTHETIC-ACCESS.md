@@ -4,7 +4,7 @@ This is the administrator handoff for the **same-Entra-tenant** design. The work
 
 No mailbox password, application secret, customer-managed certificate, or Key Vault credential is required for hosted Exchange authentication. Azure manages the identity's credentials.
 
-The [Container Apps Bicep setup](./exchange/infra/README.md) is a **mock, not deployed**. It does not grant mailbox permissions. The separate health-model deployment does not establish Exchange access.
+The [Container Apps Bicep setup](./synthetic-tests/exchange/infra/README.md) is a **mock, not deployed**. It does not grant mailbox permissions. The separate health-model deployment does not establish Exchange access. Start with the [administrator walkthrough](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) for the full enablement sequence, including optional Graph app-role assignment.
 
 ## 1. What we need the administrators to provide
 
@@ -74,7 +74,7 @@ No SharePoint-specific serviceActivity function has been verified in the documen
 
 ## 3. Mock infrastructure and non-secret handoff IDs
 
-The [mock Bicep](./exchange/infra/main.bicep) outputs:
+The [mock Bicep](./synthetic-tests/exchange/infra/main.bicep) outputs:
 
 - `identityResourceId`: the Azure resource attached to the Container App.
 - `clientId`: select this identity in the worker and use it as Exchange `-AppId`.
@@ -157,7 +157,7 @@ The mock Bicep uses the managed-identity path and needs no mailbox certificate/s
 
 ## 6. Journey and step boundaries
 
-The [Exchange service](./exchange/) owns its config, worker, journey, action functions, tests, and queries. Reusable HTTP, authentication, scheduling, and OTel utilities live in [utils/](./utils/).
+The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, journey, action functions, tests, and queries. Reusable HTTP, authentication, scheduling, and OTel utilities live in [utils/](./synthetic-tests/utils/).
 
 The journey is authenticate -> create draft -> send -> confirm Inbox delivery -> cleanup. Each executed step emits its own 1/0 success and duration. A blocked step is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 

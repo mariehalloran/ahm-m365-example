@@ -8,7 +8,7 @@ The intended deployment is one Azure Container App per service. Its test code an
 
 ## Run
 
-From the repository root:
+Run from the `synthetic-tests/` project directory:
 
 ```sh
 npm run exchange -- --once
@@ -18,7 +18,7 @@ npm run sharepoint
 npm run teams -- --once
 ```
 
-Each entry defaults to its own `<service>/config.json`; optional `--config <file>` overrides it, but another service's config is rejected before runtime initialization. `--once` limits execution to one cycle; inspect individual result outcomes rather than interpreting process completion as proof that a service works. There is no generic all-service CLI or process launcher.
+Each entry defaults to its own `<service>/config.json` from that project directory; optional `--config <file>` overrides it, but another service's config is rejected before runtime initialization. `--once` limits execution to one cycle; inspect individual result outcomes rather than interpreting process completion as proof that a service works. There is no generic all-service CLI or process launcher.
 
 Production utilities do not import service implementations. Each service's `src/worker.ts` supplies its selected journey handler to [worker.ts](./src/worker.ts). [runner.ts](./src/runner.ts) only executes that handler (or deterministic simulation), validates the version 2.0 result, and exports observations.
 
@@ -75,7 +75,7 @@ One target now produces useful measurements; there is no worker-side three-sampl
 
 ## Optional provider collectors
 
-The service entry supplies both its journey and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Exchange, Teams and SharePoint collect independently at their existing per-type cadence, once per cycle regardless of target count. No persisted watermark, last-seen cache, health report, or extra OTel process is introduced.
+The service entry supplies both its journey and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Exchange, Teams and SharePoint collect independently at their existing per-type cadence, once per cycle regardless of target count. Read-only provider sources run concurrently with the synthetic journey, without blocking journey startup. Both settle before the cycle summary, and diagnostics that finish after the journey's flush are flushed before that summary. No persisted watermark, last-seen cache, health report, or extra OTel process is introduced.
 
 All fields are optional and default to:
 
@@ -139,7 +139,7 @@ Explicit `graphAuthentication: "certificate"` local live Graph operations requir
 - `AZURE_CLIENT_CERTIFICATE_PATH`
 - `ENABLE_LIVE_M365=true`, after the mailbox/site access checks
 
-Do not store passwords, connection strings, or private keys in config files. Keep PEM files ignored and readable only by their owner. See the [administrator handoff](../MAILBOX-SYNTHETIC-ACCESS.md).
+Do not store passwords, connection strings, or private keys in config files. Keep PEM files ignored and readable only by their owner. See the [administrator handoff](../../MAILBOX-SYNTHETIC-ACCESS.md).
 
 Teams also requires `BOT_TENANT_ID`, `BOT_CLIENT_ID`, and `BOT_CLIENT_CERTIFICATE_PATH`. The bot's Connector token uses `https://api.botframework.com/.default`; Graph observation uses `https://graph.microsoft.com/.default`. Bot, observer, and target tenants must match. The two tokens are not interchangeable.
 
@@ -212,4 +212,4 @@ node dist/teams/src/worker.js --once
 node dist/sharepoint/src/worker.js --once
 ```
 
-Production builds include application code only, excluding tests. Workers execute handlers in-process; Container Apps packaging/deployment remain separate work. One root npm package owns all three entries and these shared utilities.
+Run these commands from `synthetic-tests/`. Production builds include application code only, excluding tests. Workers execute handlers in-process; Container Apps packaging/deployment remain separate work. The package in that directory owns all three entries and these shared utilities.

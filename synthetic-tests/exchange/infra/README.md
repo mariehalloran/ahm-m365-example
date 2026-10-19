@@ -61,7 +61,7 @@ An **approved image built from this repository and already published** must
 exist before the worker is usable. This mock does not add a Dockerfile, install
 dependencies, build/package the application, or publish an image.
 
-The image must include Node.js, the compiled root-package output and its runtime
+The image must include Node.js, the compiled `synthetic-tests/` package output and its runtime
 dependencies (including the embedded OpenTelemetry SDK/exporter), and an image
 working directory matching `workerEntrypoint`. The container command is:
 
@@ -69,7 +69,7 @@ working directory matching `workerEntrypoint`. The container command is:
 node dist/exchange/src/worker.js --config /etc/probe/exchange.json
 ```
 
-The approved root-package image must contain that compiled worker path.
+The approved image built from the `synthetic-tests/` package must contain that compiled worker path.
 `workerEntrypoint` can be overridden if an approved image uses another working
 directory/layout. Replace the image placeholder in `main.bicepparam` before any
 future deployment. No runtime source changes are part of this scaffold.

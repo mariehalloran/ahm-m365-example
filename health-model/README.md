@@ -2,7 +2,7 @@
 
 Each service owns its worker, journey functions, reusable action functions, metrics, tests, and query files. This component owns the model topology that evaluates those measurements.
 
-**Workers remain stateless.** They publish 1/0 observations and durations, not Healthy/Unhealthy states. Shared authentication, scheduling, HTTP, and embedded OTel functionality lives in [utils/](../utils/).
+**Workers remain stateless.** They publish 1/0 observations and durations, not Healthy/Unhealthy states. Shared authentication, scheduling, HTTP, and embedded OTel functionality lives in [utils/](../synthetic-tests/utils/).
 
 ## Deployed topology
 
@@ -69,9 +69,9 @@ No worker persists these outcomes between cycles. Log Analytics/model queries ow
 
 | Service / journey label | Query source | Lookback |
 | --- | --- | --- |
-| Exchange / `send-receive-mail` | [exchange/queries/health-model/](../exchange/queries/health-model/) | 5 minutes |
-| Teams / `publish-channel-message` | [teams/queries/health-model/](../teams/queries/health-model/) | 5 minutes |
-| SharePoint / `save-reopen-file` | [sharepoint/queries/health-model/](../sharepoint/queries/health-model/) | 15 minutes |
+| Exchange / `send-receive-mail` | [synthetic-tests/exchange/queries/health-model/](../synthetic-tests/exchange/queries/health-model/) | 5 minutes |
+| Teams / `publish-channel-message` | [synthetic-tests/teams/queries/health-model/](../synthetic-tests/teams/queries/health-model/) | 5 minutes |
+| SharePoint / `save-reopen-file` | [synthetic-tests/sharepoint/queries/health-model/](../synthetic-tests/sharepoint/queries/health-model/) | 15 minutes |
 
 Every query scopes the exact Application Insights resource, one service, one journey, and **live** mode. Step queries additionally select one bounded `probe.step`. No mailbox address, target/probe inventory, trace join, or dynamic code is required.
 
@@ -97,7 +97,7 @@ The [template](./infra/main.bicep) manages:
 
 Journey signals refresh every minute; provider context refreshes every five minutes. This is approximately **49,824 scheduled evaluations per day** before service behavior/limits. Review applicable query/model pricing, workspace ingestion/retention, and refresh requirements.
 
-This deployment does **not** create Container Apps, mailbox permissions, a registry, or the Exchange user-assigned identity. The [Exchange managed-identity Bicep](../exchange/infra/README.md) remains an independent **mock-only setup**. The workspace retains data for thirty days; Application Insights has its own daily cap and sampling configuration to review.
+This deployment does **not** create Container Apps, mailbox permissions, a registry, or the Exchange user-assigned identity. The [Exchange managed-identity Bicep](../synthetic-tests/exchange/infra/README.md) remains an independent **mock-only setup**. The workspace retains data for thirty days; Application Insights has its own daily cap and sampling configuration to review.
 
 ## Apply and inspect
 

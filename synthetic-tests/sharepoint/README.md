@@ -92,13 +92,15 @@ This two-identity path is **not implemented** in the current config/handler.
 
 ## Run the existing safe example
 
+Run from the `synthetic-tests/` project directory:
+
 ```sh
 npm run sharepoint -- --once
 # Compiled equivalent after npm run build:
 node dist/sharepoint/src/worker.js --once
 ```
 
-The worker defaults to `sharepoint/config.json`, accepts optional `--config <file>`, and rejects other service types before credentials or operations. See [operations](../docs/operations.md) for live opt-in, credential protection, telemetry, and monitoring requirements.
+The worker defaults to `sharepoint/config.json` from that project directory, accepts optional `--config <file>`, and rejects other service types before credentials or operations. See [operations](../../docs/operations.md) for live opt-in, credential protection, telemetry, and monitoring requirements.
 
 To prepare live access, copy the [disabled live template](./config.live.example.json) to an ignored config location such as `.azure/sharepoint.json`. Replace site/drive/folder placeholders, select the approved Graph identity, and explicitly enable only after authorization checks. The template neither creates resources nor grants permissions. Keep `telemetry: console` for the first manual validation if Azure export is not yet wanted.
 

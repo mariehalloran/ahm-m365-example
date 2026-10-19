@@ -39,7 +39,7 @@ FIXED_TIME = "datetime(2026-10-19T12:30:00Z)"
 def definitions(application_id):
     queries = []
     for service, profile in SERVICES.items():
-        folder = ROOT / service / "queries" / "health-model"
+        folder = ROOT / "synthetic-tests" / service / "queries" / "health-model"
         expected = {
             "success-percentage": 100 * profile["successes"] / (profile["successes"] + 2),
             "mean-latency": 2500 * profile["seconds"],
@@ -163,7 +163,7 @@ def verify_provider_context(args, workspace_id, application_id):
     schema = "datatable(TimeGenerated:datetime, _ResourceId:string, Message:string, Properties:dynamic)"
     checks = 0
     for service in SERVICES:
-        query = (ROOT / service / "queries" / "health-model" / "service-health-status.kql").read_text()
+        query = (ROOT / "synthetic-tests" / service / "queries" / "health-model" / "service-health-status.kql").read_text()
         query = query.replace("__APPLICATION_INSIGHTS_RESOURCE_ID__", application_id)
         query = re.sub(r"ago\((\d+m)\)", lambda match: f"({FIXED_TIME} - {match[1]})", query)
         query = query.replace("now()", FIXED_TIME)

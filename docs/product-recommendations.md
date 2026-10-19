@@ -6,7 +6,7 @@ The worker performs a bounded operation, cleans up its artifacts, and exports it
 
 Each service has one config/process, with its own cadence and embedded OTel SDK. Azure Container Apps is the intended host; separate Container Apps reuse the same program. There is no separate telemetry worker or Kubernetes requirement.
 
-The [shared utilities guide](../utils/README.md#measurements-and-queries) documents measurement semantics; each root service owns its worker, configuration, journey/actions, tests and `queries/analytics` plus `queries/health-model`. No generic runner or separate telemetry source component is needed. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
+The [shared utilities guide](../synthetic-tests/utils/README.md#measurements-and-queries) documents measurement semantics; each service under `synthetic-tests/` owns its worker, configuration, journey/actions, tests and `queries/analytics` plus `queries/health-model`. Reusable helpers remain in root `utils/`, and model infrastructure remains in root `health-model/`. No generic runner or separate telemetry source component is needed. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
 
 ## Optional Microsoft-reported providers
 
@@ -18,11 +18,11 @@ Exchange's verified beta report is `getConnectivityMetricsForExchange`; Teams' i
 
 Basic tenants can run the API-backed synthetics and stable Service Health with the subscribed services/appropriate Teams SKU and approved access. Do not promise beta reports on Basic: API permission documentation does not explicitly confirm Basic entitlement. The separate [advanced Microsoft 365 monitoring feature](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service. That published feature threshold is not a verified beta API licensing rule; tenant report eligibility must still be checked.
 
-All provider observations use ordinary Logger-only AppTraces, not synthetic/step metrics. Bounded UTC historical windows overlap; do not count each repeated snapshot as new requests or derive synthetic success rates from it. Explicit source failure/no-data/truncation diagnostics accompany independent summary counts; no empty healthy fallback is used. Simulation skips provider I/O and credentials. See the [exact configuration/diagnostic contract](../utils/README.md#optional-provider-collectors). Local mocked validation proves neither live access nor tenant eligibility and grants no permission.
+All provider observations use ordinary Logger-only AppTraces, not synthetic/step metrics. Bounded UTC historical windows overlap; do not count each repeated snapshot as new requests or derive synthetic success rates from it. Explicit source failure/no-data/truncation diagnostics accompany independent summary counts; no empty healthy fallback is used. Simulation skips provider I/O and credentials. See the [exact configuration/diagnostic contract](../synthetic-tests/utils/README.md#optional-provider-collectors). Local mocked validation proves neither live access nor tenant eligibility and grants no permission.
 
 ## Teams: bot-backed channel journey
 
-[Teams](../teams/README.md) implements bot channel publication, Graph correlation/author readback, and deletion of the bot's own activity. HTTP-level tests assume approved access. Real resources, bot installation/metadata, credentials, and live validation are still required. Graph defaults to an explicitly selected same-tenant UAMI; Bot Connector remains independently certificate-backed.
+[Teams](../synthetic-tests/teams/README.md) implements bot channel publication, Graph correlation/author readback, and deletion of the bot's own activity. HTTP-level tests assume approved access. Real resources, bot installation/metadata, credentials, and live validation are still required. Graph defaults to an explicitly selected same-tenant UAMI; Bot Connector remains independently certificate-backed.
 
 | Candidate | Requirements / limitations |
 | --- | --- |

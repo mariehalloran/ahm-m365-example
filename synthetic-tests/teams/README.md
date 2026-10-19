@@ -17,7 +17,7 @@ First-party references: [health overviews](https://learn.microsoft.com/graph/api
 
 The [journey](./src/journey.ts) composes the named [actions](./src/steps.ts) `authenticate`, `postMessage`, `confirmPublication`, and `cleanup`. Journey ID `publish-channel-message` uses ordered step IDs `authenticate`, `post-message`, `confirm-publication`, `cleanup`. Every executed action emits step success (1/0) and seconds; blocked actions are skipped, not recorded as failed operations. Cleanup failure preserves prior successes and timings but fails the overall attempt.
 
-Run `npm run teams -- --once` or, after building, `node dist/teams/src/worker.js --once`. The entry defaults to `teams/config.json` and rejects other service types before initializing credentials. Optional `--config <file>` overrides only this service's configuration.
+From the `synthetic-tests/` project directory, run `npm run teams -- --once` or, after building, `node dist/teams/src/worker.js --once`. The entry defaults to `teams/config.json` and rejects other service types before initializing credentials. Optional `--config <file>` overrides only this service's configuration.
 
 [Analytics queries](./queries/analytics/) and [model queries](./queries/health-model/) remain owned by this service; shared telemetry semantics are in [utils](../utils/README.md#measurements-and-queries).
 

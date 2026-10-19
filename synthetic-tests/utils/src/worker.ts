@@ -77,11 +77,21 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     });
     while (!signal.aborted) {
       try {
-        const providers = options.providers ? await options.providers({
+        const providerCollection = Promise.resolve().then(() => options.providers?.({
           service, results: dependencies.results, signal,
           ...(dependencies.graph ? { graph: dependencies.graph } : {}),
-        }) : undefined;
-        const cycle = await execute(config, dependencies, signal);
+        }));
+        const [journeyExecution, providerExecution] = await Promise.allSettled([
+          execute(config, dependencies, signal),
+          providerCollection,
+        ]);
+        if (journeyExecution.status === "rejected") throw journeyExecution.reason;
+        if (providerExecution.status === "rejected") throw providerExecution.reason;
+        const cycle = journeyExecution.value;
+        const providers = providerExecution.value;
+        if (providers && providers.configured > 0) {
+          await dependencies.results.forceFlush();
+        }
         telemetry.emit("service-cycle-summary", {
           cycleId: cycle.cycleId, probeCount: cycle.results.length,
           ...(providers ? { providers } : {}),

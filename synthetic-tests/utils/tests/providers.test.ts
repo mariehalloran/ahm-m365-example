@@ -238,35 +238,35 @@ describe("read-only Graph provider clients", () => {
       await expect(getConnectivityMetricsForExchange(http.graph, serviceActivityWindow({}, now()), signal())).rejects.toMatchObject({
         category: rows.length ? "malformed-response" : "no-data",
       });
-      it("accepts the complete maximum one-day report in one page (288 five-minute buckets)", async () => {
-        const window = serviceActivityWindow({ aggregationIntervalMinutes: 5, lookbackMinutes: 1440 }, now());
-        const rows = Array.from({ length: 288 }, (_, index) => ({
-          intervalStartDateTime: new Date(Date.parse(window.start) + index * 5 * 60_000).toISOString(), value: index,
-        }));
-        const http = client(() => json({ value: rows }));
-        expect(await getMessageVolumeMetricsForTeamsChat(http.graph, window, signal())).toHaveLength(288);
-        expect(http.fetcher).toHaveBeenCalledOnce();
-      });
-      it("rejects direct future/older-than-30-day windows before tokens or network", async () => {
-        vi.spyOn(Date, "now").mockReturnValue(now());
-        const http = client(() => json({ value: [] }));
-        for (const time of [now() + 60 * 60_000, now() - 31 * 86400000]) {
-          const window = serviceActivityWindow({}, time);
-          await expect(getConnectivityMetricsForExchange(http.graph, window, signal())).rejects.toMatchObject({ category: "collector-failure" });
-        }
-        expect(http.token).not.toHaveBeenCalled();
-        expect(http.fetcher).not.toHaveBeenCalled();
-      });
-      it("bounds streamed provider pages in bytes and cancels oversized responses", async () => {
-        const cancel = vi.fn();
-        const http = client(() => new Response(new ReadableStream<Uint8Array>({
-          start(controller) { controller.enqueue(new Uint8Array(2_000_001)); },
-          cancel,
-        })));
-        await expect(getServiceHealthIssues(http.graph, signal())).rejects.toMatchObject({ category: "malformed-response" });
-        expect(cancel).toHaveBeenCalledOnce();
-      });
     }
+  });
+  it("accepts the complete maximum one-day report in one page (288 five-minute buckets)", async () => {
+    const window = serviceActivityWindow({ aggregationIntervalMinutes: 5, lookbackMinutes: 1440 }, now());
+    const rows = Array.from({ length: 288 }, (_, index) => ({
+      intervalStartDateTime: new Date(Date.parse(window.start) + index * 5 * 60_000).toISOString(), value: index,
+    }));
+    const http = client(() => json({ value: rows }));
+    expect(await getMessageVolumeMetricsForTeamsChat(http.graph, window, signal())).toHaveLength(288);
+    expect(http.fetcher).toHaveBeenCalledOnce();
+  });
+  it("rejects direct future/older-than-30-day windows before tokens or network", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(now());
+    const http = client(() => json({ value: [] }));
+    for (const time of [now() + 60 * 60_000, now() - 31 * 86400000]) {
+      const window = serviceActivityWindow({}, time);
+      await expect(getConnectivityMetricsForExchange(http.graph, window, signal())).rejects.toMatchObject({ category: "collector-failure" });
+    }
+    expect(http.token).not.toHaveBeenCalled();
+    expect(http.fetcher).not.toHaveBeenCalled();
+  });
+  it("bounds streamed provider pages in bytes and cancels oversized responses", async () => {
+    const cancel = vi.fn();
+    const http = client(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(2_000_001)); },
+      cancel,
+    })));
+    await expect(getServiceHealthIssues(http.graph, signal())).rejects.toMatchObject({ category: "malformed-response" });
+    expect(cancel).toHaveBeenCalledOnce();
   });
   it("allows continuation only for the exact beta function and interval", async () => {
     const window = serviceActivityWindow({}, now());
@@ -283,6 +283,46 @@ describe("read-only Graph provider clients", () => {
 });
 
 describe("isolated once-per-cycle provider diagnostics", () => {
+  it("starts the journey without waiting for a slow diagnostic source and flushes its late records", async () => {
+    vi.useFakeTimers();
+    const results = {
+      record: vi.fn(),
+      recordDiagnostic: vi.fn(),
+      forceFlush: vi.fn(async () => undefined),
+      shutdown: vi.fn(async () => undefined),
+    };
+    const events = { emit: vi.fn() };
+    const handler = vi.fn(async probe => ({
+      ...baseResult(probe, now()), success: true, durationMs: 100,
+    }));
+    const pending = runServiceWorker(parseServiceConfig({
+      ...rawConfig(), serviceActivity: { enabled: true },
+    }), {
+      once: true, env, telemetry: events, handler,
+      createDependencies: () => ({ results, telemetry: events }),
+      providers: async context => {
+        await new Promise(resolve => setTimeout(resolve, PROVIDER_SOURCE_TIMEOUT_MS));
+        context.results.recordDiagnostic({
+          kind: "failure", service: "exchange", collectedAt: stamp,
+          source: "getConnectivityMetricsForExchange", apiVersion: "beta", category: "collection-budget",
+        });
+        return { configured: 1, succeeded: 0, failed: 1, skipped: 0, records: 0 };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(results.record).toHaveBeenCalledTimes(2);
+    expect(results.recordDiagnostic).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(PROVIDER_SOURCE_TIMEOUT_MS);
+    await pending;
+    expect(results.recordDiagnostic).toHaveBeenCalledOnce();
+    expect(results.forceFlush).toHaveBeenCalledTimes(2);
+    expect(results.shutdown).toHaveBeenCalledOnce();
+    expect(events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+      providers: { configured: 1, succeeded: 0, failed: 1, skipped: 0, records: 0 },
+    }));
+    expect(results.record.mock.calls.every(([attempt]) => attempt.success)).toBe(true);
+  });
   it.each(["exchange", "teams", "sharepoint"] as const)("collects each %s source once with two targets and preserves SDK journey counts", async type => {
     const service = parseServiceConfig({
       ...rawConfig(type), serviceHealth: true, serviceActivity: { enabled: type !== "sharepoint" },
@@ -362,62 +402,61 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       service: parseServiceConfig({ ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true } }),
       graph: http.graph, signal: signal(), results: { recordDiagnostic }, now,
     });
-    it.each(["invalid-value", "empty", "http-error", "invalid-json"] as const)(
-      "keeps beta %s diagnostic-only while stable context and successful journey metrics report", async failure => {
-        vi.spyOn(Date, "now").mockReturnValue(now());
-        const http = client(url => {
-          if (url.includes("healthOverviews")) return json({ value: [overview()] });
-          if (url.includes("/issues")) return json({ value: [] });
-          if (failure === "http-error") return new Response("PRIVATE-BETA-FAILURE", { status: 500 });
-          if (failure === "invalid-json") return new Response("PRIVATE-BETA-FAILURE");
-          return json({ value: failure === "empty" ? [] : [{ ...activity(), percentage: 500 }] });
-        });
-        const telemetry = memory();
-        try {
-          await runServiceWorker(parseServiceConfig({
-            ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true },
-          }), {
-            once: true, env, providers: exchangeProviders, telemetry: telemetry.events,
-            handler: async probe => ({ ...baseResult(probe, now()), success: true, durationMs: 100 }),
-            createDependencies: () => ({ ...telemetry, telemetry: telemetry.events, graph: http.graph }),
-          });
-          const logs = telemetry.logs.getFinishedLogRecords();
-          expect(logs.filter(log => log.body === "m365-service-health-overview")).toHaveLength(1);
-          expect(logs.filter(log => log.body === "m365-service-activity")).toHaveLength(0);
-          expect(logs.find(log => log.body === "m365-provider-collection-failed")?.attributes).toMatchObject({
-            "provider.api_version": "beta", "provider.source": "getConnectivityMetricsForExchange",
-          });
-          const metrics = telemetry.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
-          expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value)
-            .toMatchObject({ count: 2, sum: 2 });
-          expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
-            providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
-          }));
-          expect(JSON.stringify(logs)).not.toContain("PRIVATE-BETA-FAILURE");
-        } finally { await telemetry.results.shutdown(); }
-      },
-    );
-    it("recollects stateless windows each cycle rather than reusing a watermark or appending metrics", async () => {
-      let clock = now();
-      vi.spyOn(Date, "now").mockImplementation(() => clock);
-      const http = client(url => json({
-        value: [{
-          intervalStartDateTime: new Date(clock - 30 * 60_000).toISOString(), percentage: 99,
-        }],
-      }));
-      const recordDiagnostic = vi.fn();
-      const service = parseServiceConfig({ ...rawConfig(), serviceActivity: { enabled: true } });
-      await exchangeProviders({ service, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now: () => clock });
-      clock += 15 * 60_000;
-      await exchangeProviders({ service, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now: () => clock });
-      expect(http.fetcher).toHaveBeenCalledTimes(2);
-      expect(String(http.fetcher.mock.calls[0]?.[0])).toContain("exclusiveIntervalEndDateTime=2026-10-16T18:30:00Z");
-      expect(String(http.fetcher.mock.calls[1]?.[0])).toContain("exclusiveIntervalEndDateTime=2026-10-16T18:45:00Z");
-      expect(recordDiagnostic.mock.calls.every(([record]) => record.kind === "activity")).toBe(true);
-    });
     expect(summary).toEqual({ configured: 3, succeeded: 1, failed: 2, skipped: 0, records: 0 });
     expect(recordDiagnostic.mock.calls.map(([record]) => record.category).sort()).toEqual(["malformed-response", "no-data"]);
     expect(JSON.stringify(recordDiagnostic.mock.calls)).not.toContain("serviceOperational");
+  });
+  it.each(["invalid-value", "empty", "http-error", "invalid-json"] as const)(
+    "keeps beta %s diagnostic-only while stable context and successful journey metrics report", async failure => {
+      const http = client(url => {
+        if (url.includes("healthOverviews")) return json({ value: [overview()] });
+        if (url.includes("/issues")) return json({ value: [] });
+        if (failure === "http-error") return new Response("PRIVATE-BETA-FAILURE", { status: 500 });
+        if (failure === "invalid-json") return new Response("PRIVATE-BETA-FAILURE");
+        return json({ value: failure === "empty" ? [] : [{ ...activity(), percentage: 500 }] });
+      });
+      const telemetry = memory();
+      try {
+        await runServiceWorker(parseServiceConfig({
+          ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true },
+        }), {
+          once: true, env, providers: exchangeProviders, telemetry: telemetry.events,
+          handler: async probe => ({ ...baseResult(probe, now()), success: true, durationMs: 100 }),
+          createDependencies: () => ({ ...telemetry, telemetry: telemetry.events, graph: http.graph }),
+        });
+        const logs = telemetry.logs.getFinishedLogRecords();
+        expect(logs.filter(log => log.body === "m365-service-health-overview")).toHaveLength(1);
+        expect(logs.filter(log => log.body === "m365-service-activity")).toHaveLength(0);
+        expect(logs.find(log => log.body === "m365-provider-collection-failed")?.attributes).toMatchObject({
+          "provider.api_version": "beta", "provider.source": "getConnectivityMetricsForExchange",
+        });
+        const metrics = telemetry.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
+        expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value)
+          .toMatchObject({ count: 2, sum: 2 });
+        expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+          providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
+        }));
+        expect(JSON.stringify(logs)).not.toContain("PRIVATE-BETA-FAILURE");
+      } finally { await telemetry.results.shutdown(); }
+    },
+  );
+  it("recollects stateless windows each cycle rather than reusing a watermark or appending metrics", async () => {
+    let clock = now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const http = client(() => json({
+      value: [{
+        intervalStartDateTime: new Date(clock - 30 * 60_000).toISOString(), percentage: 99,
+      }],
+    }));
+    const recordDiagnostic = vi.fn();
+    const service = parseServiceConfig({ ...rawConfig(), serviceActivity: { enabled: true } });
+    await exchangeProviders({ service, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now: () => clock });
+    clock += 15 * 60_000;
+    await exchangeProviders({ service, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now: () => clock });
+    expect(http.fetcher).toHaveBeenCalledTimes(2);
+    expect(String(http.fetcher.mock.calls[0]?.[0])).toContain("exclusiveIntervalEndDateTime=2026-10-16T18:30:00Z");
+    expect(String(http.fetcher.mock.calls[1]?.[0])).toContain("exclusiveIntervalEndDateTime=2026-10-16T18:45:00Z");
+    expect(recordDiagnostic.mock.calls.every(([record]) => record.kind === "activity")).toBe(true);
   });
   it("bounds a non-cooperative provider and does not delay other source completion", async () => {
     vi.useFakeTimers();

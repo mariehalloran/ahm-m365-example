@@ -9,11 +9,11 @@ The fixed journey ID is `send-receive-mail`, with ordered step IDs `authenticate
 OTel reports success as **1 or 0** and separately measures **send request time**, **confirmed delivery time**, and **total attempt time**. Request acceptance is not delivery. Failed send requests still report their elapsed time.
 
 - [Config and independent cadence](./config.json)
-- [Administrator resource/permission request](../MAILBOX-SYNTHETIC-ACCESS.md)
+- [Administrator resource/permission request](../../MAILBOX-SYNTHETIC-ACCESS.md)
 - [HTTP tests](./tests/probe.test.ts)
 - [Analytics queries](./queries/analytics/), [model queries](./queries/health-model/)
 
-Start safely from the repository root:
+Start safely from the `synthetic-tests/` project directory:
 
 ```sh
 npm run exchange -- --once

@@ -8,13 +8,17 @@ No worker, registry, mailbox, or Microsoft 365 permission grant is deployed. The
 
 ## Local test
 
+The Node package, lockfile, shared utilities, TypeScript/test configuration, installed dependencies, and build output are all contained in [synthetic-tests/](../synthetic-tests/README.md). From the repository root:
+
 ```sh
+cd synthetic-tests
+npm ci
 npm run exchange -- --once
 npm run teams -- --once
 npm run sharepoint -- --once
 ```
 
-The checked-in configs use simulation and console telemetry. They perform no real mail/file operations, Azure exports, or checkpoint writes.
+The checked-in configs use simulation and console telemetry. They perform no real mail/file operations, Azure exports, or checkpoint writes. All subsequent npm/Node commands in this guide assume the `synthetic-tests/` working directory; from the repository root, npm commands can instead use `npm --prefix synthetic-tests ...`.
 
 ## Connect telemetry
 
@@ -22,7 +26,7 @@ The checked-in configs use simulation and console telemetry. They perform no rea
 2. Set a service config's `telemetry` to `azure-monitor`.
 3. Provide `APPLICATIONINSIGHTS_CONNECTION_STRING` securely.
 4. Run once and verify both `AppMetrics` and individual `AppTraces` records in the linked workspace.
-5. Validate service-owned [Exchange](../exchange/queries/), [Teams](../teams/queries/), [SharePoint](../sharepoint/queries/) analytics/model queries, including all-failure, all-unexecutable, missing-step and no-data cases. No target list is needed. [Measurement semantics](../utils/README.md#measurements-and-queries) explain weighting and skipped steps.
+5. Validate service-owned [Exchange](../synthetic-tests/exchange/queries/), [Teams](../synthetic-tests/teams/queries/), [SharePoint](../synthetic-tests/sharepoint/queries/) analytics/model queries, including all-failure, all-unexecutable, missing-step and no-data cases. No target list is needed. [Measurement semantics](../synthetic-tests/utils/README.md#measurements-and-queries) explain weighting and skipped steps.
 
 No Blob storage or health-model ingestion role is needed. The exporter sends from the **same process that runs the tests**. It is shared code, not a separate service.
 
@@ -38,7 +42,7 @@ SharePoint Container App: one process = test + embedded OTel, every 300 seconds
 Teams Container App:      one process = bot journey + embedded OTel, every 120 seconds
 ```
 
-One root npm package builds three service-owned entries; utilities never import all service implementations. The same image can run an explicitly selected entry, with embedded OTel and no sidecar/Collector/AKS requirement:
+The [synthetic-tests package](../synthetic-tests/package.json) builds three service-owned entries; utilities never import all service implementations. Use `synthetic-tests/` as the future image's application/build context and the application working directory inside the image. The same image can run an explicitly selected entry, with embedded OTel and no sidecar/Collector/AKS requirement:
 
 ```sh
 npm run build
@@ -47,7 +51,7 @@ node dist/teams/src/worker.js --config teams/config.json
 node dist/sharepoint/src/worker.js --config sharepoint/config.json
 ```
 
-`--config` is optional, defaulting to the selected service file. Wrong-service configs are rejected before runtime initialization. Hosted Graph requires the approved same-tenant UAMI's explicit `AZURE_CLIENT_ID`, with `graphAuthentication: "managed-identity"` (default). There is no Graph certificate/Key Vault/CLI fallback. Local certificate development requires explicit `certificate` mode. Teams still needs its independent bot certificate and expected `AZURE_TENANT_ID` tenant guard. See the [optional Exchange mock template](../exchange/infra/README.md); it is not a deployed worker.
+`--config` is optional, defaulting to `<service>/config.json` from the `synthetic-tests/` working directory, not the repository root. An explicitly mounted absolute config path is recommended for hosted workers. Wrong-service configs are rejected before runtime initialization. Hosted Graph requires the approved same-tenant UAMI's explicit `AZURE_CLIENT_ID`, with `graphAuthentication: "managed-identity"` (default). There is no Graph certificate/Key Vault/CLI fallback. Local certificate development requires explicit `certificate` mode. Teams still needs its independent bot certificate and expected `AZURE_TENANT_ID` tenant guard. See the [optional Exchange mock template](../synthetic-tests/exchange/infra/README.md); it is not a deployed worker.
 
 For an always-running background loop, hosting must keep an instance running and provide CPU while idle/non-HTTP work executes; do not assume scale-to-zero/request-driven defaults keep a timer loop alive. Validate the chosen Container Apps billing/scaling configuration before deployment.
 
@@ -71,7 +75,7 @@ For an approved read-only context rollout, separately authorize `ServiceHealth.R
 
 For a separate experimental Exchange/Teams beta evaluation, confirm tenant eligibility, approve the service-specific `ServiceActivity-Exchange.Read.All` or `ServiceActivity-Teams.Read.All`, and set both the config's `serviceActivity.enabled` and `ENABLE_BETA_SERVICE_ACTIVITY=true`. SharePoint beta is explicitly unsupported/rejected. Beta is unsupported for production and diagnostics only, never aggregated into synthetic measurements or Experience/journey health. No permission deployment/grant is implemented by the collectors.
 
-Inspect explicit provider failures, source summary counts, expected flat AppTraces attributes, bounded/truncated issue history, and overlapping historical report buckets during a controlled `--once` run only after access approval. The [shared schema and limits](../utils/README.md#optional-provider-collectors) are validated before runtime creation. Simulation skips sources with no Graph credentials/network. Local mocked validation is not live Microsoft 365 access or evidence that a tenant can use a beta report.
+Inspect explicit provider failures, source summary counts, expected flat AppTraces attributes, bounded/truncated issue history, and overlapping historical report buckets during a controlled `--once` run only after access approval. The [shared schema and limits](../synthetic-tests/utils/README.md#optional-provider-collectors) are validated before runtime creation. Simulation skips sources with no Graph credentials/network. Local mocked validation is not live Microsoft 365 access or evidence that a tenant can use a beta report.
 
 ## Acceptance and cleanup
 
