@@ -101,6 +101,7 @@ async function runSharePoint(options: {
     config, graph, telemetry, signal: controller.signal, now: () => clock,
   });
   expect(resultSchema.safeParse(result).success).toBe(true);
+  expect(result.steps.map(step => step.name)).toEqual(["authenticate", "verify-drive", "upload-file", "read-file", "cleanup"]);
   return { result, calls, download, fileName, telemetry, drivePage };
 }
 
@@ -184,12 +185,18 @@ describe("SharePoint upload/readback/cleanup journey", () => {
     ["verify", "read-failure"],
     ["cleanup", "cleanup-failure"],
   ] as const)("reports %s failure and attempts only owned cleanup", async (failure, category) => {
-    const { result, calls } = await runSharePoint({ failure });
+    const { result, calls, download } = await runSharePoint({ failure });
     expect(result.success).toBe(false);
     expect(result.diagnosticCategory).toBe(category);
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(1);
     expect(result.uploadDurationMs).toBe(200);
     expect(result.readDurationMs).toBe(failure === "upload" ? undefined : 300);
+    const step = failure === "upload" ? "upload-file" : failure === "cleanup" ? "cleanup" : "read-file";
+    expect(result.steps.find(item => item.name === step)).toMatchObject({ status: "failed", diagnosticCategory: category });
+    if (failure === "upload") {
+      expect(result.steps.find(item => item.name === "read-file")?.status).toBe("skipped");
+      expect(download).not.toHaveBeenCalled();
+    }
   });
   it("cleans up by exact generated path after an ambiguous/malformed upload response", async () => {
     const { result, calls, fileName } = await runSharePoint({ malformedUpload: true });

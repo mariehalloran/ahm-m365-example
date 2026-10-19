@@ -121,6 +121,7 @@ async function run(options: RunOptions = {}) {
     sleep: async (ms, signal) => { signal.throwIfAborted(); clock += ms; },
   });
   expect(resultSchema.safeParse(result).success).toBe(true);
+  expect(result.steps.map(step => step.name)).toEqual(["authenticate", "post-message", "confirm-publication", "cleanup"]);
   return { result, calls, scopes, telemetry, marker, polls, fetcher };
 }
 
@@ -200,6 +201,7 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.publicationDurationMs).toBeUndefined();
     expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(1);
+    expect(result.steps.map(step => step.status)).toEqual(["succeeded", "succeeded", "failed", "succeeded"]);
   });
 
   it.each(["graph", "bot"] as const)("authenticates %s before mutation, without cleanup queries on failure", async authenticationFailure => {

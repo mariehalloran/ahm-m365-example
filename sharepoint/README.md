@@ -8,6 +8,14 @@ Journey ID `save-reopen-file` has ordered step IDs `authenticate`, `verify-drive
 
 [HTTP tests](./tests/probe.test.ts) cover both the journey and direct action calls; [analytics](./queries/analytics/) and [model queries](./queries/health-model/) are service-owned.
 
+## Optional Microsoft-reported context
+
+[sharepointProviders](./src/providers.ts) optionally reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues`, once per cycle in the same process—not per site/target. `serviceHealth` defaults `false`; enabling it requires separately approved `ServiceHealth.Read.All` and exact subscribed service name `SharePoint Online`. This is **context-only and impact-suppressed**; issue/history records do not supply journey health, and source failures never change successful file-operation 1/0.
+
+**There is no verified SharePoint-specific serviceActivity beta function.** `serviceActivity.enabled: true` or any nonempty function list is rejected before credentials/mutations; an OfficeApps report is not silently relabeled as SharePoint. Simulation skips configured stable sources without credentials/network or fabricated Microsoft health. Nothing grants access automatically.
+
+See the [strict config, independent source bounds, truncation and Logger-only fields](../utils/README.md#optional-provider-collectors), [context analytics](./queries/analytics/service-health-context.kql), and [collector tests](../utils/tests/providers.test.ts). References: [health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [beta serviceActivity catalog](https://learn.microsoft.com/graph/api/resources/serviceactivity?view=graph-rest-beta).
+
 ## Resources prepared once
 
 The SharePoint administrator supplies a dedicated site, document library (`driveId`), existing folder (`folderId`), and approved test identity. Store those IDs as configuration; do not create a new site/library on each cycle.

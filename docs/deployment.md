@@ -63,6 +63,16 @@ Each service's `queries/health-model/` contains `success-percentage.kql`, `mean-
 
 Journey/step queries with no measurements return no value, not fabricated 100% success or zero latency. A separate monitoring signal indicates absent service metrics. All three journey/step signal sets are wired in the model; actual live ingestion, Azure resource/provider collection and alert delivery are not proven. Notifications still require an approved action group/recipient.
 
+## Optional provider collection rollout
+
+Service-owned wrappers run inside each existing worker, once per cycle independently of mailbox/channel/site targets. All checked-in configs and disabled live templates leave `serviceHealth` and `serviceActivity.enabled` **false**; enabling telemetry does not enable either collector or grant access.
+
+For an approved read-only context rollout, separately authorize `ServiceHealth.Read.All`, confirm exact subscribed service names, then opt into `serviceHealth`. Overviews and issue/history logs are **context-only**, and ServiceHealth entities remain impact-suppressed. The model's separate context query accepts only fresh live v1.0 `m365-service-health-overview` records; issues never supply health signals.
+
+For a separate experimental Exchange/Teams beta evaluation, confirm tenant eligibility, approve the service-specific `ServiceActivity-Exchange.Read.All` or `ServiceActivity-Teams.Read.All`, and set both the config's `serviceActivity.enabled` and `ENABLE_BETA_SERVICE_ACTIVITY=true`. SharePoint beta is explicitly unsupported/rejected. Beta is unsupported for production and diagnostics only, never aggregated into synthetic measurements or Experience/journey health. No permission deployment/grant is implemented by the collectors.
+
+Inspect explicit provider failures, source summary counts, expected flat AppTraces attributes, bounded/truncated issue history, and overlapping historical report buckets during a controlled `--once` run only after access approval. The [shared schema and limits](../utils/README.md#optional-provider-collectors) are validated before runtime creation. Simulation skips sources with no Graph credentials/network. Local mocked validation is not live Microsoft 365 access or evidence that a tenant can use a beta report.
+
 ## Acceptance and cleanup
 
 - Exactly identified attempts and correct seconds/milliseconds are visible in the workspace.

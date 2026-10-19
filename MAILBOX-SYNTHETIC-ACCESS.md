@@ -54,6 +54,24 @@ The worker exports measurements through its configured Application Insights dest
 
 The health model's own query identity has workspace query access. Do not grant those Azure roles to the Exchange managed identity merely because both are part of the same proof of concept.
 
+### Optional Microsoft-reported provider data
+
+These are **additional tenant-level read permissions**, not prerequisites for the mailbox journey:
+
+| Enabled collection | Microsoft Graph application permission |
+| --- | --- |
+| v1.0 Service Health overviews and issues | `ServiceHealth.Read.All` |
+| Experimental Exchange serviceActivity reports | `ServiceActivity-Exchange.Read.All` |
+| Experimental Teams serviceActivity reports | `ServiceActivity-Teams.Read.All` |
+
+An authorized Entra administrator assigns the selected permissions to the service principal of the identity performing collection. Managed identities do not have an ordinary app-registration API-permissions page; use the approved service-principal app-role assignment procedure. Administrative permission to grant app roles belongs to the administrator, **not the running worker**.
+
+Only request the rows actually enabled. These permissions read provider context and do not grant mailbox message access. The prohibition on unscoped Entra `Mail.ReadWrite`/`Mail.Send` grants still applies; do not add those mail roles while configuring provider reads.
+
+Stable Service Health remains supporting context with Suppressed impact. Beta reports are explicitly opt-in, diagnostic-only, and never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available.
+
+No SharePoint-specific serviceActivity function has been verified in the documented catalog. Do not invent one or grant unrelated Office Apps permissions as a substitute. API failures/no data must be visible as collection diagnostics, not defaulted to healthy service status.
+
 ## 3. Mock infrastructure and non-secret handoff IDs
 
 The [mock Bicep](./exchange/infra/main.bicep) outputs:
@@ -155,6 +173,8 @@ The health model has one Log Analytics entity displayed as **User Journey** belo
 - A Key Vault credential, Blob checkpoint, separate telemetry worker, or worker health policy.
 
 Teams Bot Connector authorization remains a separate implementation/installation concern. Do not assume changing Graph authentication makes the bot's send identity keyless automatically.
+
+The optional provider collectors require the additional read permissions listed above only when enabled. They do not broaden the core Exchange journey's mailbox scope.
 
 Cross-tenant managed identity is not enabled by this same-tenant mock. A different tenant needs a separately reviewed federation/application authorization design; simply changing a tenant-ID setting on a managed identity does not move its identity into another directory.
 

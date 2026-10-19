@@ -12,7 +12,7 @@ const service = parseServiceConfig({
 });
 const telemetry = () => ({ emit: vi.fn() });
 const dependencies = () => ({
-  results: { record: vi.fn(), forceFlush: vi.fn(async () => undefined), shutdown: vi.fn(async () => undefined) },
+  results: { record: vi.fn(), recordDiagnostic: vi.fn(), forceFlush: vi.fn(async () => undefined), shutdown: vi.fn(async () => undefined) },
   telemetry: telemetry(),
 });
 const liveService = () => parseServiceConfig({

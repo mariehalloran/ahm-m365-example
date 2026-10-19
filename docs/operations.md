@@ -30,7 +30,7 @@ Do not enable live mode against real-user resources.
 
 Teams also needs an already registered/installed bot and a dedicated standard channel, plus a Graph observer with team-scoped `ChannelMessage.Read.Group`. Supply separate `BOT_TENANT_ID`, `BOT_CLIENT_ID`, `BOT_CLIENT_CERTIFICATE_PATH` and expected `AZURE_TENANT_ID`; bot/observer/target tenants must match even with Graph MI. The bot stays certificate-backed; Graph MI does not authorize bot posting automatically. Use only validated installation metadata. The worker does not request migration permissions, create a bot, or bypass user sign-in policies.
 
-No user password, interactive mailbox sign-in, directory-wide permission, `ServiceHealth.Read.All`, health-model ingestion access, or Blob access is required by these workers. Future provider collection/model queries have their own authorization.
+Default journey-only workers need no user password, interactive mailbox sign-in, directory-wide permission, `ServiceHealth.Read.All`, health-model ingestion access, or Blob access. Optional provider collection requires its separately approved read-only application permissions; it never grants them.
 
 The mailbox identity and telemetry destination are independent. Approve cross-tenant telemetry flow and retention; hosted cross-tenant Graph credential loading is not implemented. The current Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
 
@@ -43,6 +43,16 @@ Each attempt exports one OTel result log, a success sample of 1 or 0, and durati
 [Shared measurement semantics](../utils/README.md#measurements-and-queries) explain average success × 100, weighted mean duration and reporting gaps. Queries are service-owned: [Exchange](../exchange/queries/), [Teams](../teams/queries/), [SharePoint](../sharepoint/queries/), each with `analytics/` and `health-model/`. They never combine services, enumerate target IDs, or require raw-result joins. Filter simulation separately and keep unexecutable attempts visible.
 
 Log Analytics does not analyze continuously just because it receives data. The model's query signals evaluate live-only data on a refresh schedule. Alert delivery is a separate configuration; a query signal alone does not notify anyone.
+
+## Optional Microsoft provider context
+
+Both provider switches default off in every config/template. `serviceHealth: true` requires `ServiceHealth.Read.All` and reads v1.0 health overviews and issue/history data. Exact service matching, missing-data failures and explicit truncation prevent an incomplete collection being presented as healthy. Stable ServiceHealth is **context-only and impact-suppressed**, not journey evidence.
+
+Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_SERVICE_ACTIVITY=true` and separately approved `ServiceActivity-Exchange.Read.All`/`ServiceActivity-Teams.Read.All`. Beta is experimental, unsupported for production, and **diagnostic-only: never used for Experience/journey health**. Confirm tenant eligibility/enablement; an HTTP failure is not evidence of a service outage. SharePoint beta is rejected rather than silently skipped or mapped to an OfficeApps report.
+
+Each configured source runs once per worker cycle, independently bounded to 30 seconds and five exact-origin/version/path pages. Check `m365-provider-collection-failed` logs and `service-cycle-summary.providers.failed`; successful journeys can coexist with provider failures. Simulation records skipped sources without Graph credentials/network or fabricated Microsoft health. All historical beta values are Logger-only snapshots; no provider value enters synthetic or step measurements. `--once` flushes these logs and shuts down the same embedded SDK.
+
+See the [strict schema, limits, exact AppTraces fields and first-party references](../utils/README.md#optional-provider-collectors). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
 
 ## Timing, retries, and cleanup
 

@@ -25,14 +25,12 @@ var serviceSignals = [
     service: 'exchange'
     journey: 'send-receive-mail'
     entityName: 'exchange-global'
-    x: 250
     timeGrain: 'PT5M'
     successQuery: loadTextContent('../../exchange/queries/health-model/success-percentage.kql')
     latencyQuery: loadTextContent('../../exchange/queries/health-model/mean-latency.kql')
-    missingQuery: loadTextContent('../../exchange/queries/health-model/missing-observations.kql')
-    unexecutableQuery: loadTextContent('../../exchange/queries/health-model/unexecutable-attempts.kql')
     stepSuccessQuery: loadTextContent('../../exchange/queries/health-model/step-success.kql')
     stepDurationQuery: loadTextContent('../../exchange/queries/health-model/step-duration.kql')
+    serviceHealthQuery: loadTextContent('../../exchange/queries/health-model/service-health-status.kql')
     steps: [
       { name: 'authenticate', displayName: 'Authenticate' }
       { name: 'create-draft', displayName: 'Create email' }
@@ -45,14 +43,12 @@ var serviceSignals = [
     service: 'teams'
     journey: 'publish-channel-message'
     entityName: 'teams-global'
-    x: 650
     timeGrain: 'PT5M'
     successQuery: loadTextContent('../../teams/queries/health-model/success-percentage.kql')
     latencyQuery: loadTextContent('../../teams/queries/health-model/mean-latency.kql')
-    missingQuery: loadTextContent('../../teams/queries/health-model/missing-observations.kql')
-    unexecutableQuery: loadTextContent('../../teams/queries/health-model/unexecutable-attempts.kql')
     stepSuccessQuery: loadTextContent('../../teams/queries/health-model/step-success.kql')
     stepDurationQuery: loadTextContent('../../teams/queries/health-model/step-duration.kql')
+    serviceHealthQuery: loadTextContent('../../teams/queries/health-model/service-health-status.kql')
     steps: [
       { name: 'authenticate', displayName: 'Authenticate' }
       { name: 'post-message', displayName: 'Post message' }
@@ -64,14 +60,12 @@ var serviceSignals = [
     service: 'sharepoint'
     journey: 'save-reopen-file'
     entityName: 'sharepoint-global'
-    x: 1050
     timeGrain: 'PT15M'
     successQuery: loadTextContent('../../sharepoint/queries/health-model/success-percentage.kql')
     latencyQuery: loadTextContent('../../sharepoint/queries/health-model/mean-latency.kql')
-    missingQuery: loadTextContent('../../sharepoint/queries/health-model/missing-observations.kql')
-    unexecutableQuery: loadTextContent('../../sharepoint/queries/health-model/unexecutable-attempts.kql')
     stepSuccessQuery: loadTextContent('../../sharepoint/queries/health-model/step-success.kql')
     stepDurationQuery: loadTextContent('../../sharepoint/queries/health-model/step-duration.kql')
+    serviceHealthQuery: loadTextContent('../../sharepoint/queries/health-model/service-health-status.kql')
     steps: [
       { name: 'authenticate', displayName: 'Authenticate' }
       { name: 'verify-drive', displayName: 'Verify library' }
@@ -143,33 +137,28 @@ var journeySignalGroups = toObject(serviceSignals, service => service.entityName
   }
 })
 
-var pipelineSignalPairs = [for service in serviceSignals: [
-  {
-    name: '${service.service}-missing-live-results'
-    displayName: '${service.service} without recent live attempt observations'
-    signalKind: 'LogAnalyticsQuery'
-    queryText: replace(service.missingQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-    valueColumnName: 'Value'
-    refreshInterval: 'PT1M'
-    timeGrain: service.timeGrain
-    evaluationRules: {
-      unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
-    }
+var serviceHealthSignalGroups = toObject(serviceSignals, service => '${service.service}-service-health', service => {
+  azureLogAnalytics: {
+    authenticationSetting: workspaceAuthentication.name
+    logAnalyticsWorkspaceResourceId: workspace.id
+    signals: [
+      {
+        name: 'microsoft-reported-service-status'
+        displayName: 'Microsoft-reported service status - supporting context'
+        signalKind: 'LogAnalyticsQuery'
+        queryText: replace(service.serviceHealthQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
+        valueColumnName: 'Value'
+        dataUnit: 'Provider status score'
+        refreshInterval: 'PT5M'
+        timeGrain: 'PT15M'
+        evaluationRules: {
+          degradedRule: { operator: 'LessThan', threshold: 100 }
+          unhealthyRule: { operator: 'LessThan', threshold: 1 }
+        }
+      }
+    ]
   }
-  {
-    name: '${service.service}-unexecutable-live-attempts'
-    displayName: '${service.service} live attempts that could not execute'
-    signalKind: 'LogAnalyticsQuery'
-    queryText: replace(service.unexecutableQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-    valueColumnName: 'Value'
-    refreshInterval: 'PT1M'
-    timeGrain: service.timeGrain
-    evaluationRules: {
-      unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
-    }
-  }
-]]
-var pipelineSignals = flatten(pipelineSignalPairs)
+})
 
 var entities = [
   // The service creates this root automatically; manage its rollup rather than leave it disconnected.
@@ -178,14 +167,13 @@ var entities = [
   { name: 'azure-resources', displayName: 'Azure Resource Health - not connected', x: 0, y: 400, rollup: false, impact: 'Standard' }
   { name: 'exchange-experience', displayName: 'Exchange Experience', x: 300, y: 400, rollup: true, impact: 'Standard' }
   { name: 'exchange-global', displayName: 'User Journey', x: 300, y: 620, rollup: false, impact: 'Standard' }
+  { name: 'exchange-service-health', displayName: 'Service Health', x: 50, y: 620, rollup: false, impact: 'Suppressed' }
   { name: 'teams-experience', displayName: 'Teams Experience', x: 600, y: 400, rollup: true, impact: 'Standard' }
   { name: 'teams-global', displayName: 'User Journey', x: 650, y: 620, rollup: false, impact: 'Standard' }
+  { name: 'teams-service-health', displayName: 'Service Health', x: 500, y: 820, rollup: false, impact: 'Suppressed' }
   { name: 'sharepoint-experience', displayName: 'SharePoint Experience', x: 900, y: 400, rollup: true, impact: 'Standard' }
   { name: 'sharepoint-global', displayName: 'User Journey', x: 1050, y: 620, rollup: false, impact: 'Standard' }
-  { name: 'monitoring-pipeline', displayName: 'Monitoring Pipeline', x: 1200, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'runner-heartbeat', displayName: 'Live Service Metrics - not a worker heartbeat', x: 1100, y: 620, rollup: false, impact: 'Standard' }
-  { name: 'graph-availability', displayName: 'Graph Query Availability - not connected', x: 1350, y: 620, rollup: false, impact: 'Standard' }
-  { name: 'provider-context', displayName: 'Microsoft 365 Service Health - supporting context', x: 1550, y: 400, rollup: false, impact: 'Suppressed' }
+  { name: 'sharepoint-service-health', displayName: 'Service Health', x: 1200, y: 820, rollup: false, impact: 'Suppressed' }
 ]
 
 var relationships = [
@@ -194,12 +182,12 @@ var relationships = [
   { parent: 'm365-tenant', child: 'exchange-experience' }
   { parent: 'm365-tenant', child: 'teams-experience' }
   { parent: 'm365-tenant', child: 'sharepoint-experience' }
-  { parent: 'm365-tenant', child: 'monitoring-pipeline' }
   { parent: 'exchange-experience', child: 'exchange-global' }
   { parent: 'teams-experience', child: 'teams-global' }
   { parent: 'sharepoint-experience', child: 'sharepoint-global' }
-  { parent: 'monitoring-pipeline', child: 'runner-heartbeat' }
-  { parent: 'monitoring-pipeline', child: 'graph-availability' }
+  { parent: 'exchange-experience', child: 'exchange-service-health' }
+  { parent: 'teams-experience', child: 'teams-service-health' }
+  { parent: 'sharepoint-experience', child: 'sharepoint-service-health' }
 ]
 var stepCount = length(flatten(map(serviceSignals, service => service.steps)))
 
@@ -245,7 +233,7 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   }
   tags: {
     purpose: 'Microsoft 365 synthetic monitoring proof of concept'
-    deploymentStage: 'live-journey-step-queries'
+    deploymentStage: 'user-journey-queries-service-health-stubs'
     intendedRunnerHost: 'Azure Container Apps'
   }
   properties: {}
@@ -286,13 +274,7 @@ resource modelEntities 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-p
         aggregationType: 'WorstOf'
         ignoreUnknown: false
       }
-    } : {}, journeySignalGroups[?entity.name] ?? {}, entity.name == 'runner-heartbeat' ? {
-      azureLogAnalytics: {
-        authenticationSetting: workspaceAuthentication.name
-        logAnalyticsWorkspaceResourceId: workspace.id
-        signals: pipelineSignals
-      }
-    } : {})
+    } : {}, journeySignalGroups[?entity.name] ?? {}, serviceHealthSignalGroups[?entity.name] ?? {})
   }
   dependsOn: [
     workspaceQueryReader
@@ -320,7 +302,7 @@ output entityCount int = length(entities)
 output relationshipCount int = length(relationships)
 output journeyCount int = length(serviceSignals)
 output stepCount int = stepCount
-output querySignalCount int = length(serviceSignals) * 4 + stepCount * 2
+output querySignalCount int = length(serviceSignals) * 3 + stepCount * 2
 output workspaceResourceId string = workspace.id
 output workspaceCustomerId string = workspace.properties.customerId
 output applicationInsightsResourceId string = applicationInsights.id

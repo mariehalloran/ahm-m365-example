@@ -5,8 +5,9 @@ import type { ProbeHandler } from "./probes.js";
 import type { ServiceConfig } from "./service-config.js";
 import { readServiceConfig } from "./service-config.js";
 import { parseWorkerArguments, runServiceWorker } from "./worker.js";
+import type { ProviderCollector } from "./provider-collection.js";
 
-async function main(type: ServiceConfig["type"], handler: ProbeHandler, argv: readonly string[]) {
+async function main(type: ServiceConfig["type"], handler: ProbeHandler, argv: readonly string[], providers?: ProviderCollector) {
   const args = parseWorkerArguments(argv, `${type}/config.json`);
   const service = await readServiceConfig(args.config);
   const controller = new AbortController();
@@ -14,15 +15,17 @@ async function main(type: ServiceConfig["type"], handler: ProbeHandler, argv: re
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
-    await runServiceWorker(service, { once: args.once, signal: controller.signal, expectedService: type, handler });
+    await runServiceWorker(service, {
+      once: args.once, signal: controller.signal, expectedService: type, handler, ...(providers ? { providers } : {}),
+    });
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }
 }
 
-export async function runServiceCommand(type: ServiceConfig["type"], handler: ProbeHandler, argv = process.argv.slice(2)) {
-  await main(type, handler, argv).catch(error => {
+export async function runServiceCommand(type: ServiceConfig["type"], handler: ProbeHandler, argv = process.argv.slice(2), providers?: ProviderCollector) {
+  await main(type, handler, argv, providers).catch(error => {
     console.error(JSON.stringify({
       event: "command-failed", category: categoryOf(error), errorType: error instanceof Error ? error.name : "unknown",
       ...(error instanceof ConfigurationError ? { message: error.message } : {}),

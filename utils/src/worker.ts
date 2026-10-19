@@ -6,6 +6,7 @@ import type { ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
 import { serviceRuntime } from "./runtime.js";
 import { parseServiceConfig, serviceSettings, type ServiceConfig } from "./service-config.js";
+import type { ProviderCollector } from "./provider-collection.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
   let config: string | undefined;
@@ -23,6 +24,7 @@ export function parseWorkerArguments(args: readonly string[], defaultConfig?: st
 
 export interface WorkerOptions {
   handler?: ProbeHandler;
+  providers?: ProviderCollector;
   expectedService?: ServiceConfig["type"];
   once?: boolean;
   signal?: AbortSignal;
@@ -52,6 +54,9 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   }
   const env = options.env ?? process.env;
   const config = serviceSettings(service, env);
+  if ((service.serviceHealth || service.serviceActivity.enabled) && !options.providers) {
+    throw new ConfigurationError("Configured provider sources require the service-owned collector");
+  }
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
   const runtime = await (options.createDependencies
@@ -72,9 +77,14 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     });
     while (!signal.aborted) {
       try {
+        const providers = options.providers ? await options.providers({
+          service, results: dependencies.results, signal,
+          ...(dependencies.graph ? { graph: dependencies.graph } : {}),
+        }) : undefined;
         const cycle = await execute(config, dependencies, signal);
         telemetry.emit("service-cycle-summary", {
           cycleId: cycle.cycleId, probeCount: cycle.results.length,
+          ...(providers ? { providers } : {}),
         });
       } catch (error) {
         if (signal.aborted && !options.once) break;

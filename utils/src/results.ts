@@ -8,11 +8,13 @@ import {
   AggregationTemporality, MeterProvider, PeriodicExportingMetricReader, type PushMetricExporter,
 } from "@opentelemetry/sdk-metrics";
 import { probeServices, resultSchema, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { providerLog, type ProviderDiagnostic } from "./provider-diagnostics.js";
 
 export type ExecutionMode = "simulation" | "live";
 export type Outcome = "success" | "failure" | "unexecutable";
 export interface ResultTelemetry {
   record(result: SyntheticResult, mode: ExecutionMode): void;
+  recordDiagnostic(record: ProviderDiagnostic): void;
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -57,7 +59,10 @@ export function consoleExporters(output: Telemetry): { logs: LogRecordExporter; 
   return {
     logs: {
       export(records, callback) {
-        for (const record of records) output.emit("synthetic-result", { body: record.body, attributes: record.attributes });
+        for (const record of records) output.emit(
+          typeof record.body === "string" && record.body.startsWith("m365-") ? "provider-diagnostic" : "synthetic-result",
+          { body: record.body, attributes: record.attributes },
+        );
         callback({ code: ExportResultCode.SUCCESS });
       },
       shutdown: async () => undefined,
@@ -137,7 +142,7 @@ export function createResultTelemetry(
     export: checkedExport("logs", exporters.logs.export.bind(exporters.logs)),
     shutdown: () => exporters.logs.shutdown(),
   }, {
-    maxQueueSize: 256, maxExportBatchSize: 128, scheduledDelayMillis: 5000, exportTimeoutMillis: timeoutMs + 100,
+    maxQueueSize: 2048, maxExportBatchSize: 128, scheduledDelayMillis: 5000, exportTimeoutMillis: timeoutMs + 100,
   }));
   const meter = meters.getMeter("m365-synthetic-probes", "2.0");
   const logger = loggers.getLogger("m365-synthetic-probes", "2.0");
@@ -166,6 +171,10 @@ export function createResultTelemetry(
     if (failed) { failed = false; throw new TelemetryExportError(); }
   };
   return {
+    recordDiagnostic(record) {
+      if (closed) throw new TelemetryExportError();
+      logger.emit(providerLog(record));
+    },
     record(raw, mode) {
       if (closed) throw new TelemetryExportError();
       const result = resultSchema.parse(raw);

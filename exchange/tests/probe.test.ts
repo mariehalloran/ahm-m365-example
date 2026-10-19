@@ -128,9 +128,19 @@ describe("Exchange send/poll/cleanup", () => {
     ["permission", "permission-failure"], ["send", "send-failure"], ["read", "read-failure"],
     ["cleanup", "cleanup-failure"], ["throttle", "graph-throttling"],
   ] as const)("categorizes %s failure", async (fail, expected) => {
-    const { result } = await exchangeRun({ fail });
+    const { result, calls } = await exchangeRun({ fail });
     expect(result.success).toBe(false);
     expect(result.diagnosticCategory).toBe(expected);
+    const step = fail === "permission" || fail === "throttle" ? "create-draft"
+      : fail === "send" ? "send" : fail === "read" ? "confirm-delivery" : "cleanup";
+    expect(result.steps.find(item => item.name === step)).toMatchObject({ status: "failed", diagnosticCategory: expected });
+    if (step === "create-draft") {
+      expect(calls.some(call => call.url.endsWith("/send") || call.url.includes("/inbox/"))).toBe(false);
+      expect(result.steps.find(item => item.name === "send")?.status).toBe("skipped");
+    }
+    if (step === "cleanup") {
+      expect(result.steps.slice(0, -1).every(item => item.status === "succeeded")).toBe(true);
+    }
   });
   it("does not query or mutate a mailbox if authentication never succeeded", async () => {
     const { result, calls } = await exchangeRun({ authFail: true });

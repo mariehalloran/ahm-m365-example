@@ -159,6 +159,61 @@ def verify(args, queries, workspace_id, application_id):
     print(f"PASS: {checks} read-only service/journey/step Kusto fixture checks; no telemetry ingested")
 
 
+def verify_provider_context(args, workspace_id, application_id):
+    schema = "datatable(TimeGenerated:datetime, _ResourceId:string, Message:string, Properties:dynamic)"
+    checks = 0
+    for service in SERVICES:
+        query = (ROOT / service / "queries" / "health-model" / "service-health-status.kql").read_text()
+        query = query.replace("__APPLICATION_INSIGHTS_RESOURCE_ID__", application_id)
+        query = re.sub(r"ago\((\d+m)\)", lambda match: f"({FIXED_TIME} - {match[1]})", query)
+        query = query.replace("now()", FIXED_TIME)
+
+        def record(status, version="v1.0", body="m365-service-health-overview",
+                   mode="live", minute=29, resource=application_id, source_service=service,
+                   collected_at="2026-10-19T12:29:00Z"):
+            properties = {
+                "provider.service": source_service, "provider.mode": mode,
+                "provider.status": status, "provider.api_version": version,
+                "provider.collected_at": collected_at,
+            }
+            return (f'datetime(2026-10-19T12:{minute:02d}:00Z), {json.dumps(resource)}, '
+                    f'{json.dumps(body)}, dynamic({json.dumps(properties)})')
+
+        cases = [
+            ("operational", [record("serviceOperational")], 100),
+            ("degraded", [record("serviceDegradation")], 50),
+            ("interrupted", [record("serviceInterruption")], 0),
+            ("recovering", [record("restoringService")], 50),
+            ("unknown-status", [record("unknownFutureValue")], None),
+            ("empty", [], None),
+            ("beta-only", [record("serviceInterruption", version="beta", body="m365-service-activity")], None),
+            ("beta-wrong-body", [record("serviceInterruption", version="beta")], None),
+            ("issue-is-not-overview", [record("serviceInterruption", body="m365-service-health-issue")], None),
+            ("simulation", [record("serviceOperational", mode="simulation")], None),
+            ("wrong-resource", [record("serviceOperational", resource=application_id + "-other")], None),
+            ("wrong-service", [record("serviceOperational", source_service="unrelated")], None),
+            ("stale", [record("serviceOperational", minute=0, collected_at="2026-10-19T12:00:00Z")], None),
+            ("future", [record("serviceOperational", minute=31, collected_at="2026-10-19T12:31:00Z")], None),
+            ("beta-does-not-replace-stable", [
+                record("serviceOperational", minute=28),
+                record("serviceInterruption", version="beta", body="m365-service-activity"),
+            ], 100),
+            ("new-unknown-does-not-fall-back", [
+                record("serviceOperational", minute=28),
+                record("unknownFutureValue"),
+            ], None),
+        ]
+        for name, rows, expected in cases:
+            source = schema + " [\n" + ",\n".join(rows) + "\n]"
+            actual = execute(query.replace("AppTraces", source, 1), args.subscription, workspace_id)
+            if expected is None:
+                assert actual == [], (service, name, actual)
+            else:
+                assert len(actual) == 1 and actual[0]["Value"] == expected, (service, name, actual)
+            checks += 1
+    print(f"PASS: {checks} read-only provider-context fixtures; beta/simulation never affect stable context")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--subscription", required=True)
@@ -166,12 +221,15 @@ if __name__ == "__main__":
     parser.add_argument("--workspace-name", default="law-m365-experience-poc")
     parser.add_argument("--application-insights-name", default="appi-m365-experience-poc")
     parser.add_argument("--fixtures", action="store_true")
+    parser.add_argument("--provider-fixtures", action="store_true")
     args = parser.parse_args()
     group_id = f"/subscriptions/{args.subscription}/resourceGroups/{args.resource_group}"
     workspace_id = f"{group_id}/providers/Microsoft.OperationalInsights/workspaces/{args.workspace_name}"
     application_id = f"{group_id}/providers/Microsoft.Insights/components/{args.application_insights_name}"
     queries = definitions(application_id)
-    if args.fixtures:
+    if args.provider_fixtures:
+        verify_provider_context(args, workspace_id, application_id)
+    elif args.fixtures:
         verify(args, queries, workspace_id, application_id)
     else:
         for service, name, step, query, _ in queries:

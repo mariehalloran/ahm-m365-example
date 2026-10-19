@@ -38,6 +38,8 @@ Separate service processes do not block each other. Keep one authoritative insta
 | `timeoutSeconds` | Probe execution timeout, up to 120 seconds; cleanup has a separate bounded budget |
 | `mode` | `simulation` or `live` |
 | `graphAuthentication` | `managed-identity` by default; `certificate` is explicit local-live opt-in |
+| `serviceHealth` | Optional boolean, default `false`; stable Microsoft service health context only |
+| `serviceActivity` | Optional strict beta diagnostic settings, default disabled; see below |
 | `scenario` | Optional deterministic simulation scenario |
 | `cohort` | Low-cardinality grouping label for downstream queries; not a worker health policy |
 | `telemetry` | `console` by default; `azure-monitor` exports OTel metrics and result logs |
@@ -70,6 +72,61 @@ Example live target:
 The Teams `serviceUrl` must come from approved bot-installation metadata; the example is not proof of a valid conversation route. Only the supported public-cloud Connector origin/path is accepted. Bot installation and its validated metadata are administrator setup inputs, not created by a periodic test.
 
 One target now produces useful measurements; there is no worker-side three-sample minimum or stabilization counter.
+
+## Optional provider collectors
+
+The service entry supplies both its journey and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Exchange, Teams and SharePoint collect independently at their existing per-type cadence, once per cycle regardless of target count. No persisted watermark, last-seen cache, health report, or extra OTel process is introduced.
+
+All fields are optional and default to:
+
+```json
+{
+  "serviceHealth": false,
+  "serviceActivity": {
+    "enabled": false,
+    "aggregationIntervalMinutes": 15,
+    "lookbackMinutes": 30
+  }
+}
+```
+
+`serviceHealth` must be boolean. `serviceActivity` is a strict object: `enabled` is boolean; aggregation is **5, 10, 15, or 30 minutes**; lookback is an integer multiple of aggregation, at least one aggregation interval and at most **1,440 minutes**. An omitted nested field uses the shown default. An optional `functions` array must contain exactly one verified identifier for that service:
+
+| Service | Default/only beta function | Value and additional application permission |
+| --- | --- | --- |
+| Exchange | `getConnectivityMetricsForExchange` | Provider percentage 0–100; `ServiceActivity-Exchange.Read.All` |
+| Teams | `getMessageVolumeMetricsForTeamsChat` | Nonnegative safe-integer count; `ServiceActivity-Teams.Read.All` |
+| SharePoint | None | `enabled: true` or any nonempty `functions` is rejected |
+
+Unknown functions, URLs, fields, duplicates, wrong-service functions, unsafe Int64 values and invalid windows are rejected; no unverified optional reports are exposed. `functions` can be omitted to select the one verified default. Enabling beta requires **`ENABLE_BETA_SERVICE_ACTIVITY=true` before runtime/credentials/mutations**, including simulation; live execution independently requires `ENABLE_LIVE_M365=true`. A disabled service does not create a runtime. Microsoft marks beta APIs unsupported for production; confirm tenant eligibility/enablement and licensing with the administrator.
+
+**Business Basic versus enterprise:** API-backed synthetics and stable Service Health can use Basic when the required subscribed service/Teams SKU and approved administrator access exist. The beta API pages specify application permissions but do **not** explicitly establish Basic entitlement; do not promise beta availability. Microsoft's separate [advanced Microsoft 365 monitoring eligibility](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) is at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses plus 50 monthly active users for a core service. Do not automatically apply that UI feature's threshold as a verified beta API entitlement rule; confirm actual report enablement/availability for the tenant.
+
+The beta window ends at the current UTC aggregation bucket floor and starts `lookbackMinutes` earlier, so it never requests a future or unbounded range. For example, at 18:32 UTC:
+
+```text
+GET https://graph.microsoft.com/beta/reports/serviceActivity/getConnectivityMetricsForExchange(inclusiveIntervalStartDateTime=2026-10-16T18:00:00Z,exclusiveIntervalEndDateTime=2026-10-16T18:30:00Z,aggregationIntervalInMinutes=15)
+```
+
+Stable collection uses exported reusable `getServiceHealthOverviews` and `getServiceHealthIssues` from [service-health.ts](./src/service-health.ts), and needs separately approved **`ServiceHealth.Read.All`**. It filters exact subscribed names: `Exchange Online`, `Microsoft Teams`, `SharePoint Online`; no guessed aliases or empty-service healthy default. Discovery/administrator verification of the tenant's actual subscribed names remains a prerequisite. An unmatched/empty overview is an explicit `no-data` failure; an empty valid issue list is zero issue records, not a healthy status.
+
+Each source has an independent **30-second budget**, uses existing bounded Graph HTTP retries, and follows at most **five pages**, each bounded to **2 MB**, on the exact same Graph HTTPS origin/version/collection or report-function path. Stable pages request at most 100 items; beta pages allow up to the requested window's bucket count (maximum 288), rejecting duplicate/out-of-window/unaligned intervals. Escaped, cyclic or over-budget continuation fails the source instead of publishing a partial snapshot. Graph redirects do not forward bearer tokens. Journey requests remain v1.0; report requests explicitly select beta. Source failures do not prevent other configured sources or successful journeys from reporting. `service-cycle-summary.providers` records `configured`, `succeeded`, `failed`, `skipped`, and emitted `records`; it never claims failed/skipped sources succeeded.
+
+`ResultTelemetry.recordDiagnostic` is an allowlisted, validated **Logger-only** facade in the existing SDK. It cannot add provider observations to any synthetic/step histogram. Azure exporters map these ordinary MessageData logs to `AppTraces.Message` with **flat** `Properties`:
+
+| Exact Message | Attributes |
+| --- | --- |
+| `m365-service-health-overview` | `provider.service`, `provider.mode=live`, `provider.api_version=v1.0`, `provider.collected_at`, `provider.source=serviceAnnouncement.healthOverviews`, `provider.service_id`, `provider.service_name`, raw `provider.status` |
+| `m365-service-health-issue` | Same service/mode/version/collection time; `provider.source=serviceAnnouncement.issues`, `provider.issue_id`, `provider.service_name`, `provider.status`, bounded JSON `provider.issue`, boolean `provider.truncated` |
+| `m365-service-activity` | Service/mode/collection time; `provider.api_version=beta`, `provider.source` and `provider.function`, `provider.interval_start`, `provider.interval_end` (sample bucket), `provider.aggregation_interval_minutes`, **either** `provider.percentage` **or** `provider.value` |
+| `m365-provider-collection-failed` | Service/mode/version/source/collection time, `provider.observed_at`, sanitized `provider.category`, optional numeric `provider.http_status`; no error body/headers/token |
+| `m365-provider-collection-skipped` | Service, `provider.mode=simulation`, version/source/collection time, `provider.skip_reason=simulation`; no Microsoft-reported status |
+
+Log timestamp is collection time, not historical report time. Approved issue JSON preserves id, service, classification, status, title, impact description, feature/group, start/end/modified times, resolution flag and posts (created time/type/content type/content). It retains at most 10 posts and bounds strings/serialized JSON to 6,000 characters; both `provider.truncated` and JSON `truncated` explicitly flag reductions, with `postsTotal` preserving original post count. Unknown fields are discarded; raw HTTP failures and mailbox content are never logged. This provider metadata can still be tenant-sensitive: restrict workspace access/retention accordingly.
+
+The SDK's bounded in-memory log queue accommodates the capped provider pages plus maximum journey target count; `--once` flushes diagnostic logs with results, then shuts down. Overlapping historical beta samples are snapshots, not newly occurring events—never sum them as new requests or derive synthetic success rates. Stable context remains impact-suppressed; only fresh exact live/v1.0 overview logs can supply the separate context query. Issues and beta never populate Experience/journey health signals. Provider diagnostics are not proof of live tenant access.
+
+First-party references: [stable health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [stable issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [Exchange connectivity beta](https://learn.microsoft.com/graph/api/serviceactivity-getconnectivitymetricsforexchange?view=graph-rest-beta), [Teams chat volume beta](https://learn.microsoft.com/graph/api/serviceactivity-getmessagevolumemetricsforteamschat?view=graph-rest-beta), [serviceActivity catalog](https://learn.microsoft.com/graph/api/resources/serviceactivity?view=graph-rest-beta).
 
 ## Credentials and export
 

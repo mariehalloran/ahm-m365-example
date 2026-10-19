@@ -8,6 +8,18 @@ Each service has one config/process, with its own cadence and embedded OTel SDK.
 
 The [shared utilities guide](../utils/README.md#measurements-and-queries) documents measurement semantics; each root service owns its worker, configuration, journey/actions, tests and `queries/analytics` plus `queries/health-model`. No generic runner or separate telemetry source component is needed. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
 
+## Optional Microsoft-reported providers
+
+Service-owned collectors now reuse the existing process, Graph identity and embedded SDK, once per service cycle independently of target count. Stable `serviceHealth` and beta `serviceActivity` both default off; scoped synthetic access must not silently expand to tenant provider permissions.
+
+Stable health overviews and issue history need `ServiceHealth.Read.All` and remain **context-only/impact-suppressed**. Only fresh exact live v1.0 overview records can supply the separate context signal; issues/history never populate journey health.
+
+Exchange's verified beta report is `getConnectivityMetricsForExchange`; Teams' is `getMessageVolumeMetricsForTeamsChat`. They need explicit `ENABLE_BETA_SERVICE_ACTIVITY=true`, service-specific approved application permissions and tenant eligibility/enablement. Beta is experimental, unsupported for production, and **diagnostic-only—never bubbles into Experience or journey health**. No verified SharePoint report exists, so enabling it is rejected rather than substituting OfficeApps. Optional/unverified functions are not exposed.
+
+Basic tenants can run the API-backed synthetics and stable Service Health with the subscribed services/appropriate Teams SKU and approved access. Do not promise beta reports on Basic: API permission documentation does not explicitly confirm Basic entitlement. The separate [advanced Microsoft 365 monitoring feature](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service. That published feature threshold is not a verified beta API licensing rule; tenant report eligibility must still be checked.
+
+All provider observations use ordinary Logger-only AppTraces, not synthetic/step metrics. Bounded UTC historical windows overlap; do not count each repeated snapshot as new requests or derive synthetic success rates from it. Explicit source failure/no-data/truncation diagnostics accompany independent summary counts; no empty healthy fallback is used. Simulation skips provider I/O and credentials. See the [exact configuration/diagnostic contract](../utils/README.md#optional-provider-collectors). Local mocked validation proves neither live access nor tenant eligibility and grants no permission.
+
 ## Teams: bot-backed channel journey
 
 [Teams](../teams/README.md) implements bot channel publication, Graph correlation/author readback, and deletion of the bot's own activity. HTTP-level tests assume approved access. Real resources, bot installation/metadata, credentials, and live validation are still required. Graph defaults to an explicitly selected same-tenant UAMI; Bot Connector remains independently certificate-backed.
@@ -50,6 +62,6 @@ The [model and telemetry resources](../health-model/README.md) are managed indep
 4. Containerize each service independently in Azure Container Apps with embedded telemetry.
 5. Obtain approved live Exchange/Teams/SharePoint resources and scoped credentials.
 6. Wire downstream query-based model signals and missing-data detection.
-7. Validate the bot-backed Teams journey against approved resources before adding live Teams model signals or considering employee/call/media journeys.
+7. Validate the bot-backed Teams journey against approved resources before enabling live Teams producers or considering employee/call/media journeys.
 
 Production acceptance still needs actual live evidence, safe cleanup, ingestion/failure tests, retention/cost approval, credential rotation, and monitoring of stopped workers.

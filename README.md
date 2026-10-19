@@ -1,6 +1,6 @@
 # Microsoft 365 synthetic monitoring
 
-**Run a test, report its result, repeat.** Each service has its own config and cadence. Workers are stateless: no Blob storage, checkpoint files, success-rate calculations, or health-state reports.
+**Run a test, report its result, repeat.** Each service has its own config and cadence. 
 
 Start with the service-owned journey guides: [Exchange send/receive](./exchange/README.md), [Teams channel publication](./teams/README.md), and [SharePoint save/reopen](./sharepoint/README.md). Each documents its exact endpoints, reusable actions, config, tests, and queries. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no real tenant execution or employee receipt is established.
 
@@ -63,6 +63,20 @@ Checked-in configs use **simulation** and **console output**: no real email/file
 Restart a worker after editing its file. Separate services do not share a scheduler. A worker never overlaps its own cycles; missed slots are skipped, not queued into catch-up bursts. Run one instance per target set until distributed ownership is implemented.
 
 Each command defaults to its own `<service>/config.json`; use `--config <file>` to override it. A service entry rejects another service's config before credentials or operations are initialized.
+
+## Optional Microsoft-reported context
+
+Provider collection is **off by default**, read-only, and runs once per service worker cycle in the existing process—not once per mailbox/channel/site. It never changes journey results or the 1/0 synthetic/step measurements.
+
+- `serviceHealth: true` reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues` for the exact subscribed service name. Both are **context-only**; ServiceHealth entities remain impact-suppressed. Issues/history do not populate health signals.
+- `serviceActivity: { "enabled": true, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 }` additionally requires **`ENABLE_BETA_SERVICE_ACTIVITY=true`**. Exchange connectivity percentages and Teams chat volumes are **experimental beta diagnostics only**, unsupported for production use; they never bubble into Experience/journey health. SharePoint beta configuration is rejected because no SharePoint-specific report is verified.
+- Live mode still requires `ENABLE_LIVE_M365=true` and separately approved application permissions: `ServiceHealth.Read.All`, and optionally `ServiceActivity-Exchange.Read.All` or `ServiceActivity-Teams.Read.All`. These are additional provider permissions, not replacements for scoped journey access. Nothing grants them automatically. Tenant eligibility/enablement must be confirmed.
+
+Business Basic can support the API-backed synthetics and stable Service Health where the subscribed service (including an appropriate Teams SKU) and administrator-approved access exist. Do **not** assume beta report entitlement on Basic: its API pages document permissions, not explicit Basic eligibility. Microsoft's separate [advanced Microsoft 365 monitoring](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service; that published monitoring eligibility is not proof of beta API entitlement. Confirm report availability with the tenant administrator.
+
+Simulation skips configured sources without Graph credentials/network or fabricated Microsoft health. Provider failures (including missing/invalid data, permission errors, throttling, and bounded pagination) are explicit sanitized diagnostic logs and summary failure counts, not successful empty snapshots. Historical overlapping beta windows are **logs only**, never counters or success rates.
+
+See the [exact configuration, diagnostic contract and bounds](./utils/README.md#optional-provider-collectors), plus service-owned analytics: [Exchange context](./exchange/queries/analytics/service-health-context.kql), [Teams context](./teams/queries/analytics/service-health-context.kql), [SharePoint context](./sharepoint/queries/analytics/service-health-context.kql), [Exchange beta](./exchange/queries/analytics/service-activity-diagnostics.kql), [Teams beta](./teams/queries/analytics/service-activity-diagnostics.kql).
 
 ## Send telemetry to Log Analytics
 

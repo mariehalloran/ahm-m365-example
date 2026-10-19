@@ -2,6 +2,17 @@
 
 **Status: implemented and validated with fake HTTP, not live Microsoft 365 traffic.** The [config](./config.json) runs in simulation, not live mode. Tenant approval, installed bot resources, credentials, and live acceptance are still required; this implementation is not evidence that access has been granted.
 
+## Optional provider context and diagnostics
+
+[teamsProviders](./src/providers.ts) runs once per cycle in this same worker, not per channel. Defaults remain off:
+
+- `serviceHealth: true` reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues` for exact `Microsoft Teams`; separate `ServiceHealth.Read.All` approval is required. It is **context-only/impact-suppressed**; issues/history do not populate health signals.
+- `serviceActivity.enabled: true` requires **`ENABLE_BETA_SERVICE_ACTIVITY=true`** and separately approved `ServiceActivity-Teams.Read.All`. The only/default beta function is `getMessageVolumeMetricsForTeamsChat`. This tenant report is **not** the bot channel-publication journey or a message receipt. Beta is experimental/unsupported for production, diagnostic-only and never bubbles into Experience/journey health.
+
+See [strict config, UTC windows and flat Logger-only attributes](../utils/README.md#optional-provider-collectors), [context analytics](./queries/analytics/service-health-context.kql), [beta diagnostics](./queries/analytics/service-activity-diagnostics.kql), and [collector tests](../utils/tests/providers.test.ts). Defaults use 15-minute aggregation/30-minute lookback; only 5/10/15/30 and aligned lookbacks up to 1,440 minutes are accepted. Overlapping historical counts are not new requests and never enter synthetic/step metrics. Simulation skips all provider I/O; source failures are explicit and cannot change a successful journey's 1/0. No provider permissions are granted automatically; tenant eligibility remains unverified.
+
+First-party references: [health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [Teams chat volume beta report](https://learn.microsoft.com/graph/api/serviceactivity-getmessagevolumemetricsforteamschat?view=graph-rest-beta).
+
 ## Implemented journey
 
 The [journey](./src/journey.ts) composes the named [actions](./src/steps.ts) `authenticate`, `postMessage`, `confirmPublication`, and `cleanup`. Journey ID `publish-channel-message` uses ordered step IDs `authenticate`, `post-message`, `confirm-publication`, `cleanup`. Every executed action emits step success (1/0) and seconds; blocked actions are skipped, not recorded as failed operations. Cleanup failure preserves prior successes and timings but fails the overall attempt.

@@ -6,6 +6,7 @@ import { baseResult } from "../src/probes.js";
 import { runServiceWorker } from "../src/worker.js";
 import { parseServiceConfig } from "../src/service-config.js";
 import { createProbeTelemetry, validateConnectionString, type AzureExporterFactory } from "../src/azure-monitor.js";
+import type { StepResult } from "../src/contracts.js";
 
 const connectionString = "InstrumentationKey=11111111-1111-4111-8111-111111111111;IngestionEndpoint=https://telemetry.example.invalid";
 const env = { APPLICATIONINSIGHTS_CONNECTION_STRING: connectionString };
@@ -94,6 +95,13 @@ describe("real Azure exporters through an in-process mock transport", () => {
         durationMs: 2000,
         diagnosticCategory: "delivery-timeout" as const,
         diagnosticContext: {},
+        steps: [
+          { name: "authenticate", status: "succeeded", observedAt: sample().observedAt, durationMs: 100 },
+          { name: "create-draft", status: "succeeded", observedAt: sample().observedAt, durationMs: 100 },
+          { name: "send", status: "succeeded", observedAt: sample().observedAt, durationMs: 200 },
+          { name: "confirm-delivery", status: "failed", observedAt: sample().observedAt, durationMs: 1500, diagnosticCategory: "delivery-timeout" },
+          { name: "cleanup", status: "succeeded", observedAt: sample().observedAt, durationMs: 100 },
+        ] satisfies StepResult[],
       };
       const { deliveryDurationMs: _deliveryDurationMs, ...failedWithoutDelivery } = failed;
       telemetry.record(failedWithoutDelivery, "live");
@@ -116,6 +124,23 @@ describe("real Azure exporters through an in-process mock transport", () => {
       expect(points.find(point => point.name === "synthetic.probe.duration")).toMatchObject({ value: 1.6, count: 1 });
       expect(points.find(point => point.name === "mailflow.send.duration")).toMatchObject({ value: 0.2, count: 1 });
       expect(points.find(point => point.name === "mailflow.delivery.duration")).toMatchObject({ value: 0.7, count: 1 });
+      const stepSuccess = metrics.filter(envelope =>
+        envelope.data.baseData.metrics[0]?.name === "synthetic.step.success");
+      expect(stepSuccess).toHaveLength(5);
+      expect(stepSuccess.every(envelope =>
+        envelope.data.baseData.properties["probe.journey"] === "send-receive-mail" &&
+        envelope.data.baseData.properties["probe.service"] === "exchange" &&
+        envelope.data.baseData.properties["probe.mode"] === "live")).toBe(true);
+      const deliveryFailure = stepSuccess.find(envelope =>
+        envelope.data.baseData.properties["probe.step"] === "confirm-delivery");
+      expect(deliveryFailure?.data.baseData.metrics[0]).toMatchObject({ value: 0, count: 1 });
+      expect(deliveryFailure?.data.baseData.properties["probe.outcome"]).toBe("failure");
+      expect(points.filter(point => point.name === "synthetic.step.duration")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ value: 0.1, count: 1 }),
+        expect.objectContaining({ value: 1.5, count: 1 }),
+      ]));
+      expect(envelopes.filter(envelope =>
+        envelope.data.baseType === "MessageData" && envelope.data.baseData.message === "synthetic-step")).toHaveLength(5);
       expect(envelopes.every(envelope => ["MessageData", "MetricData"].includes(envelope.data.baseType))).toBe(true);
     } finally { await telemetry.shutdown(); }
   });

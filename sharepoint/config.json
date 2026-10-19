@@ -5,6 +5,8 @@
   "timeoutSeconds": 45,
   "mode": "simulation",
   "graphAuthentication": "managed-identity",
+  "serviceHealth": false,
+  "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
   "cohort": "sharepoint-global",
   "telemetry": "console",
   "targets": [

@@ -51,3 +51,18 @@ This proves neither employee login/MFA, Outlook rendering, external delivery, no
 - [Send a draft](https://learn.microsoft.com/en-us/graph/api/message-send?view=graph-rest-1.0)
 - [List messages](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0)
 - [Delete a message](https://learn.microsoft.com/en-us/graph/api/message-delete?view=graph-rest-1.0)
+
+## Optional provider context and diagnostics
+
+[exchangeProviders](./src/providers.ts) is injected into the same worker and collects once per cycle, not per mailbox. Both switches default off:
+
+- `serviceHealth: true` reads `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues`, filtering exact `Exchange Online`. Separate `ServiceHealth.Read.All` approval is required. The stable overview is context-only; the ServiceHealth entity remains **impact-suppressed**. Issue metadata/history never supplies journey health.
+- `serviceActivity.enabled: true` requires `ENABLE_BETA_SERVICE_ACTIVITY=true` plus separately approved `ServiceActivity-Exchange.Read.All`. Its only/default function is `getConnectivityMetricsForExchange`, returning Microsoft-estimated connectivity percentages. The beta API is experimental/unsupported for production and **diagnostic-only, never bubbles into Experience/journey health**.
+
+Defaults are 15-minute aggregation and 30-minute lookback. Allowed aggregation is 5/10/15/30; lookback must be a multiple, at most one day. The UTC-floored historical window and all report values are Logger-only snapshots, never synthetic/step metrics or request counters. Simulation skips sources without Graph credentials/network, and provider failures cannot change a successful mail journey's 1/0.
+
+See the [strict config and flat AppTraces contract](../utils/README.md#optional-provider-collectors), [context analytics](./queries/analytics/service-health-context.kql), [beta diagnostics](./queries/analytics/service-activity-diagnostics.kql), and [mocked collector tests](../utils/tests/providers.test.ts). No provider permission is granted or live tenant access established.
+
+- [List health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0)
+- [List issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0)
+- [Exchange connectivity beta report](https://learn.microsoft.com/graph/api/serviceactivity-getconnectivitymetricsforexchange?view=graph-rest-beta)
