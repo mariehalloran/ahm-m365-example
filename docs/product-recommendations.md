@@ -6,16 +6,16 @@ The worker performs a bounded operation, cleans up its artifacts, and exports it
 
 Each service has one config/process, with its own cadence and embedded OTel SDK. Azure Container Apps is the intended host; separate Container Apps reuse the same program. There is no separate telemetry worker or Kubernetes requirement.
 
-The [telemetry guide](../telemetry/README.md) owns measurement semantics and KQL for downstream analysis. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure is not proof that mail delivery failed.
+The [shared utilities guide](../utils/README.md#measurements-and-queries) documents measurement semantics; each root service owns its worker, configuration, journey/actions, tests and `queries/analytics` plus `queries/health-model`. No generic runner or separate telemetry source component is needed. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
 
-## Teams: deliberately staged
+## Teams: bot-backed channel journey
 
-[Teams](../probes/teams/README.md) is disabled and not implemented. A config/model entity does not establish a working Teams test.
+[Teams](../teams/README.md) implements bot channel publication, Graph correlation/author readback, and deletion of the bot's own activity. HTTP-level tests assume approved access. Real resources, bot installation/metadata, credentials, and live validation are still required. Graph defaults to an explicitly selected same-tenant UAMI; Bot Connector remains independently certificate-backed.
 
 | Candidate | Requirements / limitations |
 | --- | --- |
 | Read approved team/channel metadata | Lightweight API reachability only, not messaging/calls |
-| Send/read/delete a correlated message | Confirm supported endpoint authentication and exact permissions; do not use migration APIs as a live messaging shortcut |
+| Implemented bot post/readback/delete | Separate Connector and Graph identities, exact correlation and expected author, only bot-owned cleanup; not human-to-human receipt |
 | Meeting/call/media | Supported calling APIs, licensed identity, endpoint/network placement, privacy, and cleanup |
 
 Do not block initial Exchange work on a full media synthetic or bypass controls with password/browser automation.
@@ -24,7 +24,9 @@ Do not block initial Exchange work on a full media synthetic or bypass controls 
 
 Exchange creates a correlated draft, sends to the dedicated mailbox, confirms Inbox delivery, and cleans up known copies. Record delivery duration separately from total duration; neither proves Outlook rendering or external delivery.
 
-SharePoint verifies the approved site/drive, uploads a uniquely named synthetic file, downloads/verifies its content, and deletes only its own artifact. This does not test coauthoring, document rendering, desktop sync, or every user population.
+The confirmed hosted Exchange path uses the same-tenant UAMI with mailbox-scoped Exchange RBAC for Applications; do not add tenant-wide Entra Graph mail application grants. Certificate Graph credentials are explicit local-live opt-in, not a hosted fallback.
+
+SharePoint verifies the approved site/drive with bounded pagination, uploads a uniquely named synthetic file, downloads/verifies its content, and deletes only its own artifact. Upload/readback phases have separate timings. This does not test coauthoring, document rendering, desktop sync, or every user population.
 
 Use scoped permissions and dedicated resources. One mailbox/site tests an integration, not tenant-wide availability. Labels do not change the execution location; regional claims require actually placed runners.
 
@@ -36,8 +38,9 @@ Use scoped permissions and dedicated resources. One mailbox/site tests an integr
 - Keep simulation out of live availability calculations.
 - Configure query-based model signals only after validating actual ingested tables and query results.
 - Use model dependencies for rollup and keep Microsoft-reported provider context separate.
+- Reuse service-owned named actions and attribute executed step 1/0/duration measurements to the fixed journey/step IDs. A cleanup failure changes only its own step and the overall attempt, not earlier successful action observations.
 
-The [model and telemetry resources](../health-model/README.md) are deployed with query authorization and live-only signal evaluation. No live workers are connected. Service aggregates do not identify individual missing mailboxes, and no “last healthy” state is preserved in a worker.
+The [model and telemetry resources](../health-model/README.md) are managed independently with query authorization and live-only evaluation. Each experience has one AzureLogAnalytics entity displayed as User Journey, with its overall and named operation-step signals inside it—not separate step entities. No live workers are connected. Service aggregates do not identify individual missing mailboxes, and no “last healthy” state is preserved in a worker.
 
 ## Recommended sequence
 
@@ -45,8 +48,8 @@ The [model and telemetry resources](../health-model/README.md) are deployed with
 2. Run one stateless simulated service locally and verify its result/metric shape.
 3. Connect an approved workspace-based Application Insights resource and validate Log Analytics queries.
 4. Containerize each service independently in Azure Container Apps with embedded telemetry.
-5. Obtain approved live Exchange/SharePoint resources and scoped credentials.
+5. Obtain approved live Exchange/Teams/SharePoint resources and scoped credentials.
 6. Wire downstream query-based model signals and missing-data detection.
-7. Add Teams only after selecting a supported journey and authorization model.
+7. Validate the bot-backed Teams journey against approved resources before adding live Teams model signals or considering employee/call/media journeys.
 
 Production acceptance still needs actual live evidence, safe cleanup, ingestion/failure tests, retention/cost approval, credential rotation, and monitoring of stopped workers.

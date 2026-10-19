@@ -1,8 +1,0 @@
-AppMetrics
-| where TimeGenerated > ago(15m)
-| where Name == "synthetic.probe.runs"
-| where tostring(Properties["probe.mode"]) == "live"
-| summarize Attempts = sum(Sum),
-            Successful = sumif(Sum, tostring(Properties["probe.outcome"]) == "success")
-    by _ResourceId, Service = tostring(Properties["probe.service"])
-| extend SuccessPercent = iff(Attempts > 0, 100.0 * Successful / Attempts, real(null))

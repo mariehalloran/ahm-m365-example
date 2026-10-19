@@ -2,12 +2,11 @@
 
 **Run a test, report its result, repeat.** Each service has its own config and cadence. Workers are stateless: no Blob storage, checkpoint files, success-rate calculations, or health-state reports.
 
-Start with the [user journeys and endpoint guide](./probes/README.md): email arrival, Teams message observation, and document save/readback. It explains each employee goal, the exact API calls, what is implemented, and what an API-backed test cannot prove about the user interface.
-
-Detailed plans: [Teams post/readback/cleanup](./probes/teams/README.md) and [SharePoint upload/read/verify/delete](./probes/sharepoint/README.md). The Teams plan is not an implemented handler or proof of employee receipt.
+Start with the service-owned journey guides: [Exchange send/receive](./exchange/README.md), [Teams channel publication](./teams/README.md), and [SharePoint save/reopen](./sharepoint/README.md). Each documents its exact endpoints, reusable actions, config, tests, and queries. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no real tenant execution or employee receipt is established.
 
 ```text
 Exchange Container App   [test + OTel SDK, every 60 seconds]  --+
+Teams Container App      [test + OTel SDK, every 120 seconds] --+
 SharePoint Container App [test + OTel SDK, every 300 seconds] --+
                                                              |
                                          workspace-based Application Insights
@@ -18,7 +17,7 @@ SharePoint Container App [test + OTel SDK, every 300 seconds] --+
                                               health-model query signals
 ```
 
-The [sample health model and telemetry resources](./health-model/README.md) are deployed in `rg-m365-demo`. Query signals evaluate **live-only** data; no live worker is connected yet. Azure Container Apps is the intended worker host, not an already deployed worker.
+The [sample health model and telemetry resources](./health-model/README.md) are managed independently in `rg-m365-demo`. Each service experience has **one AzureLogAnalytics entity displayed as User Journey**, with overall and named-step KQL signals inside it—not separate child step entities. Query signals evaluate **live-only** data; no live worker is connected yet. Azure Container Apps is the intended worker host, not an already deployed worker.
 
 OpenTelemetry runs **inside each service's existing process**, not in another worker/container. Each service has its own Container App and config; no AKS cluster, sidecar, or OTel Collector is required for this export path.
 
@@ -28,11 +27,13 @@ Requires Node.js 22 or 24 and npm. Run from the repository root:
 
 ```sh
 npm ci
-npm run probe -- --config probes/exchange/config.json --once
+npm run exchange -- --once
 # Remove --once to repeat on Exchange's cadence.
-npm run probe -- --config probes/exchange/config.json
+npm run exchange
 # Another terminal/process runs SharePoint independently.
-npm run probe -- --config probes/sharepoint/config.json
+npm run sharepoint
+# Or run one safe Teams simulation.
+npm run teams -- --once
 ```
 
 Checked-in configs use **simulation** and **console output**: no real email/files, Azure ingestion, or local state writes. Stop with Ctrl+C.
@@ -41,9 +42,9 @@ Checked-in configs use **simulation** and **console output**: no real email/file
 
 | Config | Cadence | Default |
 | --- | --- | --- |
-| [Exchange](./probes/exchange/config.json) | 60 seconds | Simulated mail-flow result |
-| [SharePoint](./probes/sharepoint/config.json) | 300 seconds | Simulated file result |
-| [Teams](./probes/teams/config.json) | 120 seconds | Disabled; handler not implemented |
+| [Exchange](./exchange/config.json) | 60 seconds | Simulated mail-flow result |
+| [SharePoint](./sharepoint/config.json) | 300 seconds | Simulated file result |
+| [Teams](./teams/config.json) | 120 seconds | Simulated channel publication; bot-backed live handler requires approved access |
 
 ```json
 {
@@ -52,6 +53,7 @@ Checked-in configs use **simulation** and **console output**: no real email/file
   "intervalSeconds": 60,
   "timeoutSeconds": 45,
   "mode": "simulation",
+  "graphAuthentication": "managed-identity",
   "cohort": "exchange-global",
   "telemetry": "console",
   "targets": [{ "id": "exchange-probe-001" }]
@@ -59,6 +61,8 @@ Checked-in configs use **simulation** and **console output**: no real email/file
 ```
 
 Restart a worker after editing its file. Separate services do not share a scheduler. A worker never overlaps its own cycles; missed slots are skipped, not queued into catch-up bursts. Run one instance per target set until distributed ownership is implemented.
+
+Each command defaults to its own `<service>/config.json`; use `--config <file>` to override it. A service entry rejects another service's config before credentials or operations are initialized.
 
 ## Send telemetry to Log Analytics
 
@@ -70,24 +74,29 @@ Use a **workspace-based Application Insights resource linked to the intended Log
 
 The worker exports:
 
-- An outcome counter for success, failure, or inability to execute.
+- One success measurement per attempt: **1 = success, 0 = unsuccessful**.
 - A total probe-duration histogram in seconds.
+- An Exchange send-request-duration histogram in seconds.
 - An Exchange confirmed-delivery-duration histogram in seconds.
-- One structured result per attempt for diagnostics and percentile calculations.
+- Teams Connector send/publication and SharePoint upload/read duration histograms in seconds.
+- `synthetic.step.success` (1/0) and `synthetic.step.duration` (seconds) for every executed action, including failed actions and cleanup.
+- Structured per-attempt and per-step diagnostics. Blocked actions are `skipped`, with no fabricated duration or success sample.
 
-[Simple KQL examples](./telemetry/README.md) sum attempts/successes, calculate average durations, and check when a service last reported. Metric dimensions are only service, mode, and outcome. No mailbox/probe inventory is required; opaque IDs stay in diagnostic records.
+[Telemetry semantics](./utils/README.md#measurements-and-queries) describe **average success × 100**, average durations, and reporting gaps. Each service owns its `queries/analytics/` and `queries/health-model/` files. Overall metric dimensions are service, journey, mode, and outcome; step metrics add only the bounded step ID. Mailbox/probe inventories are not required.
 
 For real tests, obtain the [approved mailbox and scoped permissions](./MAILBOX-SYNTHETIC-ACCESS.md), add dedicated targets, change `mode` to `live`, and explicitly set `ENABLE_LIVE_M365=true`. Live execution and Azure export are independent choices. Simulated measurements are labeled and excluded from the default live queries.
+
+Start with the disabled live templates in [Exchange](./exchange/config.live.example.json), [Teams](./teams/config.live.example.json), or [SharePoint](./sharepoint/config.live.example.json). Replace placeholder resources and enable only after approval. Hosted Graph defaults to the explicit user-assigned managed identity in `AZURE_CLIENT_ID`; certificate authentication is opt-in local development only. Teams Bot Connector still needs separate bot certificate credentials and a matching expected tenant; Graph MI does not automatically authorize bot sending.
 
 ## Components
 
 | Folder | Responsibility |
 | --- | --- |
-| [health-model/](./health-model/) | Deployed model topology; future query-based signal integration |
-| [probes/](./probes/README.md) | User journeys, endpoints, service configs, and test operations |
-| [runner/](./runner/) | Stateless execution and independent per-config scheduling |
-| [telemetry/](./telemetry/) | OTel export and downstream KQL |
-| [shared/](./shared/) | Result contracts and HTTP/Graph clients |
+| [health-model/](./health-model/) | Independently deployed topology and query signals |
+| [exchange/](./exchange/) | Exchange worker, config, journey/actions, tests, queries and optional mock hosting template |
+| [teams/](./teams/) | Teams worker, config, journey/actions, tests and queries |
+| [sharepoint/](./sharepoint/) | SharePoint worker, config, journey/actions, tests and queries |
+| [utils/](./utils/README.md) | Shared auth/config, clients, measured steps, execution/scheduling and embedded OTel |
 
 ## Validate
 
@@ -95,7 +104,9 @@ For real tests, obtain the [approved mailbox and scoped permissions](./MAILBOX-S
 npm run typecheck
 npm test
 npm run build
-npm start -- --config probes/exchange/config.json --once
+node dist/exchange/src/worker.js --once
+node dist/teams/src/worker.js --once
+node dist/sharepoint/src/worker.js --once
 ```
 
-See [worker configuration](./runner/README.md), [operations](./docs/operations.md), and [deployment boundaries](./docs/deployment.md). No worker publishes Healthy/Unhealthy or calls the Health Report Ingestion API.
+One root npm package builds all three entries; tests are excluded from production output. See [shared worker configuration](./utils/README.md), [operations](./docs/operations.md), and [deployment boundaries](./docs/deployment.md). No worker publishes Healthy/Unhealthy or calls the Health Report Ingestion API.

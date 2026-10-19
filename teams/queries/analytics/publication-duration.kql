@@ -1,0 +1,8 @@
+AppMetrics
+| where TimeGenerated between (ago(5m) .. now())
+| where Name == "teams.message.publication.duration"
+| where tostring(Properties["probe.service"]) == "teams"
+| where tostring(Properties["probe.mode"]) == "live"
+| summarize DurationSeconds = sum(Sum), Publications = sum(ItemCount) by _ResourceId
+| where Publications > 0
+| project _ResourceId, MeanPublicationSeconds = DurationSeconds / Publications

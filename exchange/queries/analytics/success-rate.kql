@@ -1,0 +1,8 @@
+AppMetrics
+| where TimeGenerated between (ago(5m) .. now())
+| where Name == "synthetic.probe.success"
+| where tostring(Properties["probe.service"]) == "exchange"
+| where tostring(Properties["probe.mode"]) == "live"
+| summarize Successful = sum(Sum), Attempts = sum(ItemCount) by _ResourceId
+| where Attempts > 0
+| project _ResourceId, SuccessPercent = 100.0 * Successful / Attempts

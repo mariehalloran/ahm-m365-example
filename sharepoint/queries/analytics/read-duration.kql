@@ -1,0 +1,8 @@
+AppMetrics
+| where TimeGenerated between (ago(15m) .. now())
+| where Name == "sharepoint.file.read.duration"
+| where tostring(Properties["probe.service"]) == "sharepoint"
+| where tostring(Properties["probe.mode"]) == "live"
+| summarize DurationSeconds = sum(Sum), Requests = sum(ItemCount) by _ResourceId
+| where Requests > 0
+| project _ResourceId, MeanReadSeconds = DurationSeconds / Requests

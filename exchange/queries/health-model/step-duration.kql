@@ -1,0 +1,9 @@
+AppMetrics
+| where _ResourceId =~ "__APPLICATION_INSIGHTS_RESOURCE_ID__"
+| where TimeGenerated between (ago(5m) .. now())
+| where Name == "synthetic.step.duration"
+| where tostring(Properties["probe.service"]) == "exchange" and tostring(Properties["probe.mode"]) == "live"
+| where tostring(Properties["probe.journey"]) == "send-receive-mail" and tostring(Properties["probe.step"]) == "__STEP__"
+| summarize DurationSeconds = sum(Sum), Samples = sum(ItemCount)
+| where Samples > 0
+| project Value = 1000.0 * DurationSeconds / Samples

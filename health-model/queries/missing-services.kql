@@ -1,8 +1,0 @@
-let EvaluationTime = now();
-AppMetrics
-| where _ResourceId =~ "__APPLICATION_INSIGHTS_RESOURCE_ID__"
-| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)
-| where Name == "synthetic.probe.runs" and tostring(Properties["probe.mode"]) == "live"
-| summarize ExchangeRuns = sumif(Sum, tostring(Properties["probe.service"]) == "exchange" and TimeGenerated >= EvaluationTime - 3m),
-            SharePointRuns = sumif(Sum, tostring(Properties["probe.service"]) == "sharepoint" and TimeGenerated >= EvaluationTime - 11m)
-| project Value = iff(ExchangeRuns > 0, 0, 1) + iff(SharePointRuns > 0, 0, 1), ExchangeRuns, SharePointRuns

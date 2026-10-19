@@ -13,10 +13,10 @@
     "sourceMap": true
   },
   "include": [
-    "telemetry/src/**/*.ts", "telemetry/tests/**/*.ts",
-    "probes/*/src/**/*.ts", "probes/*/tests/**/*.ts", "probes/src/**/*.ts",
-    "runner/src/**/*.ts", "runner/tests/**/*.ts",
-    "shared/src/**/*.ts", "shared/tests/**/*.ts",
+    "exchange/src/**/*.ts", "exchange/tests/**/*.ts",
+    "teams/src/**/*.ts", "teams/tests/**/*.ts",
+    "sharepoint/src/**/*.ts", "sharepoint/tests/**/*.ts",
+    "utils/src/**/*.ts", "utils/tests/**/*.ts",
     "vitest.config.ts"
   ]
 }

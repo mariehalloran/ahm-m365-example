@@ -21,21 +21,76 @@ param latencyDegradedMilliseconds int = 15000
 param latencyUnhealthyMilliseconds int = 60000
 
 var serviceSignals = [
-  { service: 'exchange', entityName: 'exchange-global', lookback: '5m', timeGrain: 'PT5M', durationMetric: 'mailflow.delivery.duration' }
-  { service: 'sharepoint', entityName: 'sharepoint-global', lookback: '15m', timeGrain: 'PT15M', durationMetric: 'synthetic.probe.duration' }
+  {
+    service: 'exchange'
+    journey: 'send-receive-mail'
+    entityName: 'exchange-global'
+    x: 250
+    timeGrain: 'PT5M'
+    successQuery: loadTextContent('../../exchange/queries/health-model/success-percentage.kql')
+    latencyQuery: loadTextContent('../../exchange/queries/health-model/mean-latency.kql')
+    missingQuery: loadTextContent('../../exchange/queries/health-model/missing-observations.kql')
+    unexecutableQuery: loadTextContent('../../exchange/queries/health-model/unexecutable-attempts.kql')
+    stepSuccessQuery: loadTextContent('../../exchange/queries/health-model/step-success.kql')
+    stepDurationQuery: loadTextContent('../../exchange/queries/health-model/step-duration.kql')
+    steps: [
+      { name: 'authenticate', displayName: 'Authenticate' }
+      { name: 'create-draft', displayName: 'Create email' }
+      { name: 'send', displayName: 'Send email' }
+      { name: 'confirm-delivery', displayName: 'Confirm delivery' }
+      { name: 'cleanup', displayName: 'Cleanup' }
+    ]
+  }
+  {
+    service: 'teams'
+    journey: 'publish-channel-message'
+    entityName: 'teams-global'
+    x: 650
+    timeGrain: 'PT5M'
+    successQuery: loadTextContent('../../teams/queries/health-model/success-percentage.kql')
+    latencyQuery: loadTextContent('../../teams/queries/health-model/mean-latency.kql')
+    missingQuery: loadTextContent('../../teams/queries/health-model/missing-observations.kql')
+    unexecutableQuery: loadTextContent('../../teams/queries/health-model/unexecutable-attempts.kql')
+    stepSuccessQuery: loadTextContent('../../teams/queries/health-model/step-success.kql')
+    stepDurationQuery: loadTextContent('../../teams/queries/health-model/step-duration.kql')
+    steps: [
+      { name: 'authenticate', displayName: 'Authenticate' }
+      { name: 'post-message', displayName: 'Post message' }
+      { name: 'confirm-publication', displayName: 'Confirm publication' }
+      { name: 'cleanup', displayName: 'Cleanup' }
+    ]
+  }
+  {
+    service: 'sharepoint'
+    journey: 'save-reopen-file'
+    entityName: 'sharepoint-global'
+    x: 1050
+    timeGrain: 'PT15M'
+    successQuery: loadTextContent('../../sharepoint/queries/health-model/success-percentage.kql')
+    latencyQuery: loadTextContent('../../sharepoint/queries/health-model/mean-latency.kql')
+    missingQuery: loadTextContent('../../sharepoint/queries/health-model/missing-observations.kql')
+    unexecutableQuery: loadTextContent('../../sharepoint/queries/health-model/unexecutable-attempts.kql')
+    stepSuccessQuery: loadTextContent('../../sharepoint/queries/health-model/step-success.kql')
+    stepDurationQuery: loadTextContent('../../sharepoint/queries/health-model/step-duration.kql')
+    steps: [
+      { name: 'authenticate', displayName: 'Authenticate' }
+      { name: 'verify-drive', displayName: 'Verify library' }
+      { name: 'upload-file', displayName: 'Upload file' }
+      { name: 'read-file', displayName: 'Read file' }
+      { name: 'cleanup', displayName: 'Cleanup' }
+    ]
+  }
 ]
-var successQuery = replace(loadTextContent('../queries/success-percentage.kql'), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-var latencyQuery = replace(loadTextContent('../queries/mean-latency.kql'), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
 var journeySignalGroups = toObject(serviceSignals, service => service.entityName, service => {
   azureLogAnalytics: {
     authenticationSetting: workspaceAuthentication.name
     logAnalyticsWorkspaceResourceId: workspace.id
-    signals: [
+    signals: concat([
       {
         name: 'live-success-percentage'
-        displayName: 'Live attempt success percentage (including unexecutable)'
+        displayName: 'Whole journey - success percentage'
         signalKind: 'LogAnalyticsQuery'
-        queryText: replace(replace(successQuery, '__SERVICE__', service.service), '__LOOKBACK__', service.lookback)
+        queryText: replace(service.successQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
         valueColumnName: 'Value'
         refreshInterval: 'PT1M'
         timeGrain: service.timeGrain
@@ -46,9 +101,9 @@ var journeySignalGroups = toObject(serviceSignals, service => service.entityName
       }
       {
         name: 'live-mean-latency'
-        displayName: service.service == 'exchange' ? 'Live mean confirmed delivery latency (ms)' : 'Live mean attempt latency including cleanup (ms)'
+        displayName: service.service == 'exchange' ? 'Confirmed delivery - mean duration (ms)' : service.service == 'teams' ? 'Confirmed publication - mean duration (ms)' : 'Whole journey - mean duration (ms)'
         signalKind: 'LogAnalyticsQuery'
-        queryText: replace(replace(replace(latencyQuery, '__SERVICE__', service.service), '__LOOKBACK__', service.lookback), '__DURATION_METRIC__', service.durationMetric)
+        queryText: replace(service.latencyQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
         valueColumnName: 'Value'
         refreshInterval: 'PT1M'
         timeGrain: service.timeGrain
@@ -57,9 +112,64 @@ var journeySignalGroups = toObject(serviceSignals, service => service.entityName
           unhealthyRule: { operator: 'GreaterThan', threshold: latencyUnhealthyMilliseconds }
         }
       }
-    ]
+    ], flatten(map(service.steps, step => [
+      {
+        name: '${step.name}-success-percentage'
+        displayName: '${step.displayName} - success percentage'
+        signalKind: 'LogAnalyticsQuery'
+        queryText: replace(replace(service.stepSuccessQuery, '__STEP__', step.name), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
+        valueColumnName: 'Value'
+        refreshInterval: 'PT1M'
+        timeGrain: service.timeGrain
+        evaluationRules: {
+          degradedRule: { operator: 'LessThan', threshold: successDegradedPercent }
+          unhealthyRule: { operator: 'LessThan', threshold: successUnhealthyPercent }
+        }
+      }
+      {
+        name: '${step.name}-mean-duration'
+        displayName: '${step.displayName} - mean duration (ms)'
+        signalKind: 'LogAnalyticsQuery'
+        queryText: replace(replace(service.stepDurationQuery, '__STEP__', step.name), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
+        valueColumnName: 'Value'
+        refreshInterval: 'PT1M'
+        timeGrain: service.timeGrain
+        evaluationRules: {
+          degradedRule: { operator: 'GreaterThan', threshold: latencyDegradedMilliseconds }
+          unhealthyRule: { operator: 'GreaterThan', threshold: latencyUnhealthyMilliseconds }
+        }
+      }
+    ])))
   }
 })
+
+var pipelineSignalPairs = [for service in serviceSignals: [
+  {
+    name: '${service.service}-missing-live-results'
+    displayName: '${service.service} without recent live attempt observations'
+    signalKind: 'LogAnalyticsQuery'
+    queryText: replace(service.missingQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
+    valueColumnName: 'Value'
+    refreshInterval: 'PT1M'
+    timeGrain: service.timeGrain
+    evaluationRules: {
+      unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
+    }
+  }
+  {
+    name: '${service.service}-unexecutable-live-attempts'
+    displayName: '${service.service} live attempts that could not execute'
+    signalKind: 'LogAnalyticsQuery'
+    queryText: replace(service.unexecutableQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
+    valueColumnName: 'Value'
+    refreshInterval: 'PT1M'
+    timeGrain: service.timeGrain
+    evaluationRules: {
+      unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
+    }
+  }
+]]
+var pipelineSignals = flatten(pipelineSignalPairs)
 
 var entities = [
   // The service creates this root automatically; manage its rollup rather than leave it disconnected.
@@ -67,11 +177,11 @@ var entities = [
   { name: 'm365-tenant', displayName: 'Microsoft 365 and Azure Experience', x: 600, y: 180, rollup: true, impact: 'Standard' }
   { name: 'azure-resources', displayName: 'Azure Resource Health - not connected', x: 0, y: 400, rollup: false, impact: 'Standard' }
   { name: 'exchange-experience', displayName: 'Exchange Experience', x: 300, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'exchange-global', displayName: 'Exchange Mail-flow - live service metrics', x: 300, y: 620, rollup: false, impact: 'Standard' }
+  { name: 'exchange-global', displayName: 'User Journey', x: 300, y: 620, rollup: false, impact: 'Standard' }
   { name: 'teams-experience', displayName: 'Teams Experience', x: 600, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'teams-global', displayName: 'Teams Cohort - not implemented', x: 600, y: 620, rollup: false, impact: 'Standard' }
+  { name: 'teams-global', displayName: 'User Journey', x: 650, y: 620, rollup: false, impact: 'Standard' }
   { name: 'sharepoint-experience', displayName: 'SharePoint Experience', x: 900, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'sharepoint-global', displayName: 'SharePoint File Experience - live service metrics', x: 900, y: 620, rollup: false, impact: 'Standard' }
+  { name: 'sharepoint-global', displayName: 'User Journey', x: 1050, y: 620, rollup: false, impact: 'Standard' }
   { name: 'monitoring-pipeline', displayName: 'Monitoring Pipeline', x: 1200, y: 400, rollup: true, impact: 'Standard' }
   { name: 'runner-heartbeat', displayName: 'Live Service Metrics - not a worker heartbeat', x: 1100, y: 620, rollup: false, impact: 'Standard' }
   { name: 'graph-availability', displayName: 'Graph Query Availability - not connected', x: 1350, y: 620, rollup: false, impact: 'Standard' }
@@ -91,6 +201,7 @@ var relationships = [
   { parent: 'monitoring-pipeline', child: 'runner-heartbeat' }
   { parent: 'monitoring-pipeline', child: 'graph-availability' }
 ]
+var stepCount = length(flatten(map(serviceSignals, service => service.steps)))
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   name: workspaceName
@@ -134,7 +245,7 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   }
   tags: {
     purpose: 'Microsoft 365 synthetic monitoring proof of concept'
-    deploymentStage: 'live-telemetry-queries'
+    deploymentStage: 'live-journey-step-queries'
     intendedRunnerHost: 'Azure Container Apps'
   }
   properties: {}
@@ -179,32 +290,7 @@ resource modelEntities 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-p
       azureLogAnalytics: {
         authenticationSetting: workspaceAuthentication.name
         logAnalyticsWorkspaceResourceId: workspace.id
-        signals: [
-          {
-            name: 'missing-live-services'
-            displayName: 'Services without recent live run metrics'
-            signalKind: 'LogAnalyticsQuery'
-            queryText: replace(loadTextContent('../queries/missing-services.kql'), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-            valueColumnName: 'Value'
-            refreshInterval: 'PT1M'
-            timeGrain: 'PT15M'
-            evaluationRules: {
-              unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
-            }
-          }
-          {
-            name: 'unexecutable-live-attempts'
-            displayName: 'Live attempts that could not execute'
-            signalKind: 'LogAnalyticsQuery'
-            queryText: replace(loadTextContent('../queries/unexecutable-attempts.kql'), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-            valueColumnName: 'Value'
-            refreshInterval: 'PT1M'
-            timeGrain: 'PT15M'
-            evaluationRules: {
-              unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
-            }
-          }
-        ]
+        signals: pipelineSignals
       }
     } : {})
   }
@@ -232,6 +318,9 @@ output apiVersion string = '2026-05-01-preview'
 output entityNames array = [for entity in entities: entity.name]
 output entityCount int = length(entities)
 output relationshipCount int = length(relationships)
+output journeyCount int = length(serviceSignals)
+output stepCount int = stepCount
+output querySignalCount int = length(serviceSignals) * 4 + stepCount * 2
 output workspaceResourceId string = workspace.id
 output workspaceCustomerId string = workspace.properties.customerId
 output applicationInsightsResourceId string = applicationInsights.id

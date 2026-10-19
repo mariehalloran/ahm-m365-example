@@ -1,195 +1,186 @@
-# Exchange mailbox synthetic: administrator request and tenant access
+# Exchange synthetic permissions and managed identity setup
 
-This guide explains what to request from the people who manage Exchange Online and Microsoft Entra ID before running a real mailbox synthetic. It is an access-planning and handoff document, not authorization to create resources or grant permissions.
+This is the administrator handoff for the **same-Entra-tenant** design. The worker runs in Azure Container Apps, authenticates to Graph with an explicitly selected **user-assigned managed identity**, and accesses only the dedicated synthetic mailbox.
 
-## Quick answer
+No mailbox password, application secret, customer-managed certificate, or Key Vault credential is required for hosted Exchange authentication. Azure manages the identity's credentials.
 
-- The mailbox belongs to a **Microsoft 365 tenant with Exchange Online**, not to an Azure subscription.
-- We need a dedicated test mailbox and an application allowed to send, read, create, and delete messages **only in that mailbox**.
-- The runner can be hosted in a different tenant from the mailbox, provided it authenticates using an application authorized in the mailbox's tenant.
-- Cross-tenant hosting is feasible, but the current Azure-hosted runner needs authentication changes before supporting it. Do not promise a ready-to-deploy cross-tenant solution based on the local test command.
+The [Container Apps Bicep setup](./exchange/infra/README.md) is a **mock, not deployed**. It does not grant mailbox permissions. The separate health-model deployment does not establish Exchange access.
 
-**Recommended mailbox starting point:** request one dedicated shared mailbox and a certificate-backed application in its tenant. Use the Exchange config and `--once` to prove a local send/receive/cleanup cycle before scheduling live tests. The separate [initial health-model deployment](./health-model/README.md) comes first on Azure and does not require mailbox access; ACA hosting remains unimplemented.
+## 1. What we need the administrators to provide
 
-## 1. What the first test will do
-
-The existing Exchange handler:
-
-1. Authenticates as an application, without signing in as a person.
-2. Creates a draft with a unique correlation ID and fixed, non-sensitive test content.
-3. Sends the message from the test mailbox to itself.
-4. Polls that mailbox's Inbox for the matching message and measures delivery time.
-5. Deletes the test's draft/sent/received copies using known IDs or its exact unique subject.
-6. Returns timings, success/failure, cleanup status, and an opaque correlation ID.
-
-The test does not need real-user mailboxes, attachments, or business content. Message bodies, mailbox addresses, and tokens are not intended to enter Azure Monitor Health Models or execution logs.
-
-Start with one manually initiated run. The Exchange config proposes a one-minute cadence: one message every minute means **1,440 messages per day, or approximately 43,200 per 30-day month**, per probe, plus sent and received copies. Multiply by the number of targets, and agree on the schedule before enabling it.
-
-This proves a Graph-based, intra-tenant mailbox journey. It does **not** prove Outlook sign-in, external delivery, browser experience, or tenant-wide availability. A separate test tenant measures that test tenant, not another organization's production tenant.
-
-## 2. What to ask the mailbox and identity administrators for
-
-Mailbox creation and application authorization might belong to different teams. We do not need ongoing administrator access ourselves if those teams perform the setup and provide the handoff information.
-
-| Request | Why we need it |
+| Request | Why |
 | --- | --- |
-| One dedicated shared mailbox, for example `ahm-synthetic@<accepted-domain>` | Isolates synthetic activity from real users. The administrator must confirm an Exchange accepted SMTP domain; a verified Entra domain alone is not enough. |
-| Mailbox primary SMTP address and stable mailbox/Entra object ID | Identifies the exact approved target and helps the administrator define the access scope. |
-| Microsoft 365 tenant ID and tenant domain | Ensures authentication targets the mailbox tenant, not the operator's home tenant or the Azure subscription tenant by accident. |
-| A named mailbox owner and an identity/application owner | Provides contacts for access changes, failures, certificate rotation, and eventual removal. |
-| A dedicated application identity authorized in that tenant | Allows unattended testing without a user's password or interactive session. |
-| Exactly scoped Exchange application permissions | Allows the send/read/cleanup journey without access to other mailboxes. See section 3. |
-| Approval of test volume, send-to-self behavior, and mail-flow policies | Prevents surprises from transport rules, spam protection, quotas, or security controls. Do not disable protections broadly for the test. |
-| An agreed retention and cleanup policy | Covers Deleted Items, delayed delivery, retention holds, and messages left after interrupted runs. |
-| A known, out-of-scope control mailbox for an administrator-supervised authorization check | Demonstrates that the application cannot access an unrelated mailbox. Do not send or delete mail in that control mailbox. |
-| Approval of the runner location and exported telemetry | Particularly important when the runner and mailbox belong to different tenants or organizations. |
+| One dedicated shared/test mailbox in an approved Exchange accepted SMTP domain | Keep business data and real-user mailboxes outside the test |
+| The Microsoft 365 tenant ID, primary SMTP address, mailbox object ID, and owner | Confirm the correct tenant/target and define a narrow scope |
+| Approval for the Exchange worker's managed identity | Azure creates its service principal; Exchange must separately authorize it |
+| Exchange RBAC application roles scoped only to the test mailbox | Permit draft creation, send, Inbox checks, and owned-message cleanup |
+| An approved out-of-scope control mailbox | Verify that unrelated mailbox access is denied, without sending/deleting there |
+| Approved cadence, retention, mail-flow restrictions, and an escalation owner | Control volume, cleanup, and security impact |
 
-### Mailbox licensing
+At one message per minute, one target produces up to **1,440 messages/day or 43,200 per thirty-day month**, plus sent/received copies. Agree on volume before enabling live execution.
 
-The organization must already have an eligible Exchange Online subscription. A shared mailbox of up to 50 GB generally does not need its own mailbox license. Archive, hold, capacity, and advanced compliance/security features can require additional licenses. Human delegates accessing the mailbox need their own eligible licenses.
+An eligible Exchange Online subscription must exist. A shared mailbox up to 50 GB generally needs no separate mailbox license; archive, hold, capacity, and advanced compliance/security features can change that. Human delegates need their own eligible licensing. Ask the tenant owner to confirm it.
 
-Ask the tenant administrator to confirm licensing rather than buying a new user license automatically. Do not enable interactive sign-in to the shared mailbox or request its password.
+An Azure subscription cannot itself host/create an Exchange Online mailbox. Azure and Microsoft 365 resources may be in different subscriptions, but this implementation's default assumes the **same Entra tenant**.
 
-## 3. Exact permissions to request
+## 2. Permissions: separate the three responsibilities
 
-### Runtime application permissions: required for mail flow
+### Azure deployment and identity attachment
 
-Use **Exchange Online RBAC for Applications**, with a custom resource scope containing only the approved test mailbox.
+The deploying operator needs rights to create the approved Container Apps resources and user-assigned identity, and to attach that identity. Examples are appropriately scoped resource Contributor/Managed Identity Contributor plus Managed Identity Operator where needed; use the organization's deployment role rather than granting broad access to the runtime identity.
 
-| Exchange application role | Purpose | Required scope |
-| --- | --- | --- |
-| `Application Mail.ReadWrite` | Create the draft, find delivery, and delete test copies | Only the dedicated synthetic mailbox |
-| `Application Mail.Send` | Send the draft as the synthetic mailbox | Only the dedicated synthetic mailbox |
+If an existing private Azure Container Registry supplies the image, the attached identity needs the registry's appropriate image-pull role, commonly **AcrPull** for a registry using classic RBAC. ABAC-enabled registries have different repository roles. This is image access, not mailbox authorization.
 
-The administrator needs to:
+**The worker identity does not need subscription Owner, Contributor, Exchange Administrator, Global Administrator, Blob access, or health-model write access.**
 
-1. Identify the application's client ID and its **enterprise application/service-principal object ID** in the mailbox tenant. The application-registration object ID is a different identifier.
-2. Register the service-principal reference in Exchange Online.
-3. Create a narrowly defined mailbox resource scope.
-4. Assign both application roles to that service principal using that scope.
-5. Audit existing permissions and verify allowed and denied access.
+### Exchange mailbox authorization
 
-An Exchange administrator with the appropriate Organization Management or delegated application-role assignment rights should perform these steps. The runner itself needs neither Exchange Administrator nor Global Administrator.
+Use **Exchange Online RBAC for Applications only**, scoped to the dedicated mailbox:
 
-**Important boundaries:**
+| Role | Journey steps that need it |
+| --- | --- |
+| `Application Mail.ReadWrite` | Create draft, look for Inbox delivery, find/delete this run's copies |
+| `Application Mail.Send` | Submit the test draft as that mailbox |
 
-- Do not additionally grant unscoped Microsoft Graph `Mail.ReadWrite` or `Mail.Send` application permissions in Entra ID. Exchange RBAC and Entra permissions are additive; a broad grant can bypass the intended mailbox restriction.
-- Do not request delegated user permissions, human `FullAccess`/`SendAs` assignments, `Exchange.ManageAsApp`, directory-wide read permissions, or Teams/SharePoint access for this Graph mailbox test.
-- `Mail.ReadWrite` permits access to **all messages in the allowed mailbox**, not just synthetic messages. Correlation-based cleanup is a code safeguard, not a message-level authorization boundary. Keep business data out of the mailbox.
-- Scoping `Mail.Send` restricts the mailbox the application can send **as**, not the recipient addresses it could send **to**. The code sends only to itself; administrators should consider a narrowly targeted mail-flow restriction if they need that enforced independently.
+The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles using that scope.
 
-### Provider context: optional and separate
+**Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite` or `Mail.Send` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
 
-Microsoft 365 Service Health collection uses Microsoft Graph **`ServiceHealth.Read.All` application permission**, granted by an authorized Entra administrator in the tenant whose service health we want to observe.
+Mailbox-scoped `Mail.ReadWrite` permits access to every message in the approved mailbox, not just synthetic messages. Keep the mailbox dedicated. `Mail.Send` restricts who the app can send **as**, not which addresses it can send **to**; apply an approved narrowly targeted mail-flow policy if that boundary also needs enforcement.
 
-That permission is tenant-level provider context, not mailbox-scoped access. It is **not needed by the Exchange worker**. Request it separately for a future collector; no Service Health collector is currently wired into the worker. It is not a substitute for a real mail-flow test.
+### Telemetry and model queries
 
-### Azure permissions: separate from mailbox permissions
+The worker exports measurements through its configured Application Insights destination. This is independent of the mailbox identity and does not require health-model ingestion or state-storage permissions.
 
-The stateless worker exports OTel results/metrics through workspace-based Application Insights to Log Analytics. It does not call the Health Report Ingestion API or use Blob state, so it needs neither model-ingestion permission nor Blob access.
+The health model's own query identity has workspace query access. Do not grant those Azure roles to the Exchange managed identity merely because both are part of the same proof of concept.
 
-Approve the telemetry destination, ingestion authentication, and retention separately. A future model-side query identity needs workspace query access; that is not a mailbox permission. Azure subscription Owner does not authorize mailbox creation or access, and the mailbox application does not need subscription-wide Contributor/Owner.
+## 3. Mock infrastructure and non-secret handoff IDs
 
-## 4. Can the runner and mailbox be in different tenants?
+The [mock Bicep](./exchange/infra/main.bicep) outputs:
 
-**Yes, as an architecture.** An application in the mailbox tenant can authenticate from a process hosted elsewhere, subject to both organizations' policies.
+- `identityResourceId`: the Azure resource attached to the Container App.
+- `clientId`: select this identity in the worker and use it as Exchange `-AppId`.
+- `principalId`: the identity's **enterprise service-principal object ID**, used as Exchange `-ObjectId`/role-assignment principal.
+- `tenantId`: must be the same approved Microsoft 365 tenant.
 
-```text
-Tenant A: Azure subscription
-  Runner
-    |-- Embedded OTel --> Application Insights / Log Analytics in A
-    |
-    `-- Mailbox application B --> Microsoft Graph --> test mailbox in tenant B
+The client ID, principal ID, and an application-registration object ID are different things. A managed identity already has a service principal; this setup does not need a separate app registration.
 
-Tenant B: Microsoft 365
-  Dedicated single-tenant application and service principal
-  Exchange application roles scoped to the dedicated test mailbox
+Both mock gates, `deployWorker` and `enableLiveProbe`, default to false. Compiling Bicep creates nothing. A future identity-only deployment can obtain stable IDs for administrator authorization before a worker is enabled.
+
+## 4. Illustrative Exchange administrator setup
+
+These are **reviewable examples, not commands that have been executed**. Supply approved values and review any preexisting scope/role assignments before applying. An Exchange administrator with Organization Management or suitable delegated application-role assignment rights performs these changes; the worker never runs Exchange administration cmdlets.
+
+Connect using the administrator's normal approved authentication, and verify the actual Exchange session tenant. A cached home-tenant session can differ from the selected Azure subscription.
+
+```powershell
+Connect-ExchangeOnline -UserPrincipalName "<approved-admin-in-the-mailbox-tenant>"
+
+$expectedTenantId = "<tenantId from the identity output>"
+$clientId = "<managed identity clientId>"
+$principalId = "<managed identity principalId>"
+$mailbox = "ahm-synthetic@<accepted-domain>"
+$controlMailbox = "<approved-existing-out-of-scope-mailbox>"
+$scopeName = "AHM-Exchange-Synthetic-Mailbox"
+
+if ((Get-ConnectionInformation | Select-Object -First 1).TenantID -ne $expectedTenantId) {
+    throw "Connected Exchange tenant does not match the approved tenant."
+}
+
+New-ServicePrincipal -AppId $clientId -ObjectId $principalId `
+    -DisplayName "AHM Exchange synthetic identity"
+
+New-ManagementScope -Name $scopeName `
+    -RecipientRestrictionFilter "PrimarySmtpAddress -eq '$mailbox'"
+
+New-ManagementRoleAssignment -Name "AHM-Synthetic-MailReadWrite" `
+    -App $principalId -Role "Application Mail.ReadWrite" `
+    -CustomResourceScope $scopeName
+
+New-ManagementRoleAssignment -Name "AHM-Synthetic-MailSend" `
+    -App $principalId -Role "Application Mail.Send" `
+    -CustomResourceScope $scopeName
+
+Test-ServicePrincipalAuthorization -Identity $principalId -Resource $mailbox
+Test-ServicePrincipalAuthorization -Identity $principalId -Resource $controlMailbox
 ```
 
-For the initial cross-tenant approach:
+The allowed test must show both roles in scope, and the control mailbox must be out of scope. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
 
-1. The Microsoft 365 team creates or approves a single-tenant application in **tenant B**.
-2. We generate and protect a certificate/private key for the runner. Only the **public certificate** is supplied for registration in tenant B; nobody should email private keys or tokens.
-3. Tenant B's administrator grants that application's service principal the scoped Exchange roles.
-4. The runner acquires a Graph token from **tenant B**, using B's tenant ID, application client ID, and approved certificate.
-5. Embedded OTel exports telemetry to the approved Application Insights/Log Analytics destination in tenant A, independently of the Graph application identity. No worker-side model or state-store access is needed.
+`Test-ServicePrincipalAuthorization` **does not include separately granted Entra permissions**, so a passing control test alone does not rule out an accidental tenant-wide Graph grant. Verify effective live Graph access/denial under administrator supervision before scheduling.
 
-This does not require moving the Azure subscription, migrating the mailbox, or enabling mailbox forwarding. Being a guest in tenant B does not automatically grant Exchange administration rights.
+Microsoft documents generic Entra service principals for Exchange application RBAC; a managed identity supplies that service-principal shape. The specific identity/tenant combination still requires the allowed/denied and live API acceptance checks above. Do not treat the local mock or a dry run as proof of live access.
 
-### Managed identity is not automatically cross-tenant
+Application permission changes can take roughly thirty minutes to two hours to propagate. The authorization test bypasses that cache. Revocation and incident procedures must account for propagation and existing tokens.
 
-A managed identity from tenant A cannot simply be assigned Exchange roles in tenant B and used as if it were B's local application identity. Microsoft documents that managed identities do not directly support cross-directory resource access.
+## 5. Runtime configuration
 
-For a future hosted cross-tenant deployment, use an explicitly approved authentication design for B's application, with protected certificate storage and rotation, or a separately validated workload-federation design. Do not assume federation is already configured or replace it with a long-lived client secret as a shortcut.
+The service config selects:
 
-### What this repository currently supports
+```json
+{
+  "graphAuthentication": "managed-identity"
+}
+```
 
-| Path | Current status |
-| --- | --- |
-| Local per-service `npm run probe` worker | Reads its [Exchange config](./probes/exchange/config.json), runs on its own cadence, or executes once with `--once`. Live execution requires approved targets, certificate credentials, and explicit live opt-in. Console mode exports nothing to Azure; Azure Monitor mode embeds OTel export in the same process. The Graph token targets the approved mailbox tenant independently of the Azure CLI subscription. Real cross-tenant operation has not been validated. |
-| Intended Azure Container Apps host | **Not implemented or deployed.** Local scheduling exists, but container hosting, hosted credential selection, and replica ownership must be established separately. |
-| Azure-hosted live runner in A, mailbox in B | **Not implemented.** It needs separately authorized mailbox-tenant credentials, secure loading/rotation, and end-to-end validation. |
-| Local telemetry export and downstream model evaluation | Export uses the configured workspace-based Application Insights destination, not a worker health-report client. Log Analytics/model queries and their authorization must be configured separately. No live end-to-end cross-tenant ingestion is established by local tests. |
+The Container App environment sets the identity's non-secret client ID:
 
-See [authentication selection](./runner/src/runtime.ts), the [config-driven worker](./runner/README.md), and the [Exchange handler](./probes/exchange/src/probe.ts). No cross-tenant hosting changes are part of this document.
+```text
+AZURE_CLIENT_ID=<user-assigned managed identity clientId>
+```
 
-## 5. Handoff and acceptance checks
+The worker uses `ManagedIdentityCredential({ clientId })` for `https://graph.microsoft.com/.default`. It does not fall back to a developer login, system identity, application secret, or certificate if managed identity fails.
 
-Ask the administrators to return:
+Live execution still requires dedicated target configuration, `mode: live`, `enabled: true`, and `ENABLE_LIVE_M365=true`. Start with a single manually initiated run after authorization checks. Simulation stays entirely local and acquires no managed-identity token.
 
-- Approved tenant ID/domain, mailbox SMTP address/object ID, and resource owners.
-- Application client ID, enterprise service-principal object ID, and the registered public-certificate thumbprint/expiry. Never request the private key or a mailbox password.
-- Exchange scope and role-assignment names, their exact mailbox membership, and confirmation that no unscoped equivalent Entra mail permissions remain.
-- Approved test cadence, runner location, mail-flow restrictions, retention requirements, and a cleanup/escalation contact.
-- Results of authorization checks for both the test mailbox and the agreed control mailbox.
+For an approved **local development** application, choose `graphAuthentication: certificate` explicitly and provide `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_CERTIFICATE_PATH`. A normal laptop does not expose the Container App managed-identity endpoint. The certificate option does not become a silent production fallback.
 
-Before the first send:
+The mock Bicep uses the managed-identity path and needs no mailbox certificate/secret. Optional Application Insights connection settings concern telemetry ingestion, not Exchange access.
 
-1. Verify the actual Exchange session tenant and administrator command access, not just the selected Azure subscription. A cached home-tenant sign-in can target a different organization.
-2. Run `Test-ServicePrincipalAuthorization` with the target resource specified: both roles must be in scope for the test mailbox and out of scope for the control mailbox.
-3. Review Entra application grants as well. That Exchange test command does **not** account for separately granted Entra permissions.
-4. Allow for propagation: Microsoft documents Exchange application-permission caching of roughly 30 minutes to two hours. The test command bypasses that cache; a passing result alone does not prove live Graph authorization is ready.
-5. Verify actual Graph access to the approved mailbox and denial for the known control mailbox. An approved Inbox-folder-metadata request is sufficient for the negative check; do not read messages, send, or delete there. A missing mailbox/404 is not proof of correctly scoped authorization.
-6. Configure the approved Exchange target and live mode, then run `npm run probe -- --config probes/exchange/config.json --once` after explicit live opt-in. Inspect results for delivery confirmation and cleanup. Authentication/permission failures mean the test could not execute, not that Exchange is down. One target is sufficient to report measurements; no worker-side sample/health policy is required, and it is not tenant-wide evidence.
+## 6. Journey and step boundaries
 
-Only after this works should we enable a schedule and Azure telemetry export. Analyze success rate, latency, and missing observations in Log Analytics; model-side query signals are a separate step. Monitor certificate expiry, cleanup failures, and stopped-worker evidence before relying on it operationally.
+The [Exchange service](./exchange/) owns its config, worker, journey, action functions, tests, and queries. Reusable HTTP, authentication, scheduling, and OTel utilities live in [utils/](./utils/).
 
-## 6. Copy-and-send request
+The journey is authenticate -> create draft -> send -> confirm Inbox delivery -> cleanup. Each executed step emits its own 1/0 success and duration. A blocked step is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 
-> **Subject: Request dedicated Exchange Online mailbox and scoped app access for synthetic testing**
+The health model has one Log Analytics entity displayed as **User Journey** below Exchange Experience. That entity lists separate KQL success/duration signals for the steps; the steps are not separate entities. Evaluation runs downstream, with no worker-published Healthy/Unhealthy states or mailbox inventory. One mailbox sending to itself is not employee-to-employee delivery, Outlook UI coverage, or tenant-wide availability.
+
+## 7. Not required by this Exchange test
+
+- A mailbox password, interactive sign-in to the shared mailbox, or a user's long-lived refresh token.
+- Runtime Global Administrator/Exchange Administrator privileges.
+- `Exchange.ManageAsApp`: that concerns Exchange administration, not this Graph mail journey.
+- Delegated human FullAccess/SendAs assignments.
+- Tenant-wide Graph mail grants, directory-wide read permissions, or Microsoft 365 Service Health access.
+- A Key Vault credential, Blob checkpoint, separate telemetry worker, or worker health policy.
+
+Teams Bot Connector authorization remains a separate implementation/installation concern. Do not assume changing Graph authentication makes the bot's send identity keyless automatically.
+
+Cross-tenant managed identity is not enabled by this same-tenant mock. A different tenant needs a separately reviewed federation/application authorization design; simply changing a tenant-ID setting on a managed identity does not move its identity into another directory.
+
+## 8. Copy-and-send request
+
+> **Subject: Dedicated Exchange test mailbox and scoped managed-identity authorization**
 >
-> We are building an Azure Monitor Health Models proof of concept and need one dedicated Exchange Online shared mailbox for a synthetic send-to-self/delivery/cleanup test.
+> Please provide one dedicated synthetic mailbox and confirm the same Entra tenant as our Azure Container App identity.
 >
-> Please help us:
+> We will supply the user-assigned managed identity's client ID and enterprise service-principal object ID from the Azure setup. Please register its reference in Exchange and assign only `Application Mail.ReadWrite` and `Application Mail.Send`, using Exchange RBAC for Applications scoped to that mailbox.
 >
-> 1. Confirm the Microsoft 365 tenant and create a dedicated shared mailbox in an approved accepted SMTP domain, with a named owner and confirmed licensing.
-> 2. Create or approve a dedicated application identity in that tenant. We can supply a public certificate; we do not need a mailbox password or human administrator access.
-> 3. Register its service principal in Exchange and grant only `Application Mail.ReadWrite` and `Application Mail.Send`, scoped through Exchange RBAC for Applications to that mailbox alone. Please do not add equivalent tenant-wide Entra mail permissions.
-> 4. Verify allowed access to the test mailbox and denied access to an agreed control mailbox, including a review for any broader existing permissions.
-> 5. Approve the runner location, initially one manual run, and a possible later schedule of one message every minute per probe. We will confirm the target count and total volume before enabling it. The runner might be hosted in a different Azure tenant; please confirm that use is permitted. Cross-tenant Azure hosting still needs implementation and validation on our side.
-> 6. Agree on send-to-self restrictions, retention, cleanup of late/interrupted test messages, credential rotation, and a shutdown/revocation owner.
+> Please do not add equivalent unscoped Entra Graph mail grants. We need allowed/denied authorization checks, a review of effective grants, and one live Graph validation before scheduling.
 >
-> Please return the mailbox and tenant identifiers, application client and enterprise service-principal IDs, certificate thumbprint/expiry, scope/assignment names, authorization-check results, and any policy constraints. Do not send private keys, passwords, or tokens.
+> The test creates a draft, sends to itself, confirms delivery, and deletes its own test copies. Please approve volume (up to one message/minute/target), mailbox licensing, recipient restrictions, retention, an out-of-scope control mailbox, and named ownership/escalation.
 >
-> We are not requesting real-user mailbox access, tenant-wide mail permissions, or Global Administrator rights. Optional Microsoft 365 Service Health access will be a separate request for `ServiceHealth.Read.All`.
+> We do not need a mailbox password, application secret/certificate for hosted Exchange authentication, or administrator privileges for the running worker. Please return approved tenant/mailbox IDs, identity/scope/assignment details, test results, and operating constraints.
 
-## 7. Cleanup and revocation
+## 9. Cleanup and revocation
 
-Agree on the shutdown procedure when requesting access:
+Stop the worker first. Revoke only its Exchange role assignments, verify loss of access after applicable caches/token lifetimes, and review owned artifacts under retention policy. Remove the Exchange service-principal reference, scope, Azure identity, and Container App only when no other approved consumer depends on them.
 
-1. Stop the local runner or scheduled Function and confirm it is no longer sending.
-2. Revoke only the synthetic application's Exchange role assignments and credentials, following the tenant's revocation procedure. Account for permission/token caching when verifying loss of access.
-3. Have the mailbox owner review remaining correlated test messages, including late arrivals. Normal deletion can leave messages in Deleted Items or retained under policy; do not purge or change retention automatically.
-4. Remove the dedicated Exchange service-principal reference and scope only when no other assignments depend on them. Remove the dedicated Entra application/credentials when no other approved consumer uses them.
-5. Delete the test mailbox only with owner and retention approval. Remove private-key material from its approved storage after decommissioning.
-6. Separately remove only the Azure resources and role assignments created for the proof of concept. Never delete a shared subscription or unrelated resource group.
+Never purge a whole mailbox/library, alter retention automatically, or delete unrelated resources in a shared subscription/resource group.
 
 ## Microsoft references
 
-- [Exchange Online RBAC for Applications: roles, scoping, additive permissions, and caching](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
-- [Test-ServicePrincipalAuthorization](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/test-serviceprincipalauthorization)
-- [Shared mailbox prerequisites and licensing](https://learn.microsoft.com/en-us/microsoft-365/admin/email/about-shared-mailboxes)
-- [Application authentication with client credentials and certificates](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow)
-- [Managed identity FAQ: cross-directory limitations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identities-faq#can-i-use-a-managed-identity-to-access-a-resource-in-a-different-directorytenant)
-- [Microsoft Graph Service Health API permissions](https://learn.microsoft.com/en-us/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0)
+- [Container Apps managed identities](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity)
+- [Exchange application RBAC, scopes, permission union, and authorization testing](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
+- [ManagedIdentityCredential](https://learn.microsoft.com/en-us/javascript/api/@azure/identity/managedidentitycredential)
+- [Shared-mailbox prerequisites and licensing](https://learn.microsoft.com/en-us/microsoft-365/admin/email/about-shared-mailboxes)

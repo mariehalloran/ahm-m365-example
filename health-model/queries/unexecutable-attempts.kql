@@ -1,7 +1,0 @@
-let EvaluationTime = now();
-AppMetrics
-| where _ResourceId =~ "__APPLICATION_INSIGHTS_RESOURCE_ID__"
-| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)
-| where Name == "synthetic.probe.runs" and tostring(Properties["probe.mode"]) == "live"
-| where tostring(Properties["probe.service"]) in ("exchange", "sharepoint")
-| summarize Value = sumif(Sum, tostring(Properties["probe.outcome"]) == "unexecutable")

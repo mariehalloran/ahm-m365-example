@@ -1,9 +1,0 @@
-// Select a service; this returns one row even if it has never reported.
-AppMetrics
-| where TimeGenerated > ago(15m)
-| where Name == "synthetic.probe.runs"
-| where Sum > 0
-| where tostring(Properties["probe.mode"]) == "live"
-| where tostring(Properties["probe.service"]) == "exchange"
-| summarize LastSeen = max(TimeGenerated)
-| extend ReportingRecently = isnotnull(LastSeen) and LastSeen >= ago(3m)

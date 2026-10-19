@@ -1,0 +1,13 @@
+{
+  "type": "teams",
+  "enabled": true,
+  "intervalSeconds": 120,
+  "timeoutSeconds": 45,
+  "mode": "simulation",
+  "graphAuthentication": "managed-identity",
+  "cohort": "teams-global",
+  "telemetry": "console",
+  "targets": [
+    { "id": "teams-probe-001" }
+  ]
+}

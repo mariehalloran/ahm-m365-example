@@ -1,0 +1,13 @@
+{
+  "type": "exchange",
+  "enabled": false,
+  "intervalSeconds": 60,
+  "timeoutSeconds": 45,
+  "mode": "live",
+  "graphAuthentication": "managed-identity",
+  "cohort": "exchange-global",
+  "telemetry": "console",
+  "targets": [
+    { "id": "exchange-probe-001", "mailbox": "dedicated-synthetic@example.invalid" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "type": "exchange",
+  "enabled": true,
+  "intervalSeconds": 60,
+  "timeoutSeconds": 45,
+  "mode": "simulation",
+  "graphAuthentication": "managed-identity",
+  "cohort": "exchange-global",
+  "telemetry": "console",
+  "targets": [
+    { "id": "exchange-probe-001" }
+  ]
+}

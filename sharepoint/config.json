@@ -1,0 +1,13 @@
+{
+  "type": "sharepoint",
+  "enabled": true,
+  "intervalSeconds": 300,
+  "timeoutSeconds": 45,
+  "mode": "simulation",
+  "graphAuthentication": "managed-identity",
+  "cohort": "sharepoint-global",
+  "telemetry": "console",
+  "targets": [
+    { "id": "sharepoint-probe-001" }
+  ]
+}

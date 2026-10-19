@@ -1,0 +1,10 @@
+let EvaluationTime = now();
+AppMetrics
+| where _ResourceId =~ "__APPLICATION_INSIGHTS_RESOURCE_ID__"
+| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)
+| where Name == "synthetic.probe.success"
+| where tostring(Properties["probe.mode"]) == "live" and tostring(Properties["probe.service"]) == "sharepoint"
+| where tostring(Properties["probe.journey"]) == "save-reopen-file"
+| summarize Successful = sum(Sum), Attempts = sum(ItemCount)
+| where Attempts > 0
+| project Value = 100.0 * Successful / Attempts
