@@ -1,0 +1,7 @@
+AppMetrics
+| where TimeGenerated > ago(15m)
+| where Name in ("synthetic.probe.duration", "mailflow.delivery.duration")
+| where tostring(Properties["probe.mode"]) == "live"
+| summarize DurationSum = sum(Sum), Measurements = sum(ItemCount)
+    by _ResourceId, Service = tostring(Properties["probe.service"]), Metric = Name
+| extend MeanSeconds = iff(Measurements > 0, DurationSum / Measurements, real(null))

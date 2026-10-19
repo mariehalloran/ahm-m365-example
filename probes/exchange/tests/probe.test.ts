@@ -4,7 +4,6 @@ import { loadConfig } from "../../../runner/src/config.js";
 import { resultSchema, type Probe } from "../../../shared/src/contracts.js";
 import { GraphClient } from "../../../shared/src/graph.js";
 import { AuthenticatedHttp } from "../../../shared/src/http.js";
-import { individualState } from "../../../health-model/src/policy.js";
 import { exchangeProbe } from "../src/probe.js";
 
 const credential: TokenCredential = { getToken: async () => ({ token: "test-token", expiresOnTimestamp: Date.now() + 100000 }) };
@@ -60,13 +59,14 @@ describe("Exchange send/poll/cleanup", () => {
     expect(JSON.stringify(result)).not.toContain(sentSubject);
   });
   it("measures slow delivery", async () => {
-    const { result, time } = await exchangeRun({ deliveryAfter: 10 });
+    const { result } = await exchangeRun({ deliveryAfter: 10 });
     expect(result.durationMs).toBe(18000);
-    expect(individualState(result, config, time)).toBe("Degraded");
+    expect(result.deliveryDurationMs).toBe(18000);
   });
   it("times out delivery and still attempts bounded cleanup", async () => {
     const { result, calls } = await exchangeRun({ deliveryAfter: 100 });
-    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout", durationMs: 60000 });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout", durationMs: 120000 });
+    expect(result.deliveryDurationMs).toBeUndefined();
     expect(calls.some(call => call.method === "DELETE")).toBe(true);
   });
   it.each([
@@ -81,5 +81,45 @@ describe("Exchange send/poll/cleanup", () => {
     const { result, calls } = await exchangeRun({ authFail: true });
     expect(result.diagnosticCategory).toBe("authentication-failure");
     expect(calls).toEqual([]);
+  });
+  it.each([false, true])("excludes authentication/draft/cleanup from delivery, includes cleanup in total (cleanup failure=%s)", async cleanupFails => {
+    let clock = 1000;
+    const graph = {
+      authenticate: vi.fn(async () => { clock += 100; }),
+      json: vi.fn(async (path: string) => {
+        if (path.endsWith("/messages")) { clock += 200; return { id: "draft" }; }
+        if (path.includes("/inbox/")) { clock += 400; return { value: [{ id: "received" }] }; }
+        clock += 500;
+        return { value: [{ id: "sent" }] };
+      }),
+      request: vi.fn(async (path: string) => {
+        if (path.endsWith("/send")) clock += 300;
+        else {
+          clock += 50;
+          if (cleanupFails) throw new Error("private cleanup error");
+        }
+        return new Response(null, { status: 204 });
+      }),
+    } as unknown as GraphClient;
+    const result = await exchangeProbe(exchange, { config, graph, telemetry, signal: new AbortController().signal, now: () => clock });
+    expect(resultSchema.safeParse(result).success).toBe(true);
+    expect(result.deliveryDurationMs).toBe(700);
+    expect(result.diagnosticContext.authenticationDurationMs).toBe(100);
+    expect(result.durationMs).toBe(cleanupFails ? 1550 : 1650);
+    expect(result.observedAt).toBe(new Date(clock).toISOString());
+    expect(result.success).toBe(!cleanupFails);
+    expect(result.diagnosticCategory).toBe(cleanupFails ? "cleanup-failure" : null);
+  });
+  it("measures authentication failure without claiming delivery or mutating a mailbox", async () => {
+    let clock = 1000;
+    const graph = {
+      authenticate: vi.fn(async () => { clock += 200; throw new Error("private auth error"); }),
+      request: vi.fn(), json: vi.fn(),
+    } as unknown as GraphClient;
+    const result = await exchangeProbe(exchange, { config, graph, telemetry, signal: new AbortController().signal, now: () => clock });
+    expect(result.durationMs).toBe(200);
+    expect(result.deliveryDurationMs).toBeUndefined();
+    expect(graph.request).not.toHaveBeenCalled();
+    expect(graph.json).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,7 @@
     "sourceMap": true
   },
   "include": [
-    "health-model/src/**/*.ts", "health-model/tests/**/*.ts",
+    "telemetry/src/**/*.ts", "telemetry/tests/**/*.ts",
     "probes/*/src/**/*.ts", "probes/*/tests/**/*.ts", "probes/src/**/*.ts",
     "runner/src/**/*.ts", "runner/tests/**/*.ts",
     "shared/src/**/*.ts", "shared/tests/**/*.ts",

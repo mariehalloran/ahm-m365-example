@@ -1,13 +1,12 @@
-import { ClientCertificateCredential, DefaultAzureCredential } from "@azure/identity";
+import { ClientCertificateCredential } from "@azure/identity";
 import { z } from "zod";
-import { AhmSink, RecordingSink } from "../../health-model/src/ahm.js";
 import { ConfigurationError, type Config } from "./config.js";
 import type { Telemetry } from "../../shared/src/contracts.js";
 import { GraphClient } from "../../shared/src/graph.js";
 import { AuthenticatedHttp } from "../../shared/src/http.js";
-import { BlobStateStore, FileStateStore } from "./state.js";
 import type { RunnerDependencies } from "./runner.js";
-import { serviceStateLocation, type ServiceConfig } from "./service-config.js";
+import type { ServiceConfig } from "./service-config.js";
+import { createProbeTelemetry } from "../../telemetry/src/azure-monitor.js";
 
 export function createLiveGraphClient(env: NodeJS.ProcessEnv = process.env): GraphClient {
   const parsed = z.object({
@@ -24,24 +23,16 @@ export function createLiveGraphClient(env: NodeJS.ProcessEnv = process.env): Gra
   return new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default"));
 }
 
-export function serviceRuntime(service: ServiceConfig, config: Config, telemetry: Telemetry, env: NodeJS.ProcessEnv = process.env): RunnerDependencies {
+export async function serviceRuntime(service: ServiceConfig, config: Config, telemetry: Telemetry, env: NodeJS.ProcessEnv = process.env): Promise<RunnerDependencies> {
   if (!service.enabled || service.type === "teams") throw new ConfigurationError("Service runtime requires an enabled, implemented probe type");
-  const location = serviceStateLocation(service, config);
-  if (service.reportToHealthModel && !config.AHM_MODEL_ID) {
-    throw new ConfigurationError("Service reporting requires AHM_MODEL_ID");
+  const results = await createProbeTelemetry(service.telemetry, telemetry, env);
+  try {
+    return {
+      telemetry, results,
+      ...(config.EXECUTION_MODE === "live" ? { graph: createLiveGraphClient(env) } : {}),
+    };
+  } catch (error) {
+    await results.shutdown();
+    throw error;
   }
-  // Offline reporting never constructs Azure credentials, including when legacy storage env is present.
-  const credential = service.reportToHealthModel
-    ? new DefaultAzureCredential()
-    : undefined;
-  return {
-    telemetry,
-    sink: credential && config.AHM_MODEL_ID
-      ? new AhmSink(config.AHM_MODEL_ID, config.AHM_API_VERSION, new AuthenticatedHttp(credential, "https://management.azure.com/.default"))
-      : new RecordingSink(),
-    state: credential && config.STATE_STORAGE_URL
-      ? new BlobStateStore(config.STATE_STORAGE_URL, credential, location.blob)
-      : new FileStateStore(location.file),
-    ...(config.EXECUTION_MODE === "live" ? { graph: createLiveGraphClient(env) } : {}),
-  };
 }

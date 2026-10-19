@@ -1,139 +1,118 @@
-# Azure Monitor Health Models
+# Health model with simple metric queries
 
-This component owns health-report ingestion, cohort evaluation policy, and the deployable model topology. Probe implementations and runner hosting are separate components.
+The worker runs a journey and exports OTel measurements. This component connects a model to Log Analytics and evaluates **service-level aggregates**. There is no worker state, health-report client, or mailbox inventory in the metric queries.
 
-## Model-first scope
+## Deployed resources
 
-[The Bicep template](./infra/main.bicep) creates only:
+In the approved subscription, resource group `rg-m365-demo`, Central US:
 
-- One health model with a system-assigned identity.
-- Thirteen entities (including the service-created root) and eleven dependency relationships.
-- Explicit `WorstOf` dependency aggregation with `ignoreUnknown: false`.
+| Resource | Name / purpose |
+| --- | --- |
+| Azure Monitor Health Models | `m365-experience-poc`; thirteen entities and eleven relationships |
+| Log Analytics | `law-m365-experience-poc`; pay-as-you-go, thirty-day retention |
+| Workspace-based Application Insights | `appi-m365-experience-poc`; linked to that workspace, sampling at 100% |
+| Model authentication setting | `workspace-query`; the model's system-assigned managed identity |
+| Workspace authorization | Log Analytics Reader, scoped only to the workspace, for the model identity |
 
-It does **not** deploy Azure Container Apps, a registry, storage, a telemetry workspace, mailboxes, or Microsoft 365 permissions. The model identity receives no additional role assignments. Azure Container Apps is the intended runner host, not an already deployed service.
+No Container Apps, registry, mailbox, or Microsoft 365 permissions are deployed by this template. Application Insights has a separate daily cap from the workspace; review it before production.
+
+## Data path
 
 ```text
-Model root: Microsoft 365 Synthetic Health Model (PoC)
-|
-`-- Microsoft 365 and Azure Experience
-    |
-    +-- Azure Resource Health                     [not connected]
-    +-- Exchange Experience
-    |   +-- Exchange Mail-flow Cohort              [not connected]
-    +-- Teams Experience
-    |   +-- Teams Cohort                          [not implemented]
-    +-- SharePoint Experience
-    |   +-- SharePoint File Cohort                [not connected]
-    +-- Monitoring Pipeline
-        +-- Runner Heartbeat                      [runner not deployed]
-        +-- Graph Query Availability              [not connected]
-
-Microsoft 365 Service Health                      [separate supporting context]
+Exchange / SharePoint service process
+  -> embedded OTel counter and duration measurements
+  -> Application Insights
+  -> Log Analytics AppMetrics
+  -> health-model query signal
 ```
 
-Provider context has no dependency edge to the experience root and has suppressed impact. A provider incident is context, not proof that a mailbox journey failed.
+All default signals select **live** metrics from the exact Application Insights resource. Simulation is excluded, and no fake live measurements were ingested for deployment validation.
 
-Azure automatically creates an undeletable root entity named after the model. The template explicitly manages its dependency settings and connects the experience subtree to it so the model's actual root participates in rollup.
+## Query rules
 
-Unconnected entities must not be presented as measured Healthy. The deployment's empty entities and explicit Unknown propagation are the starting point; manually submitted states are validation data, not synthetic evidence.
+The default metric dimensions are only service, execution mode, and outcome. Adding a mailbox to the worker's target list does not require adding it to a health-model query.
 
-## Deploy into an existing resource group
+| Signal | Calculation | Missing data |
+| --- | --- | --- |
+| Success percentage | `100 * sum(successful attempts) / sum(all attempts)` from the delta run counter | No value / Unknown |
+| Mean latency | `sum(duration) / sum(measurement count)`, converted to milliseconds | No value / Unknown |
+| Missing service observations | Check whether Exchange and SharePoint have recent run metrics | Monitoring-pipeline problem, not proof Microsoft 365 is down |
+| Unexecutable attempts, when configured | Aggregate run-counter outcomes for monitor/authentication failures | Distinguishable from journey failure |
 
-Use an approved Azure subscription and a region supporting `Microsoft.CloudHealth`. The selected provider must already be registered; this template does not register providers or request permissions.
+Exchange latency uses its confirmed-delivery metric; SharePoint latency uses total attempt duration through cleanup. These are **weighted averages, not p95**. The simple aggregate table cannot reconstruct true percentiles from means.
+
+Demonstration thresholds are below 99% success for Degraded and below 95% for Unhealthy; latency above 15 seconds is Degraded and above 60 seconds is Unhealthy. They are not enterprise SLOs. Exchange uses a shorter lookback than the five-minute SharePoint cadence permits; inspect the [versioned query files](./queries/) and [Bicep](./infra/main.bicep) for the deployed parameters.
+
+No query lists mailbox addresses, probe IDs, or per-mailbox expected targets. Opaque IDs in diagnostic logs are not required for aggregate evaluation. Service-level freshness does not identify an individual missing mailbox while another target continues reporting.
+
+## Topology
+
+```text
+Model root
+`-- Microsoft 365 and Azure Experience
+    +-- Azure Resource Health                  [not connected]
+    +-- Exchange Experience
+    |   `-- Exchange aggregate measurements
+    +-- Teams Experience
+    |   `-- Teams                             [not implemented]
+    +-- SharePoint Experience
+    |   `-- SharePoint aggregate measurements
+    `-- Monitoring Pipeline
+        +-- Missing service observations
+        `-- Graph availability                [not connected]
+
+Microsoft 365 Service Health                  [separate provider context]
+```
+
+The service-created model root is explicitly connected. Dependency aggregation uses `WorstOf` with `ignoreUnknown: false`. Provider context remains isolated and suppressed rather than overriding actual journey evidence.
+
+No live worker currently supplies measurements. Journey health should remain Unknown, while missing-service monitoring can be Unhealthy. That is an honest description of an unconnected monitoring system, not a Microsoft 365 incident.
+
+## Reapply the deployment
+
+Use the confirmed subscription explicitly; do not rely on a shared machine's active CLI subscription:
 
 ```sh
 SUBSCRIPTION_ID='<approved-subscription-id>'
-RESOURCE_GROUP='rg-m365-demo'
-MODEL_NAME='m365-experience-poc'
-
-az deployment group validate \
-  --subscription "$SUBSCRIPTION_ID" \
-  --resource-group "$RESOURCE_GROUP" \
-  --template-file health-model/infra/main.bicep \
-  --parameters modelName="$MODEL_NAME" location=centralus
 
 az deployment group what-if \
   --subscription "$SUBSCRIPTION_ID" \
-  --resource-group "$RESOURCE_GROUP" \
-  --template-file health-model/infra/main.bicep \
-  --parameters modelName="$MODEL_NAME" location=centralus
+  --resource-group rg-m365-demo \
+  --template-file health-model/infra/main.bicep
 
 az deployment group create \
   --subscription "$SUBSCRIPTION_ID" \
-  --resource-group "$RESOURCE_GROUP" \
+  --resource-group rg-m365-demo \
   --name m365-model-foundation \
-  --template-file health-model/infra/main.bicep \
-  --parameters modelName="$MODEL_NAME" location=centralus
+  --template-file health-model/infra/main.bicep
 ```
 
-Deployment is incremental. Review the preview before applying; do not use complete-mode deployment against a shared resource group.
+Review the preview first. Deployment is incremental; do not use complete mode against a shared resource group. The template pins the verified Health Models API `2026-05-01-preview`.
 
-The template pins `2026-05-01-preview`, a documented version advertised by the selected subscription, to keep topology and ingestion reproducible. Newer advertised API versions require a schema and behavior check before changing the pin.
+## Verify, then connect a worker
 
-## Verify actual model behavior
+1. Read back the workspace/Application Insights linkage, model query authentication, workspace-scoped role, and entity signals.
+2. Run the numeric queries in the real workspace, including no-data and known aggregate fixtures. A successful ARM deployment alone does not prove managed-identity evaluation works.
+3. Verify the model reports no-row journey queries as Unknown and absent service observations as a monitoring problem.
+4. Supply the Application Insights connection string securely and set a worker's `telemetry` to `azure-monitor`. Keep checked-in examples console-only.
+5. After approved live resources exist, run once, inspect ingested `AppMetrics`, and confirm model refresh. Do not fake live samples merely to make the graph green.
 
-Use the deployment's `modelId` and `apiVersion` outputs:
+The original model foundation was manually tested with external health reports on 2026-10-19, including a one-minute report expiration. That historical test is not the current ingestion path. Current workers never call that API.
 
-```sh
-export AHM_MODEL_ID='<modelId-output>'
-export AHM_API_VERSION='2026-05-01-preview'
+Live end-to-end probe ingestion is still a separate acceptance step. Query calculations and model evaluation must not be presented as proof of actual Exchange/SharePoint journeys until those tests run.
 
-az rest --method GET \
-  --url "https://management.azure.com${AHM_MODEL_ID}/entities?api-version=${AHM_API_VERSION}" \
-  --query 'value[].{entity:name,state:properties.healthState}' --output table
-```
+## Notifications and enterprise operation
 
-Check that all thirteen entities and eleven relationships exist, and that missing evidence remains Unknown. For explicit ingestion testing with workers stopped, submit a clearly marked validation report:
+A query signal is not notification delivery. Action groups/receivers, independent reporting-gap alerts, and end-to-end notification tests still need configuration.
 
-```sh
-az rest --method POST --subscription "$SUBSCRIPTION_ID" \
-  --url "https://management.azure.com${AHM_MODEL_ID}/entities/exchange-global/ingestHealthReport?api-version=${AHM_API_VERSION}" \
-  --body '{"signalName":"synthetic-health","healthState":"Unknown","expiresInMinutes":3,"additionalContext":"Manual model validation only; no probe executed."}'
-```
+See [enterprise reliability requirements](../docs/operations.md#enterprise-reliability-acceptance-gate). Keep an out-of-band escalation route and do not rely only on Exchange/Teams notifications for Microsoft 365 monitoring.
 
-This really writes a report; it does not run a mailbox synthetic. To test transitions, change `healthState` to Healthy, Degraded, Unhealthy, and finally Unknown, reading the leaf and its parent after recalculation each time. Do not infer successful evaluation from an HTTP success response alone.
+Workspace ingestion, retention, model evaluation, and alerting have pricing/limits. Model creation does not imply zero cost. Stop producers before cleanup, revoke only dedicated roles, and delete only owner-approved resources.
 
-Return validation signals to Unknown when finished. Other unconnected branches can keep the overall root Unknown, so inspect the tested branch as well as the root.
+## Further reading
 
-**Report expiration is not a freshness guarantee.** The ingestion API removes expired external signals and recalculates entity health. Verify that an expired or stopped runner cannot be masked by other healthy evidence before accepting an operational deployment.
-
-### Verified foundation deployment
-
-On 2026-10-19, `m365-experience-poc` was deployed to `rg-m365-demo` in Central US and verified against the real Azure API:
-
-- ARM validation, change preview, and incremental deployment succeeded.
-- All thirteen entities and eleven relationships were read back, including the connection to the service-created model root.
-- Every entity initially reported Unknown, and provider context remained isolated from experience rollup.
-- Explicit Healthy, Degraded, Unhealthy, and Unknown reports were each read back on `exchange-global` and propagated to `exchange-experience`.
-- A manual Healthy heartbeat with a one-minute TTL expired to Unknown, with its external signal removed, after approximately 62 seconds.
-- Validation reports were returned to Unknown. No real probe was executed.
-
-This verifies the deployed foundation, not a production freshness guarantee under future additional signals. Only the health model is deployed: no runner, telemetry workspace, mailbox, or Microsoft 365 permission grant was created.
-
-## Working backwards toward probes
-
-Keep the evidence paths separate:
-
-1. Each Exchange, Teams, or document probe returns a versioned structured result.
-2. The runner retains per-run diagnostics without message bodies, raw mailbox addresses, or secrets.
-3. The proposed OpenTelemetry path exports low-cardinality outcome counters and duration histograms. Correlation IDs belong in events/traces, not metric dimensions.
-4. Health evaluation produces explicit Healthy, Degraded, Unhealthy, or Unknown reports for the matching model entity.
-
-OpenTelemetry export is **not** direct health-model ingestion. A future metrics/query-based evaluation path needs its own supported Azure Monitor data source and signal configuration. No OpenTelemetry SDK, collector, or metric signal is provisioned by this template.
-
-The [config-driven worker](../runner/README.md) runs one service per config/process, with its own cadence and non-overlapping local scheduling. Container hosting, replica/per-mailbox ownership, bounded child processes, and stopped-runner detection still need implementation and operational validation before deployment. Do not assume a one-minute interval provides distributed ownership or end-to-end monitoring.
-
-See the root [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) before connecting Exchange. A different mailbox tenant requires its own approved application identity and an explicit hosted cross-tenant authentication implementation.
-
-## Cost and cleanup boundaries
-
-No continuously running compute or telemetry-ingestion resources are created here. Do not interpret that as a guarantee that Azure Monitor Health Models has no charges; confirm current preview terms, subscription pricing, and organizational approval.
-
-To decommission, stop any connected producers first, then delete only this health model after owner approval. Do not delete the shared resource group or unrelated resources. Mailboxes, tenant applications, and future runner resources have separate lifecycles.
-
-## References
-
-- [Versioned health-model resource definition](https://learn.microsoft.com/en-us/azure/templates/microsoft.cloudhealth/2026-05-01-preview/healthmodels)
-- [Entity and dependency aggregation schema](https://learn.microsoft.com/en-us/azure/templates/microsoft.cloudhealth/2026-05-01-preview/healthmodels/entities)
-- [Relationship resource definition](https://learn.microsoft.com/en-us/azure/templates/microsoft.cloudhealth/2026-05-01-preview/healthmodels/relationships)
-- [External health-report ingestion and expiration](https://learn.microsoft.com/en-us/azure/azure-monitor/health-models/health-report-ingestion)
+- [Simple measurements and KQL examples](../telemetry/README.md)
+- [Stateless worker configuration](../runner/README.md)
+- [Mailbox authorization request](../MAILBOX-SYNTHETIC-ACCESS.md)
+- [Microsoft query-signal guidance](https://learn.microsoft.com/en-us/azure/azure-monitor/health-models/signals)
+- [Entity/query schema](https://learn.microsoft.com/en-us/azure/templates/microsoft.cloudhealth/2026-05-01-preview/healthmodels/entities)

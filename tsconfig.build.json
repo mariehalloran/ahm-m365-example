@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "include": [
-    "health-model/src/**/*.ts",
+    "telemetry/src/**/*.ts",
     "probes/*/src/**/*.ts",
     "probes/src/**/*.ts",
     "runner/src/**/*.ts",

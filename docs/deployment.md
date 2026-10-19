@@ -1,67 +1,65 @@
-# Deploy the model, then connect workers
+# Model, telemetry, then Container Apps
 
-The sample model `m365-experience-poc` is deployed in `rg-m365-demo`, Central US. The authoritative template, commands, topology, and real Azure verification are in the [health-model guide](../health-model/README.md).
+## Current deployment
 
-This deployment contains only the model, thirteen entities, and eleven relationships. It does not create a Container App, registry, telemetry workspace, storage account, mailbox, or Microsoft 365 permission grant.
+The sample model `m365-experience-poc` is deployed in `rg-m365-demo`, Central US, with workspace `law-m365-experience-poc`, linked Application Insights `appi-m365-experience-poc`, and workspace-scoped query access for the model's identity. The model preserves thirteen entities and eleven relationships. See the [model template and validation](../health-model/README.md).
 
-## Verify the existing model
+No worker, registry, mailbox, or Microsoft 365 permission grant is deployed. The model evaluates live-only queries; workers do not push health states.
 
-Use the intended subscription explicitly; do not assume a shared machine's active Azure subscription has not changed.
-
-```sh
-SUBSCRIPTION_ID='<approved-subscription-id>'
-az deployment group show \
-  --subscription "$SUBSCRIPTION_ID" \
-  --resource-group rg-m365-demo \
-  --name m365-model-foundation \
-  --query '{state:properties.provisioningState,modelId:properties.outputs.modelId.value}'
-```
-
-Reapply the Bicep template only after reviewing its `what-if` output, using the same model name/resource group. Do not create a duplicate model merely because the active CLI subscription changed.
-
-## Run a worker locally
+## Local test
 
 ```sh
 npm run probe -- --config probes/exchange/config.json --once
 npm run probe -- --config probes/sharepoint/config.json --once
 ```
 
-The checked-in configs simulate outcomes and disable Azure reporting. Each service has its own config and cadence; Teams remains disabled because it has no handler. See the [worker guide](../runner/README.md).
+The checked-in configs use simulation and console telemetry. They perform no real mail/file operations, Azure exports, or checkpoint writes.
 
-## Connect reports deliberately
+## Connect telemetry
 
-1. Approve a model for simulation or live evidence; do not mix those modes in one model.
-2. Ensure the exact config `cohort` exists as a model entity.
-3. Set `reportToHealthModel: true` in the approved config.
-4. Supply `AHM_MODEL_ID` and the submitting identity's model-scoped access. The validated API version is `2026-05-01-preview`.
-5. Use one `--once` run and read back the cohort before scheduling.
+1. Use the approved deployed workspace and linked Application Insights resource.
+2. Set a service config's `telemetry` to `azure-monitor`.
+3. Provide `APPLICATIONINSIGHTS_CONNECTION_STRING` securely.
+4. Run once and verify both `AppMetrics` and individual `AppTraces` records in the linked workspace.
+5. Validate [success-rate, mean-duration, and service last-seen queries](../telemetry/README.md), including all-failure, all-unexecutable, and no-data cases. No mailbox/probe list is needed.
 
-Reporting is a real Azure write even when the probe mode is simulation. Live execution also needs the workload's approved test resources and narrowly scoped permissions.
+No Blob storage or health-model ingestion role is needed. The exporter sends from the **same process that runs the tests**. It is shared code, not a separate service.
 
-| Current handler | Default entity / signal |
-| --- | --- |
-| Exchange | `exchange-global` / `synthetic-health` |
-| SharePoint | `sharepoint-global` / `synthetic-health` |
+Changing the telemetry destination does not enable real probes; `mode: live` additionally requires dedicated approved resources, credentials, and explicit live opt-in.
 
-Provider context, Graph availability, global runner heartbeat, and Teams remain model placeholders, not active producers. Their Unknown state must not be hidden or manually marked Healthy to make the graph green.
+## Container Apps deployment boundary
 
-## Azure Container Apps: next hosting step, not deployed
+Use one independently configured Container App per service:
 
-Use the same application code with separate configs for separate workers. Build with `npm run build`; production startup is `npm start -- --config <service-config.json>`.
+```text
+Exchange Container App:   one process = test + embedded OTel, every 60 seconds
+SharePoint Container App: one process = test + embedded OTel, every 300 seconds
+Teams Container App:      do not deploy until its probe exists
+```
 
-Before hosting, implement container packaging, approved Graph identity selection, protected credential storage/rotation, durable isolated state, telemetry retention, and stopped-worker monitoring. Keep one authoritative replica per config/cohort until distributed ownership is implemented. ETags do not prevent duplicate sends.
+The same image can run each config. No separate OTel worker, sidecar, Collector, or AKS cluster is required. Build with `npm run build`; startup is `npm start -- --config <service-config.json>`.
 
-OTel export and child-probe execution remain future work. Current workers execute their handlers in-process and retain structured results; evaluated health reports use the Health Report Ingestion API, not OTel.
+For an always-running background loop, hosting must keep an instance running and provide CPU while idle/non-HTTP work executes; do not assume scale-to-zero/request-driven defaults keep a timer loop alive. Validate the chosen Container Apps billing/scaling configuration before deployment.
 
-## Acceptance checks
+Packaging, protected Graph credential loading, replica ownership, and ACA infrastructure remain separate work. Keep one authoritative replica per target set; process restarts/revisions can cause repeated attempts. Test graceful shutdown, credential rotation, export failure, and downstream missing-data monitoring. No checkpoint volume is needed.
 
-- Model/entity/relationship reads match the template and absent evidence stays Unknown.
-- Healthy, Degraded, Unhealthy, and Unknown reports are read back with expected parent propagation.
-- Each worker follows its own cadence, skips overruns, and cleans up on cancellation.
-- Failed reporting/history writes cannot claim successful execution.
-- Live handlers affect only approved resources and clean up only their own artifacts.
-- Stopping a worker does not leave stale evidence falsely Healthy.
+## Model queries
 
-The existing model's one-minute heartbeat-expiration test returned Unknown after approximately 62 seconds. That is not a blanket guarantee: expired external signals are removed and health is recalculated, so other signals or rollup can mask missing evidence. Revalidate the final connected model before operational use.
+The model's managed identity has Log Analytics Reader only on the new workspace. Simple `AppMetrics` queries aggregate attempts/successes and weighted mean durations by service, plus a service reporting-gap check. No per-probe inventory, log join, or worker state is required.
 
-Azure Monitor Health Models is a preview service. Confirm current pricing and organizational approval; no compute deployment does not imply a guaranteed zero-cost service. For cleanup, stop producers first and remove only approved dedicated resources, never a shared resource group.
+Journey queries with no measurements return no value, not fabricated 100% success or zero latency. The separate monitoring signal indicates absent service metrics. Teams, Azure resource context, and provider collection remain unconnected. Notifications still require an approved action group/recipient.
+
+## Acceptance and cleanup
+
+- Exactly identified attempts and correct seconds/milliseconds are visible in the workspace.
+- Outcome counters and weighted mean durations match known fixtures.
+- Weighted means and service reporting-gap detection behave correctly; empty results never imply 100% success.
+- Simulation is separated from live measurements.
+- Each service follows its own cadence and cleans up on cancellation.
+- Export failures are explicit; no filesystem/Blob outbox or hidden state exists.
+
+For a large-company default, also satisfy the [enterprise reliability gate](./operations.md#enterprise-reliability-acceptance-gate): independent missing-result detection, platform/query/alert-path monitoring, an approved notification route not dependent only on Microsoft 365, and measured failure-injection tests. A single cheap replica is a proof of concept, not a production availability commitment.
+
+Workspace ingestion/retention and always-running compute incur costs; agree on budgets and retention. Azure Monitor Health Models is a preview service, so confirm applicable terms.
+
+Stop producers first when decommissioning. Revoke only approved permissions, review retained artifacts, and delete only dedicated resources with owner approval. Never delete a shared resource group or unrelated workspace.

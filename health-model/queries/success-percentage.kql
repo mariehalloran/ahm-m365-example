@@ -1,0 +1,12 @@
+let EvaluationTime = now();
+AppMetrics
+| where _ResourceId =~ "__APPLICATION_INSIGHTS_RESOURCE_ID__"
+| where TimeGenerated between (EvaluationTime - __LOOKBACK__ .. EvaluationTime)
+| where Name == "synthetic.probe.runs"
+| where tostring(Properties["probe.mode"]) == "live" and tostring(Properties["probe.service"]) == "__SERVICE__"
+| summarize Total = sum(Sum),
+            Successful = sumif(Sum, tostring(Properties["probe.outcome"]) == "success"),
+            Failed = sumif(Sum, tostring(Properties["probe.outcome"]) == "failure"),
+            Unexecutable = sumif(Sum, tostring(Properties["probe.outcome"]) == "unexecutable")
+| where Total > 0
+| project Value = 100.0 * Successful / Total, Total, Successful, Failed, Unexecutable

@@ -5,10 +5,8 @@
   "timeoutSeconds": 45,
   "mode": "simulation",
   "cohort": "sharepoint-global",
-  "reportToHealthModel": false,
+  "telemetry": "console",
   "targets": [
-    { "id": "sharepoint-probe-001" },
-    { "id": "sharepoint-probe-002" },
-    { "id": "sharepoint-probe-003" }
+    { "id": "sharepoint-probe-001" }
   ]
 }

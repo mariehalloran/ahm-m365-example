@@ -1,0 +1,1873 @@
+{
+  "changes": [
+    {
+      "after": {
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/microsoft.alertsmanagement/smartDetectorAlertRules/Failure Anomalies - appi-m365-experience-poc",
+        "location": "global",
+        "name": "Failure Anomalies - appi-m365-experience-poc",
+        "resourceGroup": "rg-m365-demo",
+        "type": "microsoft.alertsmanagement/smartDetectorAlertRules"
+      },
+      "before": {
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/microsoft.alertsmanagement/smartDetectorAlertRules/Failure Anomalies - appi-m365-experience-poc",
+        "location": "global",
+        "name": "Failure Anomalies - appi-m365-experience-poc",
+        "resourceGroup": "rg-m365-demo",
+        "type": "microsoft.alertsmanagement/smartDetectorAlertRules"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/microsoft.alertsmanagement/smartDetectorAlertRules/Failure Anomalies - appi-m365-experience-poc",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-poc",
+        "resourceGroup": "rg-m365-demo",
+        "tags": {
+          "deploymentStage": "live-telemetry-queries",
+          "intendedRunnerHost": "Azure Container Apps",
+          "purpose": "Microsoft 365 synthetic monitoring proof of concept"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-poc",
+        "resourceGroup": "rg-m365-demo",
+        "tags": {
+          "deploymentStage": "live-telemetry-queries",
+          "intendedRunnerHost": "Azure Container Apps",
+          "purpose": "Microsoft 365 synthetic monitoring proof of concept"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/authenticationsettings/workspace-query",
+        "name": "workspace-query",
+        "properties": {
+          "authenticationKind": "ManagedIdentity",
+          "displayName": "System-assigned model identity for live workspace queries",
+          "managedIdentityName": "SystemAssigned"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/authenticationsettings"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/authenticationsettings/workspace-query",
+        "name": "workspace-query",
+        "properties": {
+          "authenticationKind": "ManagedIdentity",
+          "displayName": "System-assigned model identity for live workspace queries",
+          "managedIdentityName": "SystemAssigned"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/authenticationsettings"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/authenticationsettings/workspace-query",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/azure-resources",
+        "name": "azure-resources",
+        "properties": {
+          "canvasPosition": {
+            "x": 0.0,
+            "y": 400.0
+          },
+          "displayName": "Azure Resource Health - not connected",
+          "impact": "Standard"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/azure-resources",
+        "name": "azure-resources",
+        "properties": {
+          "canvasPosition": {
+            "x": 0.0,
+            "y": 400.0
+          },
+          "displayName": "Azure Resource Health - not connected",
+          "healthState": "Unknown",
+          "impact": "Standard"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/azure-resources",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/exchange-experience",
+        "name": "exchange-experience",
+        "properties": {
+          "canvasPosition": {
+            "x": 300.0,
+            "y": 400.0
+          },
+          "displayName": "Exchange Experience",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/exchange-experience",
+        "name": "exchange-experience",
+        "properties": {
+          "canvasPosition": {
+            "x": 300.0,
+            "y": 400.0
+          },
+          "displayName": "Exchange Experience",
+          "healthState": "Unknown",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/exchange-experience",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/exchange-global",
+        "name": "exchange-global",
+        "properties": {
+          "canvasPosition": {
+            "x": 300.0,
+            "y": 620.0
+          },
+          "displayName": "Exchange Mail-flow - live service metrics",
+          "impact": "Standard",
+          "signalGroups": {
+            "azureLogAnalytics": {
+              "authenticationSetting": "workspace-query",
+              "logAnalyticsWorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+              "signals": [
+                {
+                  "displayName": "Live attempt success percentage (including unexecutable)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "LessThan",
+                      "threshold": 99.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "LessThan",
+                      "threshold": 95.0
+                    }
+                  },
+                  "name": "live-success-percentage",
+                  "queryText": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 5m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"exchange\"\n| summarize Total = sum(Sum),\n            Successful = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"success\"),\n            Failed = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"failure\"),\n            Unexecutable = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"unexecutable\")\n| where Total > 0\n| project Value = 100.0 * Successful / Total, Total, Successful, Failed, Unexecutable\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "timeGrain": "PT5M",
+                  "valueColumnName": "Value"
+                },
+                {
+                  "displayName": "Live mean confirmed delivery latency (ms)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 15000.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 60000.0
+                    }
+                  },
+                  "name": "live-mean-latency",
+                  "queryText": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 5m .. EvaluationTime)\n| where Name == \"mailflow.delivery.duration\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"exchange\"\n// Histograms contain a sum in seconds and an observation count, not raw percentiles.\n| summarize DurationSeconds = sum(Sum), Samples = sum(ItemCount)\n| where Samples > 0\n| project Value = 1000.0 * DurationSeconds / Samples, Samples\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "timeGrain": "PT5M",
+                  "valueColumnName": "Value"
+                }
+              ]
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/exchange-global",
+        "name": "exchange-global",
+        "properties": {
+          "canvasPosition": {
+            "x": 300.0,
+            "y": 620.0
+          },
+          "displayName": "Exchange Mail-flow Cohort - live queries",
+          "healthState": "Unknown",
+          "impact": "Standard",
+          "signalGroups": {
+            "azureLogAnalytics": {
+              "authenticationSetting": "workspace-query",
+              "logAnalyticsWorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+              "signals": [
+                {
+                  "displayName": "Live attempt success percentage (including unexecutable)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "LessThan",
+                      "threshold": 99.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "LessThan",
+                      "threshold": 95.0
+                    }
+                  },
+                  "name": "live-success-percentage",
+                  "queryText": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"exchange-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"exchange-global\"\n| summarize Attempts = count(), Successful = countif(Outcome == \"success\"),\n            Failed = countif(Outcome == \"failure\"), Unexecutable = countif(Outcome == \"unexecutable\"),\n            LastObservedAt = max(ObservedAt)\n// Never turn an empty or stale journey into 100% (or 0%) service health.\n| where CompleteCoverage and Attempts > 0\n| project Value = 100.0 * Successful / Attempts, Attempts, Successful, Failed, Unexecutable, LastObservedAt\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "status": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:11:31.5683705+00:00"
+                  },
+                  "timeGrain": "PT5M",
+                  "valueColumnName": "Value"
+                },
+                {
+                  "displayName": "Live p95 confirmed delivery latency (ms)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 15000.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 60000.0
+                    }
+                  },
+                  "name": "live-p95-latency",
+                  "queryText": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"exchange-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"exchange-global\"\n// Exchange delivery timing exists only for confirmed delivery, including subsequent cleanup failures.\n| extend LatencyMs = iff(Service == \"exchange\", DeliveryDurationMs, DurationMs)\n| where isnotnull(LatencyMs) and isfinite(LatencyMs) and LatencyMs >= 0\n| summarize Samples = count(), Value = percentile(LatencyMs, 95), LastObservedAt = max(ObservedAt)\n// A percentile of no raw observations is not zero latency.\n| where CompleteCoverage and Samples > 0\n| project Value, Samples, LastObservedAt\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "status": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:12:11.272464+00:00"
+                  },
+                  "timeGrain": "PT5M",
+                  "valueColumnName": "Value"
+                }
+              ]
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "Exchange Mail-flow - live service metrics",
+          "before": "Exchange Mail-flow Cohort - live queries",
+          "children": null,
+          "path": "properties.displayName",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 5m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"exchange\"\n| summarize Total = sum(Sum),\n            Successful = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"success\"),\n            Failed = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"failure\"),\n            Unexecutable = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"unexecutable\")\n| where Total > 0\n| project Value = 100.0 * Successful / Total, Total, Successful, Failed, Unexecutable\n",
+                  "before": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"exchange-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"exchange-global\"\n| summarize Attempts = count(), Successful = countif(Outcome == \"success\"),\n            Failed = countif(Outcome == \"failure\"), Unexecutable = countif(Outcome == \"unexecutable\"),\n            LastObservedAt = max(ObservedAt)\n// Never turn an empty or stale journey into 100% (or 0%) service health.\n| where CompleteCoverage and Attempts > 0\n| project Value = 100.0 * Successful / Attempts, Attempts, Successful, Failed, Unexecutable, LastObservedAt\n",
+                  "children": null,
+                  "path": "queryText",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:11:31.5683705+00:00"
+                  },
+                  "children": null,
+                  "path": "status",
+                  "propertyChangeType": "Delete"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            },
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "Live mean confirmed delivery latency (ms)",
+                  "before": "Live p95 confirmed delivery latency (ms)",
+                  "children": null,
+                  "path": "displayName",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": "live-mean-latency",
+                  "before": "live-p95-latency",
+                  "children": null,
+                  "path": "name",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 5m .. EvaluationTime)\n| where Name == \"mailflow.delivery.duration\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"exchange\"\n// Histograms contain a sum in seconds and an observation count, not raw percentiles.\n| summarize DurationSeconds = sum(Sum), Samples = sum(ItemCount)\n| where Samples > 0\n| project Value = 1000.0 * DurationSeconds / Samples, Samples\n",
+                  "before": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"exchange-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"exchange-global\"\n// Exchange delivery timing exists only for confirmed delivery, including subsequent cleanup failures.\n| extend LatencyMs = iff(Service == \"exchange\", DeliveryDurationMs, DurationMs)\n| where isnotnull(LatencyMs) and isfinite(LatencyMs) and LatencyMs >= 0\n| summarize Samples = count(), Value = percentile(LatencyMs, 95), LastObservedAt = max(ObservedAt)\n// A percentile of no raw observations is not zero latency.\n| where CompleteCoverage and Samples > 0\n| project Value, Samples, LastObservedAt\n",
+                  "children": null,
+                  "path": "queryText",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:12:11.272464+00:00"
+                  },
+                  "children": null,
+                  "path": "status",
+                  "propertyChangeType": "Delete"
+                }
+              ],
+              "path": "1",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.signalGroups.azureLogAnalytics.signals",
+          "propertyChangeType": "Array"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/exchange-global",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/graph-availability",
+        "name": "graph-availability",
+        "properties": {
+          "canvasPosition": {
+            "x": 1350.0,
+            "y": 620.0
+          },
+          "displayName": "Graph Query Availability - not connected",
+          "impact": "Standard"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/graph-availability",
+        "name": "graph-availability",
+        "properties": {
+          "canvasPosition": {
+            "x": 1350.0,
+            "y": 620.0
+          },
+          "displayName": "Graph Query Availability - not connected",
+          "healthState": "Unknown",
+          "impact": "Standard"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/graph-availability",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/m365-experience-poc",
+        "name": "m365-experience-poc",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 0.0
+          },
+          "displayName": "Microsoft 365 Synthetic Health Model (PoC)",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/m365-experience-poc",
+        "name": "m365-experience-poc",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 0.0
+          },
+          "displayName": "Microsoft 365 Synthetic Health Model (PoC)",
+          "healthState": "Unhealthy",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unhealthy",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/m365-experience-poc",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/m365-tenant",
+        "name": "m365-tenant",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 180.0
+          },
+          "displayName": "Microsoft 365 and Azure Experience",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/m365-tenant",
+        "name": "m365-tenant",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 180.0
+          },
+          "displayName": "Microsoft 365 and Azure Experience",
+          "healthState": "Unhealthy",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unhealthy",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/m365-tenant",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/monitoring-pipeline",
+        "name": "monitoring-pipeline",
+        "properties": {
+          "canvasPosition": {
+            "x": 1200.0,
+            "y": 400.0
+          },
+          "displayName": "Monitoring Pipeline",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/monitoring-pipeline",
+        "name": "monitoring-pipeline",
+        "properties": {
+          "canvasPosition": {
+            "x": 1200.0,
+            "y": 400.0
+          },
+          "displayName": "Monitoring Pipeline",
+          "healthState": "Unhealthy",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unhealthy",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/monitoring-pipeline",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/provider-context",
+        "name": "provider-context",
+        "properties": {
+          "canvasPosition": {
+            "x": 1550.0,
+            "y": 400.0
+          },
+          "displayName": "Microsoft 365 Service Health - supporting context",
+          "impact": "Suppressed"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/provider-context",
+        "name": "provider-context",
+        "properties": {
+          "canvasPosition": {
+            "x": 1550.0,
+            "y": 400.0
+          },
+          "displayName": "Microsoft 365 Service Health - supporting context",
+          "healthState": "Unknown",
+          "impact": "Suppressed"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/provider-context",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/runner-heartbeat",
+        "name": "runner-heartbeat",
+        "properties": {
+          "canvasPosition": {
+            "x": 1100.0,
+            "y": 620.0
+          },
+          "displayName": "Live Service Metrics - not a worker heartbeat",
+          "impact": "Standard",
+          "signalGroups": {
+            "azureLogAnalytics": {
+              "authenticationSetting": "workspace-query",
+              "logAnalyticsWorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+              "signals": [
+                {
+                  "displayName": "Services without recent live run metrics",
+                  "evaluationRules": {
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 0.0
+                    }
+                  },
+                  "name": "missing-live-services",
+                  "queryText": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\" and tostring(Properties[\"probe.mode\"]) == \"live\"\n| summarize ExchangeRuns = sumif(Sum, tostring(Properties[\"probe.service\"]) == \"exchange\" and TimeGenerated >= EvaluationTime - 3m),\n            SharePointRuns = sumif(Sum, tostring(Properties[\"probe.service\"]) == \"sharepoint\" and TimeGenerated >= EvaluationTime - 11m)\n| project Value = iff(ExchangeRuns > 0, 0, 1) + iff(SharePointRuns > 0, 0, 1), ExchangeRuns, SharePointRuns\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                },
+                {
+                  "displayName": "Live attempts that could not execute",
+                  "evaluationRules": {
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 0.0
+                    }
+                  },
+                  "name": "unexecutable-live-attempts",
+                  "queryText": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\" and tostring(Properties[\"probe.mode\"]) == \"live\"\n| where tostring(Properties[\"probe.service\"]) in (\"exchange\", \"sharepoint\")\n| summarize Value = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"unexecutable\")\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                }
+              ]
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/runner-heartbeat",
+        "name": "runner-heartbeat",
+        "properties": {
+          "canvasPosition": {
+            "x": 1100.0,
+            "y": 620.0
+          },
+          "displayName": "Live Result Coverage - not a worker heartbeat",
+          "healthState": "Unhealthy",
+          "impact": "Standard",
+          "signalGroups": {
+            "azureLogAnalytics": {
+              "authenticationSetting": "workspace-query",
+              "logAnalyticsWorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+              "signals": [
+                {
+                  "displayName": "Expected targets without fresh live observations",
+                  "evaluationRules": {
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 0.0
+                    }
+                  },
+                  "name": "missing-live-targets",
+                  "queryText": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\n// Inventory is the left-hand side: a wholly empty workspace still reports all missing targets.\nCoverage\n| summarize Value = countif(not(Fresh)),\n            MissingTargets = make_set_if(ProbeId, not(Fresh)),\n            LastObservedAt = max(LastObservedAt)\n| project Value, MissingTargets, LastObservedAt\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "status": {
+                    "healthState": "Unhealthy",
+                    "reportedAt": "2026-10-19T15:11:27.4714257+00:00",
+                    "value": 2.0
+                  },
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                },
+                {
+                  "displayName": "Live attempts that could not execute",
+                  "evaluationRules": {
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 0.0
+                    }
+                  },
+                  "name": "unexecutable-live-attempts",
+                  "queryText": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nCoverage\n| summarize Value = sum(Unexecutable), UnexecutableTargets = make_set_if(ProbeId, Unexecutable > 0)\n| project Value, UnexecutableTargets\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "status": {
+                    "healthState": "Healthy",
+                    "reportedAt": "2026-10-19T15:11:39.7874782+00:00",
+                    "value": 0.0
+                  },
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                }
+              ]
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "Live Service Metrics - not a worker heartbeat",
+          "before": "Live Result Coverage - not a worker heartbeat",
+          "children": null,
+          "path": "properties.displayName",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": null,
+          "before": "Unhealthy",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "Services without recent live run metrics",
+                  "before": "Expected targets without fresh live observations",
+                  "children": null,
+                  "path": "displayName",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": "missing-live-services",
+                  "before": "missing-live-targets",
+                  "children": null,
+                  "path": "name",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\" and tostring(Properties[\"probe.mode\"]) == \"live\"\n| summarize ExchangeRuns = sumif(Sum, tostring(Properties[\"probe.service\"]) == \"exchange\" and TimeGenerated >= EvaluationTime - 3m),\n            SharePointRuns = sumif(Sum, tostring(Properties[\"probe.service\"]) == \"sharepoint\" and TimeGenerated >= EvaluationTime - 11m)\n| project Value = iff(ExchangeRuns > 0, 0, 1) + iff(SharePointRuns > 0, 0, 1), ExchangeRuns, SharePointRuns\n",
+                  "before": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\n// Inventory is the left-hand side: a wholly empty workspace still reports all missing targets.\nCoverage\n| summarize Value = countif(not(Fresh)),\n            MissingTargets = make_set_if(ProbeId, not(Fresh)),\n            LastObservedAt = max(LastObservedAt)\n| project Value, MissingTargets, LastObservedAt\n",
+                  "children": null,
+                  "path": "queryText",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": {
+                    "healthState": "Unhealthy",
+                    "reportedAt": "2026-10-19T15:11:27.4714257+00:00",
+                    "value": 2.0
+                  },
+                  "children": null,
+                  "path": "status",
+                  "propertyChangeType": "Delete"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            },
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\" and tostring(Properties[\"probe.mode\"]) == \"live\"\n| where tostring(Properties[\"probe.service\"]) in (\"exchange\", \"sharepoint\")\n| summarize Value = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"unexecutable\")\n",
+                  "before": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nCoverage\n| summarize Value = sum(Unexecutable), UnexecutableTargets = make_set_if(ProbeId, Unexecutable > 0)\n| project Value, UnexecutableTargets\n",
+                  "children": null,
+                  "path": "queryText",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": {
+                    "healthState": "Healthy",
+                    "reportedAt": "2026-10-19T15:11:39.7874782+00:00",
+                    "value": 0.0
+                  },
+                  "children": null,
+                  "path": "status",
+                  "propertyChangeType": "Delete"
+                }
+              ],
+              "path": "1",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.signalGroups.azureLogAnalytics.signals",
+          "propertyChangeType": "Array"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/runner-heartbeat",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/sharepoint-experience",
+        "name": "sharepoint-experience",
+        "properties": {
+          "canvasPosition": {
+            "x": 900.0,
+            "y": 400.0
+          },
+          "displayName": "SharePoint Experience",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/sharepoint-experience",
+        "name": "sharepoint-experience",
+        "properties": {
+          "canvasPosition": {
+            "x": 900.0,
+            "y": 400.0
+          },
+          "displayName": "SharePoint Experience",
+          "healthState": "Unknown",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/sharepoint-experience",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/sharepoint-global",
+        "name": "sharepoint-global",
+        "properties": {
+          "canvasPosition": {
+            "x": 900.0,
+            "y": 620.0
+          },
+          "displayName": "SharePoint File Experience - live service metrics",
+          "impact": "Standard",
+          "signalGroups": {
+            "azureLogAnalytics": {
+              "authenticationSetting": "workspace-query",
+              "logAnalyticsWorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+              "signals": [
+                {
+                  "displayName": "Live attempt success percentage (including unexecutable)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "LessThan",
+                      "threshold": 99.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "LessThan",
+                      "threshold": 95.0
+                    }
+                  },
+                  "name": "live-success-percentage",
+                  "queryText": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"sharepoint\"\n| summarize Total = sum(Sum),\n            Successful = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"success\"),\n            Failed = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"failure\"),\n            Unexecutable = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"unexecutable\")\n| where Total > 0\n| project Value = 100.0 * Successful / Total, Total, Successful, Failed, Unexecutable\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                },
+                {
+                  "displayName": "Live mean attempt latency including cleanup (ms)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 15000.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 60000.0
+                    }
+                  },
+                  "name": "live-mean-latency",
+                  "queryText": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.duration\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"sharepoint\"\n// Histograms contain a sum in seconds and an observation count, not raw percentiles.\n| summarize DurationSeconds = sum(Sum), Samples = sum(ItemCount)\n| where Samples > 0\n| project Value = 1000.0 * DurationSeconds / Samples, Samples\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                }
+              ]
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/sharepoint-global",
+        "name": "sharepoint-global",
+        "properties": {
+          "canvasPosition": {
+            "x": 900.0,
+            "y": 620.0
+          },
+          "displayName": "SharePoint File Cohort - live queries",
+          "healthState": "Unknown",
+          "impact": "Standard",
+          "signalGroups": {
+            "azureLogAnalytics": {
+              "authenticationSetting": "workspace-query",
+              "logAnalyticsWorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+              "signals": [
+                {
+                  "displayName": "Live attempt success percentage (including unexecutable)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "LessThan",
+                      "threshold": 99.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "LessThan",
+                      "threshold": 95.0
+                    }
+                  },
+                  "name": "live-success-percentage",
+                  "queryText": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"sharepoint-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"sharepoint-global\"\n| summarize Attempts = count(), Successful = countif(Outcome == \"success\"),\n            Failed = countif(Outcome == \"failure\"), Unexecutable = countif(Outcome == \"unexecutable\"),\n            LastObservedAt = max(ObservedAt)\n// Never turn an empty or stale journey into 100% (or 0%) service health.\n| where CompleteCoverage and Attempts > 0\n| project Value = 100.0 * Successful / Attempts, Attempts, Successful, Failed, Unexecutable, LastObservedAt\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "status": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:11:30.3713222+00:00"
+                  },
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                },
+                {
+                  "displayName": "Live p95 attempt latency including cleanup (ms)",
+                  "evaluationRules": {
+                    "degradedRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 15000.0
+                    },
+                    "unhealthyRule": {
+                      "operator": "GreaterThan",
+                      "threshold": 60000.0
+                    }
+                  },
+                  "name": "live-p95-latency",
+                  "queryText": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"sharepoint-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"sharepoint-global\"\n// Exchange delivery timing exists only for confirmed delivery, including subsequent cleanup failures.\n| extend LatencyMs = iff(Service == \"exchange\", DeliveryDurationMs, DurationMs)\n| where isnotnull(LatencyMs) and isfinite(LatencyMs) and LatencyMs >= 0\n| summarize Samples = count(), Value = percentile(LatencyMs, 95), LastObservedAt = max(ObservedAt)\n// A percentile of no raw observations is not zero latency.\n| where CompleteCoverage and Samples > 0\n| project Value, Samples, LastObservedAt\n",
+                  "refreshInterval": "PT1M",
+                  "signalKind": "LogAnalyticsQuery",
+                  "status": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:11:23.1761995+00:00"
+                  },
+                  "timeGrain": "PT15M",
+                  "valueColumnName": "Value"
+                }
+              ]
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "SharePoint File Experience - live service metrics",
+          "before": "SharePoint File Cohort - live queries",
+          "children": null,
+          "path": "properties.displayName",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.runs\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"sharepoint\"\n| summarize Total = sum(Sum),\n            Successful = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"success\"),\n            Failed = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"failure\"),\n            Unexecutable = sumif(Sum, tostring(Properties[\"probe.outcome\"]) == \"unexecutable\")\n| where Total > 0\n| project Value = 100.0 * Successful / Total, Total, Successful, Failed, Unexecutable\n",
+                  "before": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"sharepoint-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"sharepoint-global\"\n| summarize Attempts = count(), Successful = countif(Outcome == \"success\"),\n            Failed = countif(Outcome == \"failure\"), Unexecutable = countif(Outcome == \"unexecutable\"),\n            LastObservedAt = max(ObservedAt)\n// Never turn an empty or stale journey into 100% (or 0%) service health.\n| where CompleteCoverage and Attempts > 0\n| project Value = 100.0 * Successful / Attempts, Attempts, Successful, Failed, Unexecutable, LastObservedAt\n",
+                  "children": null,
+                  "path": "queryText",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:11:30.3713222+00:00"
+                  },
+                  "children": null,
+                  "path": "status",
+                  "propertyChangeType": "Delete"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            },
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "Live mean attempt latency including cleanup (ms)",
+                  "before": "Live p95 attempt latency including cleanup (ms)",
+                  "children": null,
+                  "path": "displayName",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": "live-mean-latency",
+                  "before": "live-p95-latency",
+                  "children": null,
+                  "path": "name",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": "let EvaluationTime = now();\nAppMetrics\n| where _ResourceId =~ \"/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc\"\n| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)\n| where Name == \"synthetic.probe.duration\"\n| where tostring(Properties[\"probe.mode\"]) == \"live\" and tostring(Properties[\"probe.service\"]) == \"sharepoint\"\n// Histograms contain a sum in seconds and an observation count, not raw percentiles.\n| summarize DurationSeconds = sum(Sum), Samples = sum(ItemCount)\n| where Samples > 0\n| project Value = 1000.0 * DurationSeconds / Samples, Samples\n",
+                  "before": "// Rendered by Bicep; all health queries share this exact live observation/coverage contract.\nlet ApplicationInsightsResourceId = '/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc';\nlet EvaluationTime = now();\nlet ExpectedTargets = datatable(Service:string, Cohort:string, ProbeId:string, IntervalSeconds:long, LookbackMinutes:long, GraceSeconds:long)\n[\n\"exchange\", \"exchange-global\", \"exchange-probe-001\", 60, 5, 180,\n\"sharepoint\", \"sharepoint-global\", \"sharepoint-probe-001\", 300, 15, 180\n];\nlet MaximumLookbackMinutes = toscalar(ExpectedTargets | summarize max(LookbackMinutes));\nlet Results =\n    AppTraces\n    | where _ResourceId =~ ApplicationInsightsResourceId\n    | where TimeGenerated between (EvaluationTime - MaximumLookbackMinutes * 1m .. EvaluationTime)\n    | where Message == \"synthetic-result\"\n    | where tostring(Properties[\"probe.schema_version\"]) == \"2.0\"\n    | where tostring(Properties[\"probe.mode\"]) == \"live\"\n    | extend\n        ObservedAt = todatetime(Properties[\"probe.observed_at\"]),\n        Service = tostring(Properties[\"probe.service\"]),\n        Cohort = tostring(Properties[\"probe.cohort\"]),\n        ProbeId = tostring(Properties[\"probe.id\"]),\n        CorrelationId = tostring(Properties[\"probe.correlation_id\"]),\n        Outcome = tostring(Properties[\"probe.outcome\"]),\n        DurationMs = todouble(Properties[\"probe.duration_ms\"]),\n        DeliveryDurationMs = todouble(Properties[\"probe.delivery_duration_ms\"])\n    | where isnotempty(CorrelationId)\n    | where Outcome in (\"success\", \"failure\", \"unexecutable\")\n    | join kind=inner ExpectedTargets on Service, Cohort, ProbeId\n    | where ObservedAt between (EvaluationTime - LookbackMinutes * 1m .. EvaluationTime)\n    | summarize arg_max(TimeGenerated, *) by Service, Cohort, ProbeId, CorrelationId;\nlet Coverage =\n    ExpectedTargets\n    | join kind=leftouter (\n        Results\n        | summarize Attempts = count(), Unexecutable = countif(Outcome == \"unexecutable\"),\n                    LastObservedAt = max(ObservedAt) by Service, Cohort, ProbeId\n    ) on Service, Cohort, ProbeId\n    | extend MaximumAgeSeconds = IntervalSeconds + GraceSeconds\n    | extend Fresh = isnotnull(LastObservedAt)\n        and LastObservedAt >= EvaluationTime - MaximumAgeSeconds * 1s\n    | project Service, Cohort, ProbeId, IntervalSeconds, LookbackMinutes, MaximumAgeSeconds,\n              Attempts = coalesce(Attempts, long(0)), Unexecutable = coalesce(Unexecutable, long(0)),\n              LastObservedAt, Fresh;\n\nlet CompleteCoverage = toscalar(Coverage | where Cohort == \"sharepoint-global\" | summarize countif(not(Fresh)) == 0);\nResults\n| where Cohort == \"sharepoint-global\"\n// Exchange delivery timing exists only for confirmed delivery, including subsequent cleanup failures.\n| extend LatencyMs = iff(Service == \"exchange\", DeliveryDurationMs, DurationMs)\n| where isnotnull(LatencyMs) and isfinite(LatencyMs) and LatencyMs >= 0\n| summarize Samples = count(), Value = percentile(LatencyMs, 95), LastObservedAt = max(ObservedAt)\n// A percentile of no raw observations is not zero latency.\n| where CompleteCoverage and Samples > 0\n| project Value, Samples, LastObservedAt\n",
+                  "children": null,
+                  "path": "queryText",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": {
+                    "error": "Log query returned no rows",
+                    "healthState": "Unknown",
+                    "reportedAt": "2026-10-19T15:11:23.1761995+00:00"
+                  },
+                  "children": null,
+                  "path": "status",
+                  "propertyChangeType": "Delete"
+                }
+              ],
+              "path": "1",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.signalGroups.azureLogAnalytics.signals",
+          "propertyChangeType": "Array"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/sharepoint-global",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/teams-experience",
+        "name": "teams-experience",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 400.0
+          },
+          "displayName": "Teams Experience",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/teams-experience",
+        "name": "teams-experience",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 400.0
+          },
+          "displayName": "Teams Experience",
+          "healthState": "Unknown",
+          "impact": "Standard",
+          "signalGroups": {
+            "dependencies": {
+              "aggregationType": "WorstOf",
+              "ignoreUnknown": false
+            }
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/teams-experience",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/teams-global",
+        "name": "teams-global",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 620.0
+          },
+          "displayName": "Teams Cohort - not implemented",
+          "impact": "Standard"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/teams-global",
+        "name": "teams-global",
+        "properties": {
+          "canvasPosition": {
+            "x": 600.0,
+            "y": 620.0
+          },
+          "displayName": "Teams Cohort - not implemented",
+          "healthState": "Unknown",
+          "impact": "Standard"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/entities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "Unknown",
+          "children": null,
+          "path": "properties.healthState",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/entities/teams-global",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/exchange-experience-to-exchange-global",
+        "name": "exchange-experience-to-exchange-global",
+        "properties": {
+          "childEntityName": "exchange-global",
+          "parentEntityName": "exchange-experience"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/exchange-experience-to-exchange-global",
+        "name": "exchange-experience-to-exchange-global",
+        "properties": {
+          "childEntityName": "exchange-global",
+          "parentEntityName": "exchange-experience"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/exchange-experience-to-exchange-global",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-experience-poc-to-m365-tenant",
+        "name": "m365-experience-poc-to-m365-tenant",
+        "properties": {
+          "childEntityName": "m365-tenant",
+          "parentEntityName": "m365-experience-poc"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-experience-poc-to-m365-tenant",
+        "name": "m365-experience-poc-to-m365-tenant",
+        "properties": {
+          "childEntityName": "m365-tenant",
+          "parentEntityName": "m365-experience-poc"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-experience-poc-to-m365-tenant",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-azure-resources",
+        "name": "m365-tenant-to-azure-resources",
+        "properties": {
+          "childEntityName": "azure-resources",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-azure-resources",
+        "name": "m365-tenant-to-azure-resources",
+        "properties": {
+          "childEntityName": "azure-resources",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-azure-resources",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-exchange-experience",
+        "name": "m365-tenant-to-exchange-experience",
+        "properties": {
+          "childEntityName": "exchange-experience",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-exchange-experience",
+        "name": "m365-tenant-to-exchange-experience",
+        "properties": {
+          "childEntityName": "exchange-experience",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-exchange-experience",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-monitoring-pipeline",
+        "name": "m365-tenant-to-monitoring-pipeline",
+        "properties": {
+          "childEntityName": "monitoring-pipeline",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-monitoring-pipeline",
+        "name": "m365-tenant-to-monitoring-pipeline",
+        "properties": {
+          "childEntityName": "monitoring-pipeline",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-monitoring-pipeline",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-sharepoint-experience",
+        "name": "m365-tenant-to-sharepoint-experience",
+        "properties": {
+          "childEntityName": "sharepoint-experience",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-sharepoint-experience",
+        "name": "m365-tenant-to-sharepoint-experience",
+        "properties": {
+          "childEntityName": "sharepoint-experience",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-sharepoint-experience",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-teams-experience",
+        "name": "m365-tenant-to-teams-experience",
+        "properties": {
+          "childEntityName": "teams-experience",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-teams-experience",
+        "name": "m365-tenant-to-teams-experience",
+        "properties": {
+          "childEntityName": "teams-experience",
+          "parentEntityName": "m365-tenant"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/m365-tenant-to-teams-experience",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/monitoring-pipeline-to-graph-availability",
+        "name": "monitoring-pipeline-to-graph-availability",
+        "properties": {
+          "childEntityName": "graph-availability",
+          "parentEntityName": "monitoring-pipeline"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/monitoring-pipeline-to-graph-availability",
+        "name": "monitoring-pipeline-to-graph-availability",
+        "properties": {
+          "childEntityName": "graph-availability",
+          "parentEntityName": "monitoring-pipeline"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/monitoring-pipeline-to-graph-availability",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/monitoring-pipeline-to-runner-heartbeat",
+        "name": "monitoring-pipeline-to-runner-heartbeat",
+        "properties": {
+          "childEntityName": "runner-heartbeat",
+          "parentEntityName": "monitoring-pipeline"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/monitoring-pipeline-to-runner-heartbeat",
+        "name": "monitoring-pipeline-to-runner-heartbeat",
+        "properties": {
+          "childEntityName": "runner-heartbeat",
+          "parentEntityName": "monitoring-pipeline"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/monitoring-pipeline-to-runner-heartbeat",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/sharepoint-experience-to-sharepoint-global",
+        "name": "sharepoint-experience-to-sharepoint-global",
+        "properties": {
+          "childEntityName": "sharepoint-global",
+          "parentEntityName": "sharepoint-experience"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/sharepoint-experience-to-sharepoint-global",
+        "name": "sharepoint-experience-to-sharepoint-global",
+        "properties": {
+          "childEntityName": "sharepoint-global",
+          "parentEntityName": "sharepoint-experience"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/sharepoint-experience-to-sharepoint-global",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/teams-experience-to-teams-global",
+        "name": "teams-experience-to-teams-global",
+        "properties": {
+          "childEntityName": "teams-global",
+          "parentEntityName": "teams-experience"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "before": {
+        "apiVersion": "2026-05-01-preview",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/teams-experience-to-teams-global",
+        "name": "teams-experience-to-teams-global",
+        "properties": {
+          "childEntityName": "teams-global",
+          "parentEntityName": "teams-experience"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.CloudHealth/healthmodels/relationships"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc/relationships/teams-experience-to-teams-global",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2020-02-02",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc",
+        "kind": "web",
+        "location": "centralus",
+        "name": "appi-m365-experience-poc",
+        "properties": {
+          "Application_Type": "web",
+          "DisableLocalAuth": false,
+          "Flow_Type": "Bluefield",
+          "IngestionMode": "LogAnalytics",
+          "Request_Source": "rest",
+          "RetentionInDays": 90,
+          "SamplingPercentage": 100.0,
+          "WorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+          "publicNetworkAccessForIngestion": "Enabled",
+          "publicNetworkAccessForQuery": "Enabled"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.Insights/components"
+      },
+      "before": {
+        "apiVersion": "2020-02-02",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc",
+        "kind": "web",
+        "location": "centralus",
+        "name": "appi-m365-experience-poc",
+        "properties": {
+          "Application_Type": "web",
+          "DisableLocalAuth": false,
+          "IngestionMode": "LogAnalytics",
+          "RetentionInDays": 90,
+          "SamplingPercentage": 100.0,
+          "WorkspaceResourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+          "publicNetworkAccessForIngestion": "Enabled",
+          "publicNetworkAccessForQuery": "Enabled"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.Insights/components"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "Bluefield",
+          "before": null,
+          "children": null,
+          "path": "properties.Flow_Type",
+          "propertyChangeType": "Create"
+        },
+        {
+          "after": "rest",
+          "before": null,
+          "children": null,
+          "path": "properties.Request_Source",
+          "propertyChangeType": "Create"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.Insights/components/appi-m365-experience-poc",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2025-02-01",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+        "location": "centralus",
+        "name": "law-m365-experience-poc",
+        "properties": {
+          "publicNetworkAccessForIngestion": "Enabled",
+          "publicNetworkAccessForQuery": "Enabled",
+          "retentionInDays": 30,
+          "sku": {
+            "name": "PerGB2018"
+          },
+          "workspaceCapping": {
+            "dailyQuotaGb": -1.0
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.OperationalInsights/workspaces"
+      },
+      "before": {
+        "apiVersion": "2025-02-01",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+        "location": "centralus",
+        "name": "law-m365-experience-poc",
+        "properties": {
+          "publicNetworkAccessForIngestion": "Enabled",
+          "publicNetworkAccessForQuery": "Enabled",
+          "retentionInDays": 30,
+          "sku": {
+            "name": "PerGB2018"
+          },
+          "workspaceCapping": {
+            "dailyQuotaGb": -1.0
+          }
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.OperationalInsights/workspaces"
+      },
+      "changeType": "NoChange",
+      "delta": [
+        {
+          "after": {
+            "disableLocalAuth": true,
+            "enableLogAccessUsingOnlyResourcePermissions": false
+          },
+          "before": null,
+          "children": null,
+          "path": "properties.features",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc/providers/Microsoft.Authorization/roleAssignments/a017bac4-ff4d-595a-a15a-a82da58c87e4",
+        "name": "a017bac4-ff4d-595a-a15a-a82da58c87e4",
+        "properties": {
+          "principalId": "[reference('/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc', '2026-05-01-preview', 'full').identity.principalId]",
+          "roleDefinitionId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/providers/Microsoft.Authorization/roleDefinitions/73c42c96-874c-492b-b04d-ab87d138a893"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc/providers/Microsoft.Authorization/roleAssignments/a017bac4-ff4d-595a-a15a-a82da58c87e4",
+        "name": "a017bac4-ff4d-595a-a15a-a82da58c87e4",
+        "properties": {
+          "principalId": "1a4fb8af-2b83-4857-80f1-7b67a4e7cbe9",
+          "roleDefinitionId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/providers/Microsoft.Authorization/roleDefinitions/73c42c96-874c-492b-b04d-ab87d138a893"
+        },
+        "resourceGroup": "rg-m365-demo",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.CloudHealth/healthmodels/m365-experience-poc', '2026-05-01-preview', 'full').identity.principalId]",
+          "before": "1a4fb8af-2b83-4857-80f1-7b67a4e7cbe9",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/46433637-4539-481a-b054-e2c9f83ae51d/resourceGroups/rg-m365-demo/providers/Microsoft.OperationalInsights/workspaces/law-m365-experience-poc/providers/Microsoft.Authorization/roleAssignments/a017bac4-ff4d-595a-a15a-a82da58c87e4",
+      "symbolicName": null,
+      "unsupportedReason": null
+    }
+  ],
+  "diagnostics": null,
+  "error": null,
+  "potentialChanges": null,
+  "status": "Succeeded"
+}

@@ -5,6 +5,6 @@
   "timeoutSeconds": 45,
   "mode": "simulation",
   "cohort": "teams-global",
-  "reportToHealthModel": false,
+  "telemetry": "console",
   "targets": []
 }

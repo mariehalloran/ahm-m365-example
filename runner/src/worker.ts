@@ -1,5 +1,4 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { RecordingSink } from "../../health-model/src/ahm.js";
 import { ConfigurationError, type Config } from "./config.js";
 import { consoleTelemetry, type Telemetry } from "../../shared/src/contracts.js";
 import { categoryOf } from "../../shared/src/http.js";
@@ -28,7 +27,7 @@ export interface WorkerOptions {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
-  createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies;
+  createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies | Promise<RunnerDependencies>;
   execute?: typeof runCycle;
 }
 
@@ -36,7 +35,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const service = parseServiceConfig(raw);
   const output = options.telemetry ?? consoleTelemetry;
   const metadata = {
-    type: service.type, mode: service.mode, entity: service.cohort, reportingEnabled: service.reportToHealthModel,
+    type: service.type, mode: service.mode, cohort: service.cohort, telemetry: service.telemetry,
     simulation: service.mode === "simulation",
     durationMeaning: service.mode === "simulation" ? "modeled-not-measured-latency" : "measured-probe-duration",
   };
@@ -49,29 +48,29 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const config = serviceSettings(service, env);
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
-  const dependencies = options.createDependencies
+  const dependencies = await (options.createDependencies
     ? options.createDependencies(service, config, telemetry)
-    : serviceRuntime(service, config, telemetry, env);
+    : serviceRuntime(service, config, telemetry, env));
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const execute = options.execute ?? runCycle;
   const interval = service.intervalSeconds * 1000;
-  const origin = now();
+  let origin = 0;
   let slot = 0;
-  telemetry.emit("service-worker-started", {
-    intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, once: options.once ?? false,
-    probeCount: config.probes.length,
-  });
   try {
+    origin = now();
+    telemetry.emit("service-worker-started", {
+      intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, once: options.once ?? false,
+      probeCount: config.probes.length,
+    });
     while (!signal.aborted) {
       try {
-        if (dependencies.sink instanceof RecordingSink) dependencies.sink.reports.length = 0;
         const cycle = await execute(config, dependencies, signal);
         telemetry.emit("service-cycle-summary", {
-          cycleId: cycle.cycleId, state: cycle.reports[0]?.state ?? "Unknown", probeCount: cycle.results.length,
+          cycleId: cycle.cycleId, probeCount: cycle.results.length,
         });
       } catch (error) {
-        if (signal.aborted) break;
+        if (signal.aborted && !options.once) break;
         telemetry.emit("service-cycle-failed", { category: categoryOf(error), probeCount: config.probes.length });
         if (options.once) throw error;
       }
@@ -86,8 +85,9 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
       await sleep(Math.max(0, origin + slot * interval - now()), signal);
     }
   } catch (error) {
-    if (!signal.aborted) throw error;
+    if (options.once || !signal.aborted) throw error;
   } finally {
-    telemetry.emit("service-worker-stopped", { cancelled: signal.aborted });
+    try { await dependencies.results.shutdown(); }
+    finally { telemetry.emit("service-worker-stopped", { cancelled: signal.aborted }); }
   }
 }

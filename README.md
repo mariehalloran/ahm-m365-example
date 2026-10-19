@@ -1,37 +1,49 @@
-# Microsoft 365 synthetic health model
+# Microsoft 365 synthetic monitoring
 
-Run each kind of synthetic test from its own config file, on its own cadence. One small worker reads one config and runs only that service's tests.
+**Run a test, report its result, repeat.** Each service has its own config and cadence. Workers are stateless: no Blob storage, checkpoint files, success-rate calculations, or health-state reports.
 
-The **health model is deployed**; see [deployment and verification](./health-model/README.md). **Azure Container Apps is the intended worker host, but container hosting is not deployed.** You can exercise the config-driven workers locally without Azure access.
+Start with the [user journeys and endpoint guide](./probes/README.md): email arrival, Teams message observation, and document save/readback. It explains each employee goal, the exact API calls, what is implemented, and what an API-backed test cannot prove about the user interface.
 
-## Start here
+Detailed plans: [Teams post/readback/cleanup](./probes/teams/README.md) and [SharePoint upload/read/verify/delete](./probes/sharepoint/README.md). The Teams plan is not an implemented handler or proof of employee receipt.
 
-Requires Node.js 22 or 24 and npm. Run commands from the repository root.
+```text
+Exchange Container App   [test + OTel SDK, every 60 seconds]  --+
+SharePoint Container App [test + OTel SDK, every 300 seconds] --+
+                                                             |
+                                         workspace-based Application Insights
+                                                             |
+                                                  Log Analytics / KQL
+                                               success percentage and latency
+                                                             |
+                                              health-model query signals
+```
+
+The [sample health model and telemetry resources](./health-model/README.md) are deployed in `rg-m365-demo`. Query signals evaluate **live-only** data; no live worker is connected yet. Azure Container Apps is the intended worker host, not an already deployed worker.
+
+OpenTelemetry runs **inside each service's existing process**, not in another worker/container. Each service has its own Container App and config; no AKS cluster, sidecar, or OTel Collector is required for this export path.
+
+## Run locally
+
+Requires Node.js 22 or 24 and npm. Run from the repository root:
 
 ```sh
 npm ci
-
-# Run one safe simulated Exchange cycle.
 npm run probe -- --config probes/exchange/config.json --once
-
-# Keep Exchange running on its configured cadence.
+# Remove --once to repeat on Exchange's cadence.
 npm run probe -- --config probes/exchange/config.json
-
-# In another terminal, run SharePoint independently.
+# Another terminal/process runs SharePoint independently.
 npm run probe -- --config probes/sharepoint/config.json
 ```
 
-The checked-in configs generate **simulated outcomes**, not real email or files, and do not send reports to Azure. Stop a worker with Ctrl+C.
+Checked-in configs use **simulation** and **console output**: no real email/files, Azure ingestion, or local state writes. Stop with Ctrl+C.
 
-## One config per service
+## Configure each service
 
-| Config | Enabled | Cadence | Current behavior |
-| --- | --- | --- | --- |
-| [Exchange](./probes/exchange/config.json) | Yes | Every 60 seconds | Simulated mail-flow outcomes; live handler available after approval |
-| [SharePoint](./probes/sharepoint/config.json) | Yes | Every 300 seconds | Simulated file outcomes; live handler available after approval |
-| [Teams](./probes/teams/config.json) | No | Every 120 seconds when implemented | Config placeholder; no Teams handler |
-
-For example, [Exchange's config](./probes/exchange/config.json) controls:
+| Config | Cadence | Default |
+| --- | --- | --- |
+| [Exchange](./probes/exchange/config.json) | 60 seconds | Simulated mail-flow result |
+| [SharePoint](./probes/sharepoint/config.json) | 300 seconds | Simulated file result |
+| [Teams](./probes/teams/config.json) | 120 seconds | Disabled; handler not implemented |
 
 ```json
 {
@@ -41,60 +53,49 @@ For example, [Exchange's config](./probes/exchange/config.json) controls:
   "timeoutSeconds": 45,
   "mode": "simulation",
   "cohort": "exchange-global",
-  "reportToHealthModel": false,
-  "targets": [
-    { "id": "exchange-probe-001" },
-    { "id": "exchange-probe-002" },
-    { "id": "exchange-probe-003" }
-  ]
+  "telemetry": "console",
+  "targets": [{ "id": "exchange-probe-001" }]
 }
 ```
 
-Change the interval or targets in that service's file, then restart its worker. There is no shared master cadence. A slow Exchange run does not block a separate SharePoint process.
+Restart a worker after editing its file. Separate services do not share a scheduler. A worker never overlaps its own cycles; missed slots are skipped, not queued into catch-up bursts. Run one instance per target set until distributed ownership is implemented.
 
-Workers never overlap their own cycles: missed schedule slots are skipped and logged, not queued into catch-up bursts. Timeouts allow an additional bounded cleanup period. Use one authoritative worker per config; distributed replica ownership is not implemented.
+## Send telemetry to Log Analytics
 
-Teams remains disabled until a real handler is implemented. Enabling its config fails explicitly; it cannot silently produce simulated Teams success.
+Use a **workspace-based Application Insights resource linked to the intended Log Analytics workspace**, then:
 
-## Connecting real services and the health model
+1. Set the service config's `telemetry` to `azure-monitor`.
+2. Supply its `APPLICATIONINSIGHTS_CONNECTION_STRING` as an environment variable/secret, not in JSON or source control.
+3. Run a single cycle and check `AppMetrics` and `AppTraces` in the linked workspace after ingestion.
 
-1. Obtain approval using the [mailbox administrator request](./MAILBOX-SYNTHETIC-ACCESS.md) or the corresponding workload's permission gates.
-2. Add approved target resources to the service config, then change `mode` to `live`. Exchange targets need `mailbox`; SharePoint targets need `siteId`, `driveId`, and `folderId`.
-3. Supply credentials through the environment or an approved secret store, not JSON config. Live mutations also require `ENABLE_LIVE_M365=true`.
-4. Validate one cycle with `--once` before scheduling.
-5. Separately opt into reporting with `reportToHealthModel: true` and an approved `AHM_MODEL_ID`.
+The worker exports:
 
-Simulation and reporting are independent settings: enabling reporting really writes to Azure even in simulation mode. Use separate simulation/live models and state.
+- An outcome counter for success, failure, or inability to execute.
+- A total probe-duration histogram in seconds.
+- An Exchange confirmed-delivery-duration histogram in seconds.
+- One structured result per attempt for diagnostics and percentile calculations.
 
-Each worker reports only its configured cohort. It does not query Microsoft 365 Service Health or claim that the shared monitoring pipeline is healthy. State is isolated between service configurations. Provider collection and global pipeline health remain separate work.
+[Simple KQL examples](./telemetry/README.md) sum attempts/successes, calculate average durations, and check when a service last reported. Metric dimensions are only service, mode, and outcome. No mailbox/probe inventory is required; opaque IDs stay in diagnostic records.
 
-See the [worker guide](./runner/README.md) for settings, credentials, scheduling, reporting, and legacy commands. One mailbox validates an integration, not tenant-wide availability.
+For real tests, obtain the [approved mailbox and scoped permissions](./MAILBOX-SYNTHETIC-ACCESS.md), add dedicated targets, change `mode` to `live`, and explicitly set `ENABLE_LIVE_M365=true`. Live execution and Azure export are independent choices. Simulated measurements are labeled and excluded from the default live queries.
 
-## Repository layout
+## Components
 
-| Component | Responsibility |
+| Folder | Responsibility |
 | --- | --- |
-| [health-model/](./health-model/) | Model infrastructure, report ingestion, and cohort health policy |
-| [probes/exchange/](./probes/exchange/) | Exchange config, mail-flow handler, and tests |
-| [probes/sharepoint/](./probes/sharepoint/) | SharePoint config, file handler, and tests |
-| [probes/teams/](./probes/teams/README.md) | Disabled config and future Teams boundary |
-| [runner/](./runner/) | The same generic config-driven worker used for each service |
-| [shared/](./shared/) | Result contracts and shared HTTP/Graph clients |
+| [health-model/](./health-model/) | Deployed model topology; future query-based signal integration |
+| [probes/](./probes/README.md) | User journeys, endpoints, service configs, and test operations |
+| [runner/](./runner/) | Stateless execution and independent per-config scheduling |
+| [telemetry/](./telemetry/) | OTel export and downstream KQL |
+| [shared/](./shared/) | Result contracts and HTTP/Graph clients |
 
-One root npm package covers all components. There is one worker entrypoint; each service has its own config and cadence.
-
-## Validation and further reading
+## Validate
 
 ```sh
 npm run typecheck
 npm test
 npm run build
+npm start -- --config probes/exchange/config.json --once
 ```
 
-Structured results retain per-test outcomes, durations, and diagnostics without message bodies or secrets. OpenTelemetry outcome counters and response-time histograms remain a planned export; no OTel exporter is implemented.
-
-- [Worker configuration and scheduling](./runner/README.md)
-- [Health-model deployment](./health-model/README.md)
-- [Mailbox access and cross-tenant requirements](./MAILBOX-SYNTHETIC-ACCESS.md)
-- [Operations, cleanup, and telemetry definitions](./docs/operations.md)
-- [Deployment boundaries](./docs/deployment.md)
+See [worker configuration](./runner/README.md), [operations](./docs/operations.md), and [deployment boundaries](./docs/deployment.md). No worker publishes Healthy/Unhealthy or calls the Health Report Ingestion API.

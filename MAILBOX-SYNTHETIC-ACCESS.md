@@ -87,9 +87,9 @@ That permission is tenant-level provider context, not mailbox-scoped access. It 
 
 ### Azure permissions: separate from mailbox permissions
 
-The identity submitting reports needs only the necessary ingestion access on the intended Azure Monitor Health Models resource. A hosted runner also needs the appropriate access to its own state and host storage.
+The stateless worker exports OTel results/metrics through workspace-based Application Insights to Log Analytics. It does not call the Health Report Ingestion API or use Blob state, so it needs neither model-ingestion permission nor Blob access.
 
-These are Azure-side approvals, not Exchange permissions. Azure subscription Owner does not authorize mailbox creation or access. Conversely, the mailbox application does not need subscription-wide Contributor or Owner access.
+Approve the telemetry destination, ingestion authentication, and retention separately. A future model-side query identity needs workspace query access; that is not a mailbox permission. Azure subscription Owner does not authorize mailbox creation or access, and the mailbox application does not need subscription-wide Contributor/Owner.
 
 ## 4. Can the runner and mailbox be in different tenants?
 
@@ -98,7 +98,7 @@ These are Azure-side approvals, not Exchange permissions. Azure subscription Own
 ```text
 Tenant A: Azure subscription
   Runner
-    |-- Azure identity A --> Azure Monitor Health Models and state storage in A
+    |-- Embedded OTel --> Application Insights / Log Analytics in A
     |
     `-- Mailbox application B --> Microsoft Graph --> test mailbox in tenant B
 
@@ -113,7 +113,7 @@ For the initial cross-tenant approach:
 2. We generate and protect a certificate/private key for the runner. Only the **public certificate** is supplied for registration in tenant B; nobody should email private keys or tokens.
 3. Tenant B's administrator grants that application's service principal the scoped Exchange roles.
 4. The runner acquires a Graph token from **tenant B**, using B's tenant ID, application client ID, and approved certificate.
-5. A separate Azure identity handles model ingestion and storage in tenant A.
+5. Embedded OTel exports telemetry to the approved Application Insights/Log Analytics destination in tenant A, independently of the Graph application identity. No worker-side model or state-store access is needed.
 
 This does not require moving the Azure subscription, migrating the mailbox, or enabling mailbox forwarding. Being a guest in tenant B does not automatically grant Exchange administration rights.
 
@@ -127,10 +127,10 @@ For a future hosted cross-tenant deployment, use an explicitly approved authenti
 
 | Path | Current status |
 | --- | --- |
-| Local per-service `npm run probe` worker | Reads its [Exchange config](./probes/exchange/config.json), runs on its own cadence, or executes one cycle with `--once`. Live execution requires approved targets, certificate credentials, and explicit live opt-in. With reporting disabled, it makes no Azure reporting/provider queries and can target an approved mailbox tenant independently of the Azure CLI subscription. Real cross-tenant operation has not been validated. |
+| Local per-service `npm run probe` worker | Reads its [Exchange config](./probes/exchange/config.json), runs on its own cadence, or executes once with `--once`. Live execution requires approved targets, certificate credentials, and explicit live opt-in. Console mode exports nothing to Azure; Azure Monitor mode embeds OTel export in the same process. The Graph token targets the approved mailbox tenant independently of the Azure CLI subscription. Real cross-tenant operation has not been validated. |
 | Intended Azure Container Apps host | **Not implemented or deployed.** Local scheduling exists, but container hosting, hosted credential selection, and replica ownership must be established separately. |
 | Azure-hosted live runner in A, mailbox in B | **Not implemented.** It needs separately authorized mailbox-tenant credentials, secure loading/rotation, and end-to-end validation. |
-| Local worker reporting to a model in another tenant | **Not validated as a separated-identity setup.** Default Azure credentials can select the same certificate environment variables used for Graph. Do not assume reports automatically use the Azure CLI identity. |
+| Local telemetry export and downstream model evaluation | Export uses the configured workspace-based Application Insights destination, not a worker health-report client. Log Analytics/model queries and their authorization must be configured separately. No live end-to-end cross-tenant ingestion is established by local tests. |
 
 See [authentication selection](./runner/src/runtime.ts), the [config-driven worker](./runner/README.md), and the [Exchange handler](./probes/exchange/src/probe.ts). No cross-tenant hosting changes are part of this document.
 
@@ -151,9 +151,9 @@ Before the first send:
 3. Review Entra application grants as well. That Exchange test command does **not** account for separately granted Entra permissions.
 4. Allow for propagation: Microsoft documents Exchange application-permission caching of roughly 30 minutes to two hours. The test command bypasses that cache; a passing result alone does not prove live Graph authorization is ready.
 5. Verify actual Graph access to the approved mailbox and denial for the known control mailbox. An approved Inbox-folder-metadata request is sufficient for the negative check; do not read messages, send, or delete there. A missing mailbox/404 is not proof of correctly scoped authorization.
-6. Configure the approved Exchange targets and live mode, then run `npm run probe -- --config probes/exchange/config.json --once` after explicit live opt-in. Inspect results for delivery confirmation and successful cleanup; `--once` limits the cycle count, not the meaning of its measured outcome. Authentication/permission failures mean the test could not execute, not that Exchange is down. A one-target integration check needs an explicit `MIN_FRESH_SAMPLES=1` override; it is not tenant-wide evidence.
+6. Configure the approved Exchange target and live mode, then run `npm run probe -- --config probes/exchange/config.json --once` after explicit live opt-in. Inspect results for delivery confirmation and cleanup. Authentication/permission failures mean the test could not execute, not that Exchange is down. One target is sufficient to report measurements; no worker-side sample/health policy is required, and it is not tenant-wide evidence.
 
-Only after this works should we enable a schedule and Azure Monitor Health Models reporting. One mailbox validates the integration, not a tenant-wide availability claim. Monitor certificate expiry, cleanup failures, and stopped-runner/stale-evidence behavior before relying on it operationally.
+Only after this works should we enable a schedule and Azure telemetry export. Analyze success rate, latency, and missing observations in Log Analytics; model-side query signals are a separate step. Monitor certificate expiry, cleanup failures, and stopped-worker evidence before relying on it operationally.
 
 ## 6. Copy-and-send request
 
