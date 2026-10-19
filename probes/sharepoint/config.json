@@ -1,0 +1,14 @@
+{
+  "type": "sharepoint",
+  "enabled": true,
+  "intervalSeconds": 300,
+  "timeoutSeconds": 45,
+  "mode": "simulation",
+  "cohort": "sharepoint-global",
+  "reportToHealthModel": false,
+  "targets": [
+    { "id": "sharepoint-probe-001" },
+    { "id": "sharepoint-probe-002" },
+    { "id": "sharepoint-probe-003" }
+  ]
+}

@@ -12,5 +12,11 @@
     "outDir": "dist",
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "health-model/src/**/*.ts", "health-model/tests/**/*.ts",
+    "probes/*/src/**/*.ts", "probes/*/tests/**/*.ts", "probes/src/**/*.ts",
+    "runner/src/**/*.ts", "runner/tests/**/*.ts",
+    "shared/src/**/*.ts", "shared/tests/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

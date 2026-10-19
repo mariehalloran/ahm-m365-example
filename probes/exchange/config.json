@@ -1,0 +1,14 @@
+{
+  "type": "exchange",
+  "enabled": true,
+  "intervalSeconds": 60,
+  "timeoutSeconds": 45,
+  "mode": "simulation",
+  "cohort": "exchange-global",
+  "reportToHealthModel": false,
+  "targets": [
+    { "id": "exchange-probe-001" },
+    { "id": "exchange-probe-002" },
+    { "id": "exchange-probe-003" }
+  ]
+}

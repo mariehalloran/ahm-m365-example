@@ -1,5 +1,0 @@
-{
-  "status": 200,
-  "ageSeconds": 3600,
-  "body": { "value": [{ "id": "Exchange", "service": "Exchange Online", "status": "serviceOperational" }] }
-}

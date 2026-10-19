@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "health-model/src/**/*.ts",
+    "probes/*/src/**/*.ts",
+    "probes/src/**/*.ts",
+    "runner/src/**/*.ts",
+    "shared/src/**/*.ts"
+  ]
+}

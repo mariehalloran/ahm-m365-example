@@ -2,13 +2,17 @@
 
 ## What this implementation demonstrates
 
-The reusable boundary is a versioned synthetic result, not a Graph response. Exchange and SharePoint use the same scheduling, normalization, aggregation, report submission and telemetry flow. Simulation also uses that flow rather than a separate mock AHM client.
+The reusable boundary is a versioned synthetic result, not a Graph response. Exchange and SharePoint use the same generic worker and execution/reporting components, but each has its own config, process, targets, and cadence. Simulation also uses the normalized result and policy flow.
+
+The single root npm package separates `health-model/`, `probes/exchange/`, `probes/sharepoint/`, `probes/teams/`, `runner/` and `shared/`. **The health model is deployed first.** Azure Container Apps is the intended worker host, but hosting is not implemented or deployed. Each config-driven worker executes its service handlers in-process on an independent cadence.
 
 The hierarchy should represent customer journeys. Provider status and integration health are distinguishable from those journeys. A provider incident is informative without being proof of tenant impact; a provider-operational response cannot erase failed tenant probes.
 
 These are design findings, not measurements from a production tenant. No supplied mailbox, site, Dan's PoC or real-user study was available.
 
 ## Teams: deliberately staged
+
+**NOT IMPLEMENTED:** [the Teams folder](../probes/teams/README.md) contains a disabled config, not a Teams handler or simulated journey. Enabling the unsupported service fails explicitly; an empty Teams model entity must not imply healthy experience.
 
 | Stage | Journey | Requirements / limitations |
 | --- | --- | --- |
@@ -39,20 +43,28 @@ Use a dedicated site/library, selected permissions, and a separately provisioned
 - Geography/office labels do not change execution location. Deploy separately governed runners near the actual networks before calling this regional evidence.
 - Define minimum independent identities, coverage, weighting and fresh-window size using observed data.
 - The current p95 is nearest-rank over one execution cycle; it is not a historical SLO percentile.
-- Consecutive failures/recoveries reduce flapping but introduce detection/recovery delay. Validate the default five-minute schedule against customer expectations.
+- Consecutive failures/recoveries reduce flapping but introduce detection/recovery delay. Validate each service's configured cadence against customer expectations, including skipped slots when a cycle overruns.
 - Unknown must override historical health immediately. Unsupported or unavailable telemetry should never be silently treated as healthy.
 - Decide whether partial regional impact degrades or makes the tenant unhealthy. Keep that dependency policy in AHM.
 
 ## Recommended product sequence
 
-1. **Reference implementation and deployment template now.** Preserve observable boundaries and permission prerequisites. Collect measured end-to-end deployment and synthetic reliability data.
+1. **Health model first.** Establish and validate the [isolated model](../health-model/README.md), its dependencies, suppressed provider context and missing-evidence behavior before deploying or integrating a runner.
 2. **Curated external-synthetic contract next.** Versioned schemas, expiring evidence, correlation/drill-down references, execution diagnostics and explicitly separate provider annotations.
 3. **AHM-owned cohort/temporal evaluation.** First-class coverage, freshness, minimum samples, percentile thresholds and stabilization should avoid each customer writing a second policy engine.
 4. **Curated Exchange and SharePoint templates.** Guided dedicated-resource setup, permission-scoping validation, cleanup verification, cost estimates, and safe disablement.
-5. **Managed runner only after tenant-consent and placement design.** Customers should select approved templates/configuration first; arbitrary customer code creates a substantially larger isolation, identity, network, supply-chain and operational support burden.
+5. **ACA runner only after model validation, tenant-consent and placement design.** Implement hosting and explicit authentication separately. A future runner may execute independent probe processes and validate normalized results; arbitrary customer code creates a substantially larger isolation, identity, network, supply-chain and operational support burden.
 6. **Teams/media later.** Only after supported identity, licensing, endpoints and actual journey semantics are established.
 
-Do not start with a Marketplace listing or claim managed M365 monitoring based solely on this PoC. The strongest next experiment is a real Exchange cohort with provider-operational/tenant-failing evidence and verified Unknown after the runner stops.
+Do not start with a Marketplace listing or claim managed M365 monitoring based solely on this PoC. After model validation, a real Exchange cohort should demonstrate provider-operational/tenant-failing evidence and verified missing-evidence behavior after the runner stops.
+
+## Future evidence and OTel summaries
+
+Retain structured per-email/per-probe results with opaque correlation/test/cohort identifiers, outcome, diagnostic category, send/delivery timings and cleanup status. OTel success counters and response-time histograms should complement, not replace, those results. Keep service/cohort/outcome labels low-cardinality; never use addresses, email/message/correlation IDs or per-run test IDs as metric labels.
+
+Prefer a delivery-duration histogram in seconds from send initiation to matching Inbox observation, explicitly including send-request and polling latency. Keep send-accepted time, overall probe, authentication and cleanup measurements separate. Authentication failure means the test was unexecutable, not that mail delivery failed. Do not fabricate a delivery-duration sample for an unobserved delivery.
+
+The runner should export metric summaries to an approved telemetry backend and **separately** evaluate evidence and submit expiring health reports to Azure Monitor Health Models. OTel is not a direct Health Models ingestion path; provider context remains separate and absent evidence is never Healthy. Process execution, OTel SDK/exporters and additional timing fields are future design only. See [full event and metric semantics](./operations.md#future-process-and-otel-boundary-not-implemented).
 
 ## What AHM should store vs reference
 

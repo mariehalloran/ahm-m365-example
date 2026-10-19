@@ -1,0 +1,10 @@
+{
+  "type": "teams",
+  "enabled": false,
+  "intervalSeconds": 120,
+  "timeoutSeconds": 45,
+  "mode": "simulation",
+  "cohort": "teams-global",
+  "reportToHealthModel": false,
+  "targets": []
+}

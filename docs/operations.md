@@ -1,87 +1,99 @@
-# Operations, demonstration, and safety
+# Operations and safety
+
+## Current scope
+
+The [sample health model](../health-model/README.md) is deployed. Config-driven workers run one service per process with an independent cadence. Azure Container Apps is the intended host, but container hosting and hosted Graph identity selection are not implemented.
+
+Exchange and SharePoint have real handlers plus deterministic outcome simulation. [Teams](../probes/teams/README.md) has a disabled config only. There is no Microsoft 365 Service Health collector or global monitoring-pipeline producer in the active worker.
+
+## Run one service
+
+```sh
+npm run probe -- --config probes/exchange/config.json --once
+npm run probe -- --config probes/exchange/config.json
+# Separate terminal/process:
+npm run probe -- --config probes/sharepoint/config.json
+```
+
+The checked-in configs are simulation examples with reporting disabled. They generate no real email/files and make no Azure reporting calls. Change that service's config and restart its worker; there is no hot reload or shared master schedule.
+
+First execution is immediate. Each worker skips and logs missed slots instead of overlapping its own cycles or building a backlog. SIGINT/Ctrl+C and SIGTERM cancel active work and allow bounded cleanup. Use one authoritative process per config/cohort: storage ETags detect conflicting writers but cannot prevent duplicate test sends.
+
+See the [worker guide](../runner/README.md) for strict config fields, policy overrides, isolated state, and compiled startup.
 
 ## Identity and permission gates
 
-The default deployment does not grant Microsoft Graph tenant permissions. Simulated outcomes still pass through the real normalizer, aggregation, and AHM ingestion.
+Do not enable live mode against real-user resources.
 
-Before enabling live mode:
+1. Obtain approved dedicated mailbox/site resources and an accountable owner. For Exchange, use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md).
+2. Scope Exchange `Application Mail.ReadWrite` and `Application Mail.Send` through Exchange RBAC for Applications to only the approved mailbox. Audit broader Entra grants and verify allowed/denied access.
+3. For SharePoint, use [Sites.Selected](https://learn.microsoft.com/en-us/graph/permissions-selected-overview) with an explicit write grant to the approved site. The handler enumerates the site's drives before using the configured folder.
+4. Configure certificate-backed application authentication through `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_CERTIFICATE_PATH`; keep the PEM/private key ignored and readable only by its owner.
+5. Set the file's `mode` to `live` and separately opt in with `ENABLE_LIVE_M365=true`.
+6. Run one cycle with `--once` and inspect delivery/download and cleanup evidence before enabling a schedule.
 
-1. Review Dan's Exchange PoC with its owner; no source path was provided to reuse or verify.
-2. Approve a dedicated shared test mailbox. Never use a real user's or executive's mailbox. Confirm licenses, transport policy, retention, and mail-flow rules with the tenant owner.
-3. Identify the Function managed identity's **application/client ID** and **service-principal object ID**. They are different identifiers.
-4. Use [Exchange RBAC for Applications](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac) to scope `Application Mail.ReadWrite` and `Application Mail.Send` to only the approved test mailbox(es). Register the service-principal pointer and define a resource scope in Exchange under administrator supervision.
-5. Validate effective access with `Test-ServicePrincipalAuthorization` for an allowed mailbox and a denied control mailbox. Do not combine scoped RBAC with broad equivalent Entra mail application grants: permissions are additive and the broad grant bypasses the intended scope.
-6. An authorized tenant administrator separately grants Graph `ServiceHealth.Read.All` application permission for service-health queries. Do not add Directory.Read.All or Organization.Read.All just to create a control-plane probe.
-7. For SharePoint, use [Sites.Selected](https://learn.microsoft.com/en-us/graph/permissions-selected-overview) with an explicit write grant to a dedicated approved site. Confirm the selected drive/folder is intended for synthetic files. More granular selected permissions can be investigated separately; the current handler enumerates the site's drives.
-8. Confirm negative authorization tests and cleanup behavior before setting `ENABLE_LIVE_M365=true`.
+No user's password, interactive mailbox sign-in, directory-wide read permission, or `ServiceHealth.Read.All` is needed by these workers. A future Service Health collector would request that permission separately.
 
-Azure RBAC and Microsoft Graph/Exchange authorization are separate systems. Being Azure Owner does not authorize mailbox operations. Deployment must not silently request tenant-wide admin consent.
+Azure RBAC and Microsoft 365 authorization are separate. Being Azure Owner does not authorize mailbox operations. This sample uses public-cloud endpoints only; sovereign clouds and hosted cross-tenant authentication are not implemented.
 
-The sample is public-cloud-only (`management.azure.com`, `graph.microsoft.com`, public Azure Blob and SharePoint endpoints). Cross-tenant M365 and sovereign-cloud authentication are not implemented. The Azure managed identity must be usable in the approved Microsoft 365 tenant; otherwise design an approved workload identity flow rather than adding a client secret.
+## Reporting and state
 
-## Optional Dev Proxy
+`reportToHealthModel: false` disables Azure report submission, not live Microsoft 365 mutations. These are independent approvals. With reporting enabled, require an approved `AHM_MODEL_ID` and model-scoped ingestion access. Use separate simulation/live models.
 
-The included [Dev Proxy configuration](../mocks/devproxyrc.json) and [response file](../mocks/devproxy-service-health.json) follow the documented MockResponsePlugin format. Run an installed Dev Proxy with:
+Azure reporting uses the default Azure credential, which can select the same certificate environment variables used for Graph. Do not assume Azure CLI identity and mailbox identity are automatically separated.
 
-```sh
-devproxy --config-file mocks/devproxyrc.json
-```
+Each worker reports only its configured cohort, with execution mode and modeled/measured duration meaning. It does not update shared provider, Graph-availability, or runner-heartbeat entities. One successful service must not make the whole pipeline appear healthy.
 
-Use the tool's approved local certificate setup. Node.js 24 can route fetch requests through `HTTPS_PROXY` with `NODE_USE_ENV_PROXY=1`; configure `NODE_EXTRA_CA_CERTS` with the explicitly trusted local proxy certificate. Set `NO_PROXY` for identity, Azure management and storage hosts so only Graph traverses the proxy. Never set `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+History is isolated by service, mode, config, and reporting destination. Optional Blob state requires appropriate storage access. Invalid and disabled configs do not acquire credentials, execute probes, or write state/reports.
 
-This configuration supplies service-health responses only. It deliberately blocks unmocked Graph requests; it is **not** a complete stateful mock of mailbox or file operations. The automated tests provide those HTTP-level journeys. Live-mode credentials are still required for real token acquisition, and identity/ARM operations are never faked. Until identity permissions are approved, use simulation mode and Graph-shaped fixtures, not a fake production bearer token.
+The default policy requires three fresh samples and full configured-target coverage. One test resource is an integration check, not statistical evidence of tenant-wide availability. Do not weaken freshness/coverage just to make the model green.
 
-Dev Proxy is optional and is not installed or started automatically. Its configuration has not been exercised against an installed Dev Proxy in the initial implementation.
-
-## Data handling and retention
-
-The normalized contract is strict and has no message/document body fields. Telemetry includes probe IDs, opaque correlation IDs, timings, states, categories and limited provider issue metadata. Mailbox addresses, tokens, HTTP authorization headers, message subjects, Graph error bodies and download URLs are never intentionally logged.
-
-The synthetic message body is fixed boilerplate. The SharePoint document contains only the run's generated correlation ID. These artifacts live only in dedicated test resources and are not sent to AHM.
-
-AHM stores state and a limited context, with up to five failed-probe correlation IDs and five provider issue IDs. App Insights retains detailed execution events; confirm the deployed retention and regional storage requirements. Blob history contains only cohort health/counters/expiry, not mailbox data.
-
-Do not enable HTTP body logging, token logging or default identity debug logs. Keep separate development/production models, identities and test resources. Conduct privacy/security review before expanding beyond approved dedicated probes.
+Reporting requires `REPORT_TTL_SECONDS >= intervalSeconds + timeoutSeconds + 90` to leave room for cleanup, ingestion, and TTL rounding. Expired external signals are removed and entity health is recalculated; verify stopped-worker behavior against the final model rather than assuming expiration always becomes Unknown.
 
 ## Timeout, retries and cleanup
 
-- The whole cycle is bounded at 170 seconds; the Functions host allows four minutes for final cleanup and failure handling.
-- At most three probes execute concurrently. Requests time out at 15 seconds and safe operations retry up to three times.
-- Size each runner's probe list so it can finish inside the cycle budget. A large set of slow probes fails the cycle explicitly rather than publishing a misleading completed heartbeat.
-- Mail draft creation and send are not retried: an ambiguous response could otherwise duplicate mail. Reads, idempotent deletes and same-path uploads can retry.
-- Retry-After is honored within the bounded budget. A delay beyond ten seconds yields an explicit failure rather than violating the provider's requested delay.
-- Each probe gets its own timeout; cancellation flows into Graph calls and sleeps.
-- Cleanup gets a separate ten-second budget, even when the journey timeout is cancelled.
-- Cleanup uses only IDs observed in that run or an exact UUID-containing subject/path. It never enumerates message bodies, deletes by date, or purges a whole mailbox/library.
-- A mail delivery arriving **after** final cleanup can leave a test artifact. Review the dedicated mailbox's synthetic messages and retention policy periodically. A delayed-arrival sweeper must verify exact ownership and should be designed/approved before scale-out. Deleted messages/files may remain in Deleted Items/recycle bin under the workload's retention policy.
-- Failed cleanup emits `probe-cleanup-failed` and cannot be reported as success. Authentication, permission and ambiguous cleanup failures should be investigated before repeated runs accumulate artifacts.
+- A cycle is bounded at 170 seconds; size each target list to fit.
+- At most three probes execute concurrently. Requests time out at 15 seconds; safe operations retry up to three times.
+- Configured per-probe timeouts cancel requests and polling. Cleanup gets an independent ten-second budget.
+- Draft creation and mail send are not retried after ambiguous responses. Reads, idempotent deletes, and same-path uploads can retry.
+- Retry-After is honored within the bounded budget. A requested delay beyond ten seconds fails explicitly rather than retrying too early.
+- Cleanup uses observed IDs or an exact UUID-containing subject/path, never a date range, whole mailbox, or whole library.
+- Late delivery can arrive after cleanup and leave an artifact. Agree on an ownership-checked review/retention process before scaling.
+- Cleanup failure is explicit and cannot produce a successful probe result. Normal deletion can retain data in Deleted Items/recycle bins or under retention policies.
 
-## Demonstration matrix
+## Data handling and retention
 
-Offline scenarios do not change Azure. To demonstrate the real model, replace `npm run demo` with `npm run cycle`, use exported deployment outputs, and account for the two-cycle temporal policy.
+Structured results retain opaque probe/correlation IDs, timing, outcome, and bounded diagnostics. Mailbox addresses, bodies, subjects/message IDs, tokens, authorization headers, response bodies, and download URLs are not intended to enter logs or health reports.
 
-| Scenario | Local command/settings | Expected tenant / provider / pipeline |
-| --- | --- | --- |
-| Healthy | `npm run demo` | Healthy / Healthy / Healthy |
-| Slow Exchange | `SYNTHETIC_SCENARIO=slow npm run demo` | Degraded / Healthy / Healthy |
-| Tenant-only failure | `SYNTHETIC_SCENARIO=failed npm run demo` | Unhealthy / Healthy / Healthy |
-| Confirmed provider incident | `SYNTHETIC_SCENARIO=failed PROVIDER_SCENARIO=degraded npm run demo` | Unhealthy / Degraded / Healthy |
-| Provider advisory only | `PROVIDER_SCENARIO=degraded npm run demo` | Healthy / Degraded context / Healthy |
-| Provider query unavailable | `PROVIDER_SCENARIO=unavailable npm run demo` | Healthy / Unknown / Healthy |
-| Expired test evidence | `SYNTHETIC_SCENARIO=stale npm run demo` | Unknown / Healthy / Healthy |
-| Insufficient samples | `MIN_FRESH_SAMPLES=4 npm run demo` | Unknown / Healthy / Healthy |
-| Runner stopped | Disable timer and wait beyond report TTL | Synthetic and heartbeat must expire to Unknown |
+Synthetic bodies contain fixed boilerplate or a generated correlation ID, not business data. Aggregation history contains states/counters/expiry rather than mailbox contents. The model-only deployment provisions no telemetry workspace; approve log retention and regional storage before hosting.
 
-For regional demos, create two cohort entities and matching `PROBES_JSON` cohorts. Inject per-probe `scenario` values. Do not change the default three-sample minimum without making the demo's weakened evidence explicit. AHM dependency/rollup policy determines how region impact affects the root; provider-only events never automatically propagate.
+Do not enable HTTP-body/token logging or disable TLS validation. Keep development and production identities, models, and test resources separate.
+
+## Future process and OTel boundary (not implemented)
+
+Each independently launched worker currently executes its own handlers in-process. A child-probe launcher and OTel SDK/exporter are not implemented.
+
+Retain every normalized result alongside future metric summaries. Current `durationMs` covers authentication and the journey **before cleanup**, not mail delivery alone. Additional phase measurements require a deliberate contract extension.
+
+| Planned instrument | Definition |
+| --- | --- |
+| `synthetic.probe.runs` counter | One increment per run with bounded service/cohort/outcome labels. Authentication/authorization failures are unexecutable, not failed mail delivery. |
+| `mailflow.delivery.duration`, histogram in seconds | Confirmed delivery only: send initiation immediately before the send request to matching Inbox observation. Includes request/polling latency, not exact transport time. |
+| `synthetic.probe.duration`, histogram in seconds | Overall run through cleanup; unlike current `durationMs`, includes cleanup. |
+| Authentication/cleanup duration histograms | Actual phase durations, emitted only when those phases execute. |
+
+Never use email addresses, message/correlation IDs, or per-run test IDs as metric dimensions. Do not fabricate delivery-duration samples for timeouts or unexecutable tests. A confirmed delivery followed by cleanup failure retains delivery evidence and explicit failing cleanup.
+
+**OTel is not direct Health Models ingestion.** Summaries complement evidence; the worker separately evaluates coverage/freshness and submits expiring states. Provider context remains separate, and missing/unexecutable data never becomes Healthy.
 
 ## Telemetry queries
 
-For workspace-based Application Insights, start with:
+For a separately configured workspace-based Application Insights deployment:
 
 ```kusto
 AppTraces
 | extend Event = parse_json(Message)
-| where tostring(Event.event) in ("cycle-failed", "probe-cleanup-failed", "provider-query-failed")
+| where tostring(Event.event) in ("service-execution-failed", "service-cycle-failed", "probe-cleanup-failed")
 | project TimeGenerated, Event
 | order by TimeGenerated desc
 ```
@@ -96,24 +108,12 @@ AppTraces
           Category=tostring(Event.diagnosticCategory)
 ```
 
-Use `traces`/`message`/`timestamp` instead when querying the Application Insights resource's classic query schema.
-
-Never infer a healthy pipeline solely from the presence of a started invocation. Only `cycle-completed` and the submitted completed-cycle heartbeat indicate successful reporting/persistence. If ARM is unavailable, the failure heartbeat might also fail: the last report's expiration is the fallback, not an indefinitely retained Healthy state.
+A started execution is not successful completion. Check service completion and reporting mode, plus report/state failures and freshness. These workers do not publish a global healthy heartbeat.
 
 ## Disablement and teardown
 
-1. Set Function app setting `AzureWebJobs.m365Synthetic.Disabled=true`. Verify no new invocations occur.
-2. Wait beyond the report TTL and verify both synthetic and heartbeat states become Unknown. Record preview-service evaluation lag.
-3. Revoke the workload's Exchange RBAC assignments, Graph app roles, and selected SharePoint site grant under the tenant owner's procedures.
-4. Review and remove only confirmed synthetic artifacts from the dedicated resources. Never purge a real-user mailbox or an entire library.
-5. Remove the sample's resources using the deployment resource inventory. Delete the resource group only after verifying it contains **only** disposable sample resources and obtaining deletion approval.
-
-## Required live sign-off
-
-- [ ] Confirm real model state changes and parent propagation.
-- [ ] Stop reports and observe Unknown after expiration.
-- [ ] Confirm a real dedicated Exchange delivery, slow/timeout behavior, and safe cleanup.
-- [ ] Confirm denied mailbox/site authorization.
-- [ ] Confirm state survives Function restart and overlapping writers fail safely.
-- [ ] Confirm alert delivery to an approved action-group receiver.
-- [ ] Approve retention, costs, privacy and rollout scope.
+1. Stop the service process and confirm no new tests run; wait for bounded cleanup.
+2. Verify stopped/expired evidence cannot remain falsely Healthy.
+3. Revoke only the approved application permissions under the tenant owner's procedure.
+4. Review/remove only confirmed synthetic artifacts, respecting retention.
+5. Remove dedicated cloud resources only after owner approval. Never delete a shared resource group or unrelated resources.
