@@ -28,8 +28,8 @@ class WorkerTemplateContracts(unittest.TestCase):
 
     def test_live_gate_uses_exact_lowercase_values(self):
         environment = self.app["properties"]["template"]["containers"][0]["env"]
-        self.assertIn("if(parameters('enableLiveProbes'), 'true', 'false')", environment)
-        self.assertNotIn("string(parameters('enableLiveProbes'))", environment)
+        values = {item["name"]: item.get("value") for item in environment}
+        self.assertEqual(values["ENABLE_LIVE_M365"], "[if(parameters('enableLiveProbes'), 'true', 'false')]")
         self.assertFalse(self.template["parameters"]["enableLiveProbes"]["defaultValue"])
         self.assertFalse(self.template["parameters"]["deployWorkers"]["defaultValue"])
         self.assertEqual(self.module["condition"], "[parameters('deployWorkers')]")
@@ -42,7 +42,7 @@ class WorkerTemplateContracts(unittest.TestCase):
         self.assertEqual(properties["template"]["containers"][0]["image"], "[parameters('workerImage')]")
         self.assertEqual(properties["template"]["scale"], {"minReplicas": 1, "maxReplicas": 1})
 
-    def test_minimal_report_permission_and_optional_workspace(self):
+    def test_minimal_report_permission_without_log_forwarding(self):
         role = next(item for item in self.resources if item["type"] == "Microsoft.Authorization/roleDefinitions")
         self.assertEqual(role["properties"]["permissions"][0]["actions"], [
             "Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action",
@@ -54,11 +54,29 @@ class WorkerTemplateContracts(unittest.TestCase):
         self.assertFalse(registry["properties"]["adminUserEnabled"])
         self.assertFalse(registry["properties"]["anonymousPullEnabled"])
 
+    def test_worker_has_only_config_secrets_and_identity_environment(self):
+        secrets = self.app["properties"]["configuration"]["secrets"]
+        self.assertEqual({item["name"] for item in secrets}, {"monitoring-config", "service-config"})
+        environment = self.app["properties"]["template"]["containers"][0]["env"]
+        self.assertEqual({item["name"] for item in environment}, {
+            "SYNTHETIC_CONFIG_REVISION", "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "ENABLE_LIVE_M365",
+        })
+        self.assertFalse(any("secretRef" in item for item in environment))
+        self.assertNotIn("applicationInsightsConnectionString", self.template["parameters"])
+        self.assertNotIn("applicationInsightsConnectionString", self.worker["parameters"])
+
     def test_mounted_configuration_changes_roll_the_worker_revision(self):
         environment = self.app["properties"]["template"]["containers"][0]["env"]
-        self.assertIn("SYNTHETIC_CONFIG_REVISION", environment)
-        self.assertIn("uniqueString(string(parameters('projectConfig')), string(parameters('serviceConfig')))", environment)
+        revision = next(item["value"] for item in environment if item["name"] == "SYNTHETIC_CONFIG_REVISION")
+        self.assertEqual(revision, "[uniqueString(string(parameters('projectConfig')), string(parameters('serviceConfig')))]")
         self.assertEqual(self.app["properties"]["template"]["terminationGracePeriodSeconds"], 60)
+
+    def test_worker_selection_checks_every_configured_journey(self):
+        services = self.template["variables"]["services"]
+        self.assertIn(".enabled", services)
+        self.assertIn(".scenarios", services)
+        self.assertIn("items(", services)
+        self.assertNotIn("serviceJourneys", self.template["variables"])
 
 
 if __name__ == "__main__":

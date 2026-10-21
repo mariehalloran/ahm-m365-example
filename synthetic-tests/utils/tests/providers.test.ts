@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { InMemoryLogRecordExporter } from "@opentelemetry/sdk-logs";
-import { AggregationTemporality, InMemoryMetricExporter } from "@opentelemetry/sdk-metrics";
 import { exchangeProviders } from "../../exchange/src/providers.js";
 import { teamsProviders } from "../../teams/src/providers.js";
 import { sharepointProviders } from "../../sharepoint/src/providers.js";
@@ -9,7 +7,7 @@ import { AuthenticatedHttp } from "../src/http.js";
 import { baseResult, type ProbeHandler } from "../src/probes.js";
 import { collectProviderSources, PROVIDER_SOURCE_TIMEOUT_MS } from "../src/provider-collection.js";
 import { providerLog, type ProviderDiagnostic } from "../src/provider-diagnostics.js";
-import { createResultTelemetry } from "../src/results.js";
+import { createResultOutput } from "../src/results.js";
 import { getConnectivityMetricsForExchange, getMessageVolumeMetricsForTeamsChat, serviceActivityPath, serviceActivityWindow } from "../src/service-activity.js";
 import { parseServiceConfig, serviceSettings, type ServiceConfig } from "../src/service-config.js";
 import { getServiceHealthIssues, getServiceHealthOverviews, normalizeServiceHealthIssue } from "../src/service-health.js";
@@ -46,17 +44,13 @@ function client(reply: (url: string, init?: RequestInit) => Response | Promise<R
   const graph = new GraphClient(new AuthenticatedHttp({ getToken: token }, "https://graph.microsoft.com/.default", {
     fetch: fetcher, sleep: async () => undefined,
   }));
+  vi.spyOn(auth, "createLiveGraphClient").mockReturnValue(graph);
   return { graph, fetcher, token };
 }
 const json = (value: unknown) => new Response(JSON.stringify(value));
 const memory = () => {
-  const logs = new InMemoryLogRecordExporter();
-  const metrics = new InMemoryMetricExporter(AggregationTemporality.DELTA);
-  // Keep the in-memory snapshots inspectable after the worker's real SDK shutdown.
-  vi.spyOn(logs, "shutdown").mockResolvedValue(undefined);
-  vi.spyOn(metrics, "shutdown").mockResolvedValue(undefined);
   const events = { emit: vi.fn() };
-  return { logs, metrics, events, results: createResultTelemetry({ logs, metrics }, events) };
+  return { events, results: createResultOutput(events) };
 };
 const overview = (type: ServiceConfig["type"] = "exchange") => ({ id: "reported-service", service: names[type], status: "serviceOperational" });
 const activity = (type: "exchange" | "teams" = "exchange") => ({
@@ -283,13 +277,12 @@ describe("read-only Graph provider clients", () => {
 });
 
 describe("isolated once-per-cycle provider diagnostics", () => {
-  it("starts the journey without waiting for a slow diagnostic source and flushes its late records", async () => {
+  it("starts the journey without waiting for a slow diagnostic source and outputs its late records", async () => {
     vi.useFakeTimers();
+    client(() => json({ value: [] }));
     const results = {
       record: vi.fn(),
       recordDiagnostic: vi.fn(),
-      forceFlush: vi.fn(async () => undefined),
-      shutdown: vi.fn(async () => undefined),
     };
     const events = { emit: vi.fn() };
     const handler = vi.fn(async probe => ({
@@ -312,18 +305,16 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(results.record).toHaveBeenCalledTimes(2);
-    expect(results.recordDiagnostic).not.toHaveBeenCalled();
+    expect(events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic")).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(PROVIDER_SOURCE_TIMEOUT_MS);
     await pending;
-    expect(results.recordDiagnostic).toHaveBeenCalledOnce();
-    expect(results.forceFlush).toHaveBeenCalledTimes(2);
-    expect(results.shutdown).toHaveBeenCalledOnce();
+    expect(events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic")).toHaveLength(1);
     expect(events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
       providers: { configured: 1, succeeded: 0, failed: 1, skipped: 0, records: 0 },
     }));
     expect(results.record.mock.calls.every(([attempt]) => attempt.success)).toBe(true);
   });
-  it.each(["exchange", "teams", "sharepoint"] as const)("collects each %s source once with two targets and preserves SDK journey counts", async type => {
+  it.each(["exchange", "teams", "sharepoint"] as const)("collects each %s source once with two targets and preserves journey counts", async type => {
     const service = parseServiceConfig({
       ...rawConfig(type), serviceHealth: true, serviceActivity: { enabled: type !== "sharepoint" },
     });
@@ -332,7 +323,6 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         : url.includes("/issues") ? [{ id: "issue", service: names[type], status: "serviceDegradation", title: "Provider announcement" }]
           : [{ intervalStartDateTime: new Date(Date.now() - 30 * 60_000).toISOString().replace(/:\d\d\.\d\d\dZ$/, ":00.000Z"), percentage: 99, value: 2 }],
     }));
-    // Freeze wall time only, leaving SDK timeout/flush machinery real.
     vi.spyOn(Date, "now").mockReturnValue(now());
     const telemetry = memory();
     const stepName = type === "exchange" ? "create-draft" : type === "teams" ? "post-message" : "verify-drive";
@@ -348,20 +338,19 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       expect(handler).toHaveBeenCalledTimes(2);
       expect(http.fetcher).toHaveBeenCalledTimes(type === "sharepoint" ? 2 : 3);
       expect(http.fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
-      const records = telemetry.logs.getFinishedLogRecords();
+      const records = telemetry.events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic").map(([, data]) => data);
       expect(records.filter(record => record.body === "m365-service-health-overview")).toHaveLength(1);
       expect(records.filter(record => record.body === "m365-service-health-issue")).toHaveLength(1);
       expect(records.filter(record => record.body === "m365-service-activity")).toHaveLength(type === "sharepoint" ? 0 : 1);
-      const metrics = telemetry.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
-      expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value).toMatchObject({ count: 2, sum: 2 });
-      expect(metrics.find(metric => metric.descriptor.name === "synthetic.step.success")?.dataPoints[0]?.value).toMatchObject({ count: 2, sum: 2 });
-      expect(JSON.stringify(metrics)).not.toContain("provider.");
+      const observations = telemetry.events.emit.mock.calls.filter(([event]) => event === "synthetic-result").map(([, data]) => data.result);
+      expect(observations).toHaveLength(2);
+      expect(observations.every(result => result.success && result.steps.length === 1)).toBe(true);
+      expect(JSON.stringify(observations)).not.toContain("provider.");
       expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
         providers: { configured: type === "sharepoint" ? 2 : 3, succeeded: type === "sharepoint" ? 2 : 3, failed: 0, skipped: 0, records: type === "sharepoint" ? 2 : 3 },
       }));
     } finally {
       vi.restoreAllMocks();
-      await telemetry.results.shutdown();
     }
   });
   it.each([
@@ -380,7 +369,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         handler: async probe => ({ ...baseResult(probe, now()), success: true, durationMs: 100 }),
         createDependencies: () => ({ ...telemetry, telemetry: telemetry.events, graph: http.graph }),
       });
-      const records = telemetry.logs.getFinishedLogRecords();
+      const records = telemetry.events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic").map(([, data]) => data);
       expect(records.find(record => record.body === "m365-provider-collection-failed")?.attributes).toMatchObject({
         "provider.source": "serviceAnnouncement.healthOverviews", "provider.category": category,
         "provider.http_status": status, "provider.api_version": "v1.0", "provider.mode": "live",
@@ -390,8 +379,8 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
       }));
       expect(JSON.stringify(records)).not.toMatch(/PRIVATE-ERROR-BODY|test-only-token|private@example/);
-      expect(records.filter(record => record.body === "synthetic-result").map(record => record.attributes["probe.success"])).toEqual([true, true]);
-    } finally { vi.restoreAllMocks(); await telemetry.results.shutdown(); }
+      expect(telemetry.events.emit.mock.calls.filter(([event]) => event === "synthetic-result").map(([, data]) => data.result.success)).toEqual([true, true]);
+    } finally { vi.restoreAllMocks(); }
   });
   it("reports no-data for missing exact service and invalid beta without fabricating serviceOperational", async () => {
     const http = client(url => json({
@@ -408,7 +397,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     expect(JSON.stringify(recordDiagnostic.mock.calls)).not.toContain("serviceOperational");
   });
   it.each(["invalid-value", "empty", "http-error", "invalid-json"] as const)(
-    "keeps beta %s diagnostic-only while stable context and successful journey metrics report", async failure => {
+    "keeps beta %s diagnostic-only while stable context and successful journey results report", async failure => {
       const http = client(url => {
         if (url.includes("healthOverviews")) return json({ value: [overview()] });
         if (url.includes("/issues")) return json({ value: [] });
@@ -425,20 +414,20 @@ describe("isolated once-per-cycle provider diagnostics", () => {
           handler: async probe => ({ ...baseResult(probe, now()), success: true, durationMs: 100 }),
           createDependencies: () => ({ ...telemetry, telemetry: telemetry.events, graph: http.graph }),
         });
-        const logs = telemetry.logs.getFinishedLogRecords();
+        const logs = telemetry.events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic").map(([, data]) => data);
         expect(logs.filter(log => log.body === "m365-service-health-overview")).toHaveLength(1);
         expect(logs.filter(log => log.body === "m365-service-activity")).toHaveLength(0);
         expect(logs.find(log => log.body === "m365-provider-collection-failed")?.attributes).toMatchObject({
           "provider.api_version": "beta", "provider.source": "getConnectivityMetricsForExchange",
         });
-        const metrics = telemetry.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
-        expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value)
-          .toMatchObject({ count: 2, sum: 2 });
+        const results = telemetry.events.emit.mock.calls.filter(([event]) => event === "synthetic-result").map(([, data]) => data.result);
+        expect(results).toHaveLength(2);
+        expect(results.every(result => result.success)).toBe(true);
         expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
           providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
         }));
         expect(JSON.stringify(logs)).not.toContain("PRIVATE-BETA-FAILURE");
-      } finally { await telemetry.results.shutdown(); }
+      } finally { vi.restoreAllMocks(); }
     },
   );
   it("recollects stateless windows each cycle rather than reusing a watermark or appending metrics", async () => {

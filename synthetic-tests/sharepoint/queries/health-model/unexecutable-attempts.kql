@@ -1,9 +1,0 @@
-let EvaluationTime = now();
-AppMetrics
-| where _ResourceId =~ "__APPLICATION_INSIGHTS_RESOURCE_ID__"
-| where TimeGenerated between (EvaluationTime - 15m .. EvaluationTime)
-| where Name == "synthetic.probe.success"
-| where tostring(Properties["probe.mode"]) == "live" and tostring(Properties["probe.service"]) == "sharepoint"
-| where tostring(Properties["probe.journey"]) == "save-reopen-file"
-| where tostring(Properties["probe.outcome"]) == "unexecutable"
-| summarize Value = sum(ItemCount)

@@ -14,19 +14,15 @@ param deployWorkers bool = false
 param workerImage string = ''
 @description('Separate Microsoft 365 mutation gate; simulation deployments leave this false.')
 param enableLiveProbes bool = false
-@secure()
-param applicationInsightsConnectionString string = ''
 
 var modelName = projectConfig.healthModel.name
-var serviceJourneys = {
-  exchange: 'send-receive-mail'
-  teams: 'publish-channel-message'
-  sharepoint: 'save-reopen-file'
-}
 var services = filter(
   ['exchange', 'teams', 'sharepoint'],
   service =>
-    projectConfig.services[service].enabled && projectConfig.services[service].scenarios[serviceJourneys[service]]
+    projectConfig.services[service].enabled && !empty(filter(
+      items(projectConfig.services[service].scenarios),
+      scenario => scenario.value
+    ))
 )
 var resourceToken = uniqueString(resourceGroup().id, modelName)
 var registryName = 'crm365${resourceToken}'
@@ -130,7 +126,6 @@ module workers './worker.bicep' = [
       projectConfig: projectConfig
       serviceConfig: serviceConfigs[service]
       enableLiveProbes: enableLiveProbes
-      applicationInsightsConnectionString: applicationInsightsConnectionString
     }
     dependsOn: [reportAssignments, imagePullAssignments]
   }

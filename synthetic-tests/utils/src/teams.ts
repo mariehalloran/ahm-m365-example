@@ -4,6 +4,7 @@ import { AuthenticatedHttp, IntegrationError } from "./http.js";
 const identifier = z.string().min(1).max(2048).refine(value =>
   value.trim() === value && value !== "." && value !== ".." && !/[\u0000-\u001f\u007f]/.test(value));
 const createdPostSchema = z.object({ id: identifier, activityId: identifier });
+const createdReplySchema = z.object({ id: identifier });
 
 export function validateTeamsServiceUrl(value: string): string {
   // Match the original input: URL parsing alone silently removes dot segments and default ports.
@@ -71,5 +72,37 @@ export class TeamsBotClient {
     if (![200, 202, 204, 404].includes(response.status)) {
       throw new IntegrationError("cleanup-failure", response.status);
     }
+  }
+
+  async replyToActivity(
+    serviceUrl: string, conversationId: string, parentActivityId: string, text: string, signal: AbortSignal,
+  ): Promise<{ activityId: string }> {
+    const base = validateTeamsServiceUrl(serviceUrl);
+    if (!identifier.safeParse(conversationId).success || !identifier.safeParse(parentActivityId).success ||
+        !z.string().min(1).max(4000).safeParse(text).success) {
+      throw new IntegrationError("collector-failure");
+    }
+    const response = await this.http.request(
+      `${base}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(parentActivityId)}`,
+      {
+        method: "POST", redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "message", textFormat: "plain", text,
+          from: { id: `28:${this.applicationId}` },
+          conversation: { id: conversationId }, replyToId: parentActivityId,
+        }),
+      }, signal, false,
+    );
+    if (response.status !== 200 && response.status !== 201) {
+      await response.body?.cancel();
+      throw new IntegrationError("send-failure", response.status);
+    }
+    let raw: unknown;
+    try { raw = await response.json(); }
+    catch { throw new IntegrationError("malformed-response"); }
+    const parsed = createdReplySchema.safeParse(raw);
+    if (!parsed.success) throw new IntegrationError("malformed-response");
+    return { activityId: parsed.data.id };
   }
 }

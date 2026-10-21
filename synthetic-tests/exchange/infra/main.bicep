@@ -35,7 +35,7 @@ param workerEntrypoint string = 'dist/exchange/src/worker.js'
 @description('Optional existing Azure Container Registry hostname. Its scoped image-pull authorization must already be granted to this identity.')
 param registryServer string = ''
 
-@description('Project-root settings, including approved targets, OTEL and health-model destination. Supply a reviewed private configuration for live use.')
+@description('Project-root settings, including approved targets and health-model destination. Supply a reviewed private configuration for live use.')
 param projectConfig object = loadJsonContent('../../../monitoring.config.json')
 
 @description('Independent Exchange probe cadence in seconds.')
@@ -48,11 +48,6 @@ param intervalSeconds int = 60
 @maxValue(120)
 param timeoutSeconds int = 45
 
-@secure()
-@description('Connection string required only when root OTEL is enabled with azure-monitor destination. Does not select or enable OTEL.')
-param applicationInsightsConnectionString string = ''
-
-var useAzureMonitor = projectConfig.otel.enabled && projectConfig.otel.destination == 'azure-monitor'
 var runtimeProjectConfig = union(projectConfig, {
   services: union(projectConfig.services, {
     exchange: union(projectConfig.services.exchange, {
@@ -78,9 +73,6 @@ resource workerEnvironment 'Microsoft.App/managedEnvironments@2025-07-01' = if (
   name: environmentName
   location: location
   properties: {
-    appLogsConfiguration: {
-      destination: 'none'
-    }
     workloadProfiles: [
       {
         name: 'Consumption'
@@ -104,7 +96,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
-      secrets: concat([
+      secrets: [
         {
           name: 'exchange-config'
           value: string(exchangeConfig)
@@ -113,12 +105,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
           name: 'monitoring-config'
           value: string(runtimeProjectConfig)
         }
-      ], useAzureMonitor ? [
-        {
-          name: 'applicationinsights-connection-string'
-          value: applicationInsightsConnectionString
-        }
-      ] : [])
+      ]
       registries: empty(registryServer) ? [] : [
         {
           server: registryServer
@@ -142,7 +129,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
             '--config'
             '/etc/probe/exchange.json'
           ]
-          env: concat([
+          env: [
             {
               name: 'AZURE_CLIENT_ID'
               value: exchangeIdentity.properties.clientId
@@ -155,12 +142,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
               name: 'ENABLE_LIVE_M365'
               value: enableLiveProbe ? 'true' : 'false'
             }
-          ], useAzureMonitor ? [
-            {
-              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-              secretRef: 'applicationinsights-connection-string'
-            }
-          ] : [])
+          ]
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'

@@ -5,6 +5,7 @@ import { GraphClient } from "./graph.js";
 import { AuthenticatedHttp } from "./http.js";
 import type { ServiceConfig } from "./service-config.js";
 import { TeamsBotClient } from "./teams.js";
+import { probeServices } from "./contracts.js";
 
 export function createServiceCredential(
   env: NodeJS.ProcessEnv = process.env, authentication: ServiceConfig["graphAuthentication"] = "managed-identity",
@@ -48,7 +49,7 @@ export function createLiveTeamsBot(config: Config, env: NodeJS.ProcessEnv = proc
   const identity = parsed.data;
   const botTenant = identity.BOT_TENANT_ID.toLowerCase();
   if (identity.AZURE_TENANT_ID.toLowerCase() !== botTenant ||
-      config.probes.some(probe => probe.type === "teams-channel-message" && probe.tenantId?.toLowerCase() !== botTenant)) {
+      config.probes.some(probe => probeServices[probe.type].service === "teams" && probe.tenantId?.toLowerCase() !== botTenant)) {
     throw new ConfigurationError("Teams targets, bot credentials, and Graph observer must use the same approved tenant");
   }
   const credential = new ClientCertificateCredential(

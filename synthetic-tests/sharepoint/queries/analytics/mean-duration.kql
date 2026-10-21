@@ -1,8 +1,0 @@
-AppMetrics
-| where TimeGenerated between (ago(15m) .. now())
-| where Name == "synthetic.probe.duration"
-| where tostring(Properties["probe.service"]) == "sharepoint"
-| where tostring(Properties["probe.mode"]) == "live"
-| summarize DurationSeconds = sum(Sum), Measurements = sum(ItemCount) by _ResourceId
-| where Measurements > 0
-| project _ResourceId, MeanAttemptSeconds = DurationSeconds / Measurements

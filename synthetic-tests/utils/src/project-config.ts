@@ -12,10 +12,6 @@ const selection = {
 };
 export const projectConfigSchema = z.object({
   schemaVersion: z.literal("1.0"),
-  otel: z.object({
-    enabled: z.boolean().default(true),
-    destination: z.enum(["console", "azure-monitor"]).default("console"),
-  }).strict(),
   healthModel: z.object({
     name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,31}[a-zA-Z0-9]$/),
     subscriptionId: z.string().uuid(),
@@ -29,12 +25,16 @@ export const projectConfigSchema = z.object({
   services: z.object({
     exchange: z.object({
       ...selection,
-      scenarios: z.object({ "send-receive-mail": z.boolean().default(true) }).strict(),
+      scenarios: z.object({
+        "send-receive-mail": z.boolean().default(true), "edit-reopen-draft": z.boolean().default(true),
+      }).strict(),
       targets: z.array(target.extend({ mailbox: probeSchema.shape.mailbox }).strict()).max(30),
     }).strict(),
     teams: z.object({
       ...selection,
-      scenarios: z.object({ "publish-channel-message": z.boolean().default(true) }).strict(),
+      scenarios: z.object({
+        "publish-channel-message": z.boolean().default(true), "reply-channel-message": z.boolean().default(true),
+      }).strict(),
       targets: z.array(target.extend({
         tenantId: probeSchema.shape.tenantId, teamId: probeSchema.shape.teamId,
         channelId: probeSchema.shape.channelId, serviceUrl: probeSchema.shape.serviceUrl,
@@ -42,7 +42,9 @@ export const projectConfigSchema = z.object({
     }).strict(),
     sharepoint: z.object({
       ...selection,
-      scenarios: z.object({ "save-reopen-file": z.boolean().default(true) }).strict(),
+      scenarios: z.object({
+        "save-reopen-file": z.boolean().default(true), "rename-reopen-file": z.boolean().default(true),
+      }).strict(),
       targets: z.array(target.extend({
         siteId: probeSchema.shape.siteId, driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
       }).strict()).max(30),
@@ -96,7 +98,6 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceFileC
   }
   return parseServiceConfig({
     ...service, enabled, targets: selected.targets,
-    telemetry: project.otel.enabled ? project.otel.destination : "none",
   });
 }
 

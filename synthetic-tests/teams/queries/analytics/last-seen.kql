@@ -1,7 +1,0 @@
-AppMetrics
-| where TimeGenerated between (ago(15m) .. now())
-| where Name == "synthetic.probe.success" and ItemCount > 0
-| where tostring(Properties["probe.service"]) == "teams"
-| where tostring(Properties["probe.mode"]) == "live"
-| summarize LastSeen = max(TimeGenerated)
-| extend ReportingRecently = isnotnull(LastSeen) and LastSeen >= ago(5m)

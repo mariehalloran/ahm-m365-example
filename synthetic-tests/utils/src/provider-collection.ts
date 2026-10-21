@@ -2,7 +2,7 @@ import { z } from "zod";
 import { GraphClient, graphNextPagePath, type GraphApiVersion } from "./graph.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import type { ProviderCategory, ProviderDiagnostic, ProviderSource } from "./provider-diagnostics.js";
-import type { ResultTelemetry } from "./results.js";
+import type { ResultOutput } from "./results.js";
 import type { ServiceConfig } from "./service-config.js";
 
 export class ProviderCollectionError extends Error {
@@ -44,7 +44,7 @@ export interface ProviderSourceDefinition {
 export interface ProviderCollectionContext {
   service: ServiceConfig;
   graph?: GraphClient;
-  results: Pick<ResultTelemetry, "recordDiagnostic">;
+  results: Pick<ResultOutput, "recordDiagnostic">;
   signal: AbortSignal;
   now?: () => number;
 }

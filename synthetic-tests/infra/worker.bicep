@@ -12,10 +12,6 @@ param workerImage string
 param projectConfig object
 param serviceConfig object
 param enableLiveProbes bool
-@secure()
-param applicationInsightsConnectionString string
-
-var useAzureMonitor = projectConfig.otel.enabled && projectConfig.otel.destination == 'azure-monitor'
 
 resource app 'Microsoft.App/containerApps@2026-07-01' = {
   name: appName
@@ -31,15 +27,10 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
     configuration: {
       activeRevisionsMode: 'Single'
       registries: [{ server: registryServer, identity: identityResourceId }]
-      secrets: concat(
-        [
-          { name: 'monitoring-config', value: string(projectConfig) }
-          { name: 'service-config', value: string(serviceConfig) }
-        ],
-        useAzureMonitor
-          ? [{ name: 'applicationinsights-connection-string', value: applicationInsightsConnectionString }]
-          : []
-      )
+      secrets: [
+        { name: 'monitoring-config', value: string(projectConfig) }
+        { name: 'service-config', value: string(serviceConfig) }
+      ]
     }
     template: {
       terminationGracePeriodSeconds: 60
@@ -55,23 +46,13 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
             '--config'
             '/etc/probe/service.json'
           ]
-          env: concat(
-            [
-              // Workers read config once, so a config change must create a new revision.
-              { name: 'SYNTHETIC_CONFIG_REVISION', value: uniqueString(string(projectConfig), string(serviceConfig)) }
-              { name: 'AZURE_CLIENT_ID', value: identityClientId }
-              { name: 'AZURE_TENANT_ID', value: tenantId }
-              { name: 'ENABLE_LIVE_M365',               value: enableLiveProbes ? 'true' : 'false' }
-            ],
-            useAzureMonitor
-              ? [
-                  {
-                    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-                    secretRef: 'applicationinsights-connection-string'
-                  }
-                ]
-              : []
-          )
+          env: [
+            // Workers read config once, so a config change must create a new revision.
+            { name: 'SYNTHETIC_CONFIG_REVISION', value: uniqueString(string(projectConfig), string(serviceConfig)) }
+            { name: 'AZURE_CLIENT_ID', value: identityClientId }
+            { name: 'AZURE_TENANT_ID', value: tenantId }
+            { name: 'ENABLE_LIVE_M365', value: enableLiveProbes ? 'true' : 'false' }
+          ]
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
           volumeMounts: [{ volumeName: 'probe-config', mountPath: '/etc/probe' }]
         }

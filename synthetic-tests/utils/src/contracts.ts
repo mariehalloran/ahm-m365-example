@@ -9,6 +9,12 @@ export const categories = [
 ] as const;
 export type DiagnosticCategory = (typeof categories)[number];
 
+export const testTypes = [
+  "exchange-mail-flow", "exchange-draft", "sharepoint-file", "sharepoint-rename",
+  "teams-channel-message", "teams-channel-reply",
+] as const;
+export type TestType = (typeof testTypes)[number];
+
 export const probeServices = {
   "exchange-mail-flow": {
     service: "exchange", target: "Exchange Online", journey: "send-receive-mail", entityName: "exchange-global",
@@ -22,12 +28,25 @@ export const probeServices = {
     service: "teams", target: "Microsoft Teams", journey: "publish-channel-message", entityName: "teams-global",
     steps: ["authenticate", "post-message", "confirm-publication", "cleanup"],
   },
+  "exchange-draft": {
+    service: "exchange", target: "Exchange Online", journey: "edit-reopen-draft", entityName: "exchange-draft",
+    steps: ["authenticate", "create-draft", "update-draft", "read-draft", "cleanup"],
+  },
+  "teams-channel-reply": {
+    service: "teams", target: "Microsoft Teams", journey: "reply-channel-message", entityName: "teams-reply",
+    steps: ["authenticate", "post-message", "post-reply", "confirm-reply", "cleanup"],
+  },
+  "sharepoint-rename": {
+    service: "sharepoint", target: "SharePoint Online", journey: "rename-reopen-file", entityName: "sharepoint-rename",
+    steps: ["authenticate", "verify-drive", "upload-file", "rename-file", "read-file", "cleanup"],
+  },
 } as const;
 
 const isoDate = z.string().datetime({ offset: true });
 export const stepNames = [
   "authenticate", "create-draft", "send", "confirm-delivery", "cleanup",
   "post-message", "confirm-publication", "verify-drive", "upload-file", "read-file",
+  "update-draft", "read-draft", "post-reply", "confirm-reply", "rename-file",
 ] as const;
 export type StepName = (typeof stepNames)[number];
 export type ReportedStepName = Exclude<StepName, "authenticate" | "cleanup">;
@@ -51,7 +70,7 @@ export const stepResultSchema = z.discriminatedUnion("status", [
 export type StepResult = z.infer<typeof stepResultSchema>;
 export const resultSchema = z.object({
   schemaVersion: z.literal("2.0"),
-  testType: z.enum(["exchange-mail-flow", "sharepoint-file", "teams-channel-message"]),
+  testType: z.enum(testTypes),
   testId: z.string().regex(/^[a-zA-Z0-9-]{1,80}$/),
   cohort: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,78}[a-zA-Z0-9]$/).optional(),
   targetService: z.enum(["Exchange Online", "SharePoint Online", "Microsoft Teams"]),
@@ -64,11 +83,11 @@ export const resultSchema = z.object({
   readDurationMs: z.number().finite().nonnegative().optional(),
   observedAt: isoDate,
   correlationId: z.string().uuid(),
-  steps: z.array(stepResultSchema).max(5).default([]),
+  steps: z.array(stepResultSchema).max(6).default([]),
   diagnosticCategory: z.enum(categories).nullable().default(null),
   diagnosticContext: z.object({
     region: z.string().max(80).optional(),
-    testStage: z.enum(["simulated", "initialization", "authentication", "send", "poll", "delivery-confirmed", "upload", "download", "cleanup", "complete", "execution"]).optional(),
+    testStage: z.enum(["simulated", "initialization", "authentication", "send", "poll", "delivery-confirmed", "upload", "download", "update", "read", "reply", "rename", "cleanup", "complete", "execution"]).optional(),
     cleanupSucceeded: z.boolean().optional(),
     authenticationDurationMs: z.number().finite().nonnegative().optional(),
     httpStatus: z.number().int().min(100).max(599).optional(),
@@ -92,18 +111,18 @@ export const resultSchema = z.object({
     ctx.addIssue({ code: "custom", message: "Invalid delivery duration" });
   }
   if (value.sendDurationMs !== undefined &&
-      (value.testType === "sharepoint-file" || value.sendDurationMs > value.durationMs ||
+      ((value.testType !== "exchange-mail-flow" && probeServices[value.testType].service !== "teams") || value.sendDurationMs > value.durationMs ||
        (value.deliveryDurationMs !== undefined && value.sendDurationMs > value.deliveryDurationMs) ||
        (value.publicationDurationMs !== undefined && value.sendDurationMs > value.publicationDurationMs))) {
     ctx.addIssue({ code: "custom", message: "Invalid send duration" });
   }
   if (value.publicationDurationMs !== undefined &&
-      (value.testType !== "teams-channel-message" || value.publicationDurationMs > value.durationMs ||
+      (probeServices[value.testType].service !== "teams" || value.publicationDurationMs > value.durationMs ||
        (!value.success && value.diagnosticCategory !== "cleanup-failure"))) {
     ctx.addIssue({ code: "custom", message: "Invalid publication duration" });
   }
   for (const duration of [value.uploadDurationMs, value.readDurationMs]) {
-    if (duration !== undefined && (value.testType !== "sharepoint-file" || duration > value.durationMs)) {
+    if (duration !== undefined && (probeServices[value.testType].service !== "sharepoint" || duration > value.durationMs)) {
       ctx.addIssue({ code: "custom", message: "Invalid document phase duration" });
     }
   }
@@ -120,7 +139,7 @@ export function reportedResult(result: SyntheticResult): SyntheticResult {
 
 export const probeSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9-]{1,80}$/),
-  type: z.enum(["exchange-mail-flow", "sharepoint-file", "teams-channel-message"]),
+  type: z.enum(testTypes),
   cohort: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,78}[a-zA-Z0-9]$/),
   mailbox: z.string().email().optional(),
   siteId: z.string().min(1).optional(),

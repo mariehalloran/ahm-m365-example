@@ -1,6 +1,5 @@
 {
   "schemaVersion": "1.0",
-  "otel": { "enabled": true, "destination": "console" },
   "healthModel": {
     "name": "m365-experience-poc",
     "subscriptionId": "00000000-0000-0000-0000-000000000000",
@@ -15,7 +14,7 @@
     "exchange": {
       "enabled": true,
       "configFile": "synthetic-tests/exchange/config.json",
-      "scenarios": { "send-receive-mail": true },
+      "scenarios": { "send-receive-mail": true, "edit-reopen-draft": true },
       "targets": [
         { "id": "exchange-probe-001", "mailbox": "dedicated-synthetic@example.invalid" }
       ]
@@ -23,7 +22,7 @@
     "teams": {
       "enabled": true,
       "configFile": "synthetic-tests/teams/config.json",
-      "scenarios": { "publish-channel-message": true },
+      "scenarios": { "publish-channel-message": true, "reply-channel-message": true },
       "targets": [
         { "id": "teams-probe-001" }
       ]
@@ -31,7 +30,7 @@
     "sharepoint": {
       "enabled": true,
       "configFile": "synthetic-tests/sharepoint/config.json",
-      "scenarios": { "save-reopen-file": true },
+      "scenarios": { "save-reopen-file": true, "rename-reopen-file": true },
       "targets": [
         { "id": "sharepoint-probe-001" }
       ]

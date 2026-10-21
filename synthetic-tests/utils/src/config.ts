@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { probeSchema, scenarios } from "./contracts.js";
+import { probeSchema, probeServices, scenarios } from "./contracts.js";
 import { validateTeamsServiceUrl } from "./teams.js";
 
 export class ConfigurationError extends Error {
@@ -31,28 +31,29 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       id: `exchange-probe-00${index}`, type: "exchange-mail-flow", cohort: "exchange-global",
     }));
   } catch { throw new ConfigurationError("PROBES_JSON must contain a valid JSON array"); }
-  const parsedProbes = z.array(probeSchema).min(1).max(30).safeParse(rawProbes);
+  const parsedProbes = z.array(probeSchema).min(1).max(60).safeParse(rawProbes);
   if (!parsedProbes.success) throw new ConfigurationError(`Invalid PROBES_JSON fields: ${parsedProbes.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const probes = parsedProbes.data;
-  if (new Set(probes.map(probe => probe.id)).size !== probes.length) {
-    throw new ConfigurationError("Probe IDs must be unique");
+  if (new Set(probes.map(probe => `${probe.type}:${probe.id}`)).size !== probes.length) {
+    throw new ConfigurationError("Probe IDs must be unique within each journey type");
   }
   const cohorts = new Map<string, string>();
   for (const probe of probes) {
-    if (cohorts.has(probe.cohort) && cohorts.get(probe.cohort) !== probe.type) {
-      throw new ConfigurationError("A cohort cannot mix test types");
+    const service = probeServices[probe.type].service;
+    if (cohorts.has(probe.cohort) && cohorts.get(probe.cohort) !== service) {
+      throw new ConfigurationError("A cohort cannot mix services");
     }
-    cohorts.set(probe.cohort, probe.type);
+    cohorts.set(probe.cohort, service);
     if (config.EXECUTION_MODE === "live") {
-      const hasDedicatedResources = probe.type === "exchange-mail-flow"
+      const hasDedicatedResources = service === "exchange"
         ? Boolean(probe.mailbox)
-        : probe.type === "sharepoint-file"
+        : service === "sharepoint"
           ? Boolean(probe.siteId && probe.driveId && probe.folderId)
           : Boolean(probe.tenantId && probe.teamId && probe.channelId && probe.serviceUrl);
       if (!hasDedicatedResources) {
         throw new ConfigurationError(`Missing dedicated resources for probe ${probe.id}`);
       }
-      if (probe.type === "teams-channel-message" && probe.serviceUrl) {
+      if (service === "teams" && probe.serviceUrl) {
         try {
           validateTeamsServiceUrl(probe.serviceUrl);
         } catch {

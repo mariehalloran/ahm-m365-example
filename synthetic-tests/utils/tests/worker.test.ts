@@ -12,7 +12,7 @@ const service = parseServiceConfig({
 });
 const telemetry = () => ({ emit: vi.fn() });
 const dependencies = () => ({
-  results: { record: vi.fn(), recordDiagnostic: vi.fn(), forceFlush: vi.fn(async () => undefined), shutdown: vi.fn(async () => undefined) },
+  results: { record: vi.fn(), recordDiagnostic: vi.fn() },
   telemetry: telemetry(),
 });
 const liveService = () => parseServiceConfig({
@@ -28,10 +28,9 @@ describe("stateless per-attempt execution", () => {
     expect(Object.keys(cycle).sort()).toEqual(["cycleId", "results"]);
     expect(cycle.results).toHaveLength(3);
     expect(deps.results.record).toHaveBeenCalledTimes(3);
-    expect(deps.results.forceFlush).toHaveBeenCalledOnce();
     expect(deps.telemetry.emit.mock.calls.map(([event]) => event)).not.toContain("synthetic-result");
   });
-  it("flushes a single attempt without a minimum-sample policy", async () => {
+  it("reports a single attempt without a minimum-sample policy", async () => {
     const config = serviceSettings(parseServiceConfig({ ...service, targets: [{ id: "only-one" }] }), {});
     expect((await runCycle(config, dependencies())).results).toHaveLength(1);
   });
@@ -71,13 +70,6 @@ describe("stateless per-attempt execution", () => {
     expect(deps.results.record).toHaveBeenCalledOnce();
     expect(deps.telemetry.emit.mock.calls.map(([event]) => event)).not.toContain("probe-execution-failed");
   });
-  it("propagates flush failures without claiming that the cycle reported", async () => {
-    const deps = dependencies();
-    deps.results.forceFlush.mockRejectedValue(new Error("private export error"));
-    await expect(runCycle(serviceSettings(service, {}), deps)).rejects.toThrow("Synthetic cycle failed");
-    expect(deps.telemetry.emit.mock.calls.map(([event]) => event)).not.toContain("service-execution-completed");
-    expect(deps.results.record).toHaveBeenCalledTimes(3);
-  });
   it("starts no probes when already cancelled", async () => {
     const deps = dependencies();
     await expect(runCycle(serviceSettings(service, {}), deps, AbortSignal.abort())).rejects.toThrow();
@@ -85,7 +77,7 @@ describe("stateless per-attempt execution", () => {
   });
 });
 
-describe("one config, one embedded-SDK fixed-rate worker", () => {
+describe("one config, one report-only fixed-rate worker", () => {
   it.each(["teams", "sharepoint"] as const)("rejects %s config in an Exchange worker before credentials or execution", async type => {
     const createDependencies = vi.fn();
     const execute = vi.fn();
@@ -95,7 +87,7 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     expect(createDependencies).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
   });
-  it("runs once immediately and shuts down after flushing, without health-state summaries", async () => {
+  it("runs once immediately without worker health-state summaries", async () => {
     const output = telemetry();
     const deps = dependencies();
     const sleep = vi.fn();
@@ -105,11 +97,9 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     expect(sleep).not.toHaveBeenCalled();
     expect(output.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
       type: "exchange", mode: "simulation", cohort: "exchange-global", probeCount: 3,
-      telemetry: "console", simulation: true, durationMeaning: "modeled-not-measured-latency",
+      simulation: true, durationMeaning: "modeled-not-measured-latency",
     }));
     expect(JSON.stringify(output.emit.mock.calls)).not.toMatch(/healthState|Healthy|Unhealthy|successRate|p95/);
-    expect(deps.results.forceFlush).toHaveBeenCalledOnce();
-    expect(deps.results.shutdown).toHaveBeenCalledOnce();
   });
   it("skips missed slots without overlap, backlog, or catch-up bursts", async () => {
     const controller = new AbortController();
@@ -180,13 +170,12 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     release();
     await exchange;
   });
-  it("shuts down and propagates one-shot failures, but resumes the next scheduled cycle", async () => {
+  it("propagates one-shot failures, but resumes the next scheduled cycle", async () => {
     const deps = dependencies();
     await expect(runServiceWorker(service, {
       once: true, env: {}, telemetry: telemetry(), createDependencies: () => deps,
       execute: vi.fn().mockRejectedValue(new IntegrationError("collector-failure")),
     })).rejects.toThrow();
-    expect(deps.results.shutdown).toHaveBeenCalledOnce();
     const stop = new AbortController();
     let calls = 0;
     let clock = 0;
@@ -203,7 +192,7 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     expect(calls).toBe(2);
     expect(clock).toBe(60000);
   });
-  it("interrupts cadence waiting and shuts down without another cycle", async () => {
+  it("interrupts cadence waiting without another cycle", async () => {
     vi.useFakeTimers();
     const stop = new AbortController();
     const output = telemetry();
@@ -217,7 +206,6 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     await worker;
     await vi.advanceTimersByTimeAsync(120000);
     expect(execute).toHaveBeenCalledOnce();
-    expect(deps.results.shutdown).toHaveBeenCalledOnce();
   });
   it("cancels active work, allows bounded cleanup, reports active attempts and starts no queued probes", async () => {
     vi.useFakeTimers();
@@ -244,7 +232,6 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     expect(handler).toHaveBeenCalledTimes(3);
     expect(deps.results.record).toHaveBeenCalledTimes(3);
     expect(deps.results.record.mock.calls.every(([attempt]) => attempt.durationMs >= 1000)).toBe(true);
-    expect(deps.results.shutdown).toHaveBeenCalledOnce();
   });
   it("bounds cleanup even when an injected handler ignores cancellation", async () => {
     vi.useFakeTimers();
@@ -262,12 +249,11 @@ describe("one config, one embedded-SDK fixed-rate worker", () => {
     expect(handler).toHaveBeenCalledTimes(3);
     expect(deps.results.record).toHaveBeenCalledTimes(3);
     expect(deps.results.record.mock.calls.every(([attempt]) => attempt.durationMs >= 12000)).toBe(true);
-    expect(deps.results.shutdown).toHaveBeenCalledOnce();
   });
-  it.each(["teams", "exchange", "sharepoint"])("does not initialize OTel, credentials or execution for disabled %s", async type => {
+  it.each(["teams", "exchange", "sharepoint"])("does not initialize credentials or execution for disabled %s", async type => {
     const createDependencies = vi.fn();
     const execute = vi.fn();
-    await runServiceWorker(parseServiceConfig({ ...service, type, enabled: false, targets: [], telemetry: "azure-monitor" }), {
+    await runServiceWorker(parseServiceConfig({ ...service, type, enabled: false, targets: [] }), {
       env: {}, telemetry: telemetry(), createDependencies, execute,
     });
     expect(createDependencies).not.toHaveBeenCalled();

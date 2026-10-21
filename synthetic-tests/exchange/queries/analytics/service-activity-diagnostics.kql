@@ -1,9 +1,0 @@
-// Provider intervals can overlap between collections. These are diagnostics, not synthetic request counts.
-AppTraces
-| where TimeGenerated > ago(1d)
-| where Message == "m365-service-activity"
-| where tostring(Properties["provider.service"]) == "exchange"
-| where tostring(Properties["provider.mode"]) == "live"
-| where tostring(Properties["provider.api_version"]) == "beta"
-| project TimeGenerated, Function = tostring(Properties["provider.function"]), Properties
-| order by TimeGenerated desc

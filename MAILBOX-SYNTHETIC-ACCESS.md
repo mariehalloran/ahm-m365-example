@@ -4,7 +4,7 @@ This is the administrator handoff for the **same-Entra-tenant** design. The work
 
 No mailbox password, application secret, customer-managed certificate, or Key Vault credential is required for hosted Exchange authentication. Azure manages the identity's credentials.
 
-The [Container Apps Bicep setup](./synthetic-tests/exchange/infra/README.md) is a **mock, not deployed**. It does not grant mailbox permissions. The separate health-model deployment does not establish Exchange access. Start with the [administrator walkthrough](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) for the full enablement sequence, including optional Graph app-role assignment.
+The [shared Container Apps setup](./synthetic-tests/infra/README.md) separates identity creation from worker enablement and does not grant mailbox permissions. The separate health-model deployment does not establish Exchange access. Start with the [administrator walkthrough](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) for the full enablement sequence, including optional Graph app-role assignment.
 
 ## 1. What we need the administrators to provide
 
@@ -48,13 +48,9 @@ The administrator registers the existing managed identity's service-principal re
 
 Mailbox-scoped `Mail.ReadWrite` permits access to every message in the approved mailbox, not just synthetic messages. Keep the mailbox dedicated. `Mail.Send` restricts who the app can send **as**, not which addresses it can send **to**; apply an approved narrowly targeted mail-flow policy if that boundary also needs enforcement.
 
-### Direct health reports and optional telemetry
+### Direct health reports
 
-Live workers aggregate each complete cycle by journey/action and publish direct health reports, including when root OTEL is disabled. Authorize the selected identity for health-report ingestion on the Exchange service model; see the [model permission contract](./health-model/README.md). It obtains a separate ARM-audience token using the same explicitly selected identity, without a default-credential fallback.
-
-Optional measurements export through the root-configured Application Insights destination. That ingestion setting is independent of mailbox/report permissions and grants neither. Root account addresses belong in [monitoring.config.json](./monitoring.config.json), not credentials.
-
-The health model's own query identity has workspace query access. Do not grant those Azure roles to the Exchange managed identity merely because both are part of the same proof of concept.
+Live workers aggregate each complete cycle by journey/action and publish direct health reports. Authorize the selected identity for health-report ingestion on the Exchange service model; see the [model permission contract](./health-model/README.md). It obtains a separate ARM-audience token using the same explicitly selected identity, without a default-credential fallback. Root account addresses belong in [monitoring.config.json](./monitoring.config.json), not credentials. Console diagnostics remain available; no separate telemetry destination or query-reader permission is required.
 
 ### Optional Microsoft-reported provider data
 
@@ -70,13 +66,13 @@ An authorized Entra administrator assigns the selected permissions to the servic
 
 Only request the rows actually enabled. These permissions read provider context and do not grant mailbox message access. The prohibition on unscoped Entra `Mail.ReadWrite`/`Mail.Send` grants still applies; do not add those mail roles while configuring provider reads.
 
-Stable Service Health remains supporting context with Suppressed impact. Beta reports are explicitly opt-in, diagnostic-only, and never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available.
+Stable Service Health reports exact overview status directly to `exchange-service-health` using `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption, with `impactSuppressed`. Failed/missing/unknown overviews produce Unknown without a value and with failure context; the existing trial receives Graph 403 until `ServiceHealth.Read.All` admin consent is granted. Collection runs once per cycle even if journey initialization fails. Beta reports are explicitly opt-in, console-diagnostic-only, and never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available.
 
 No SharePoint-specific serviceActivity function has been verified in the documented catalog. Do not invent one or grant unrelated Office Apps permissions as a substitute. API failures/no data must be visible as collection diagnostics, not defaulted to healthy service status.
 
-## 3. Mock infrastructure and non-secret handoff IDs
+## 3. Infrastructure and non-secret handoff IDs
 
-The [mock Bicep](./synthetic-tests/exchange/infra/main.bicep) outputs:
+The [shared hosting guide](./synthetic-tests/infra/README.md) explains how to obtain each service identity's non-secret handoff values:
 
 - `identityResourceId`: the Azure resource attached to the Container App.
 - `clientId`: select this identity in the worker and use it as Exchange `-AppId`.
@@ -85,7 +81,7 @@ The [mock Bicep](./synthetic-tests/exchange/infra/main.bicep) outputs:
 
 The client ID, principal ID, and an application-registration object ID are different things. A managed identity already has a service principal; this setup does not need a separate app registration.
 
-Both mock gates, `deployWorker` and `enableLiveProbe`, default to false. Compiling Bicep creates nothing. A future identity-only deployment can obtain stable IDs for administrator authorization before a worker is enabled.
+The foundation stage creates identities without workers. Enabling live workers requires a separate `--enable-live` preparation opt-in. Compiling Bicep creates nothing; obtain stable IDs for administrator authorization before enabling a worker.
 
 ## 4. Illustrative Exchange administrator setup
 
@@ -155,15 +151,15 @@ Live execution still requires dedicated target configuration, `mode: live`, `ena
 
 For an approved **local development** application, choose `graphAuthentication: certificate` explicitly and provide `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_CERTIFICATE_PATH`. A normal laptop does not expose the Container App managed-identity endpoint. The certificate option does not become a silent production fallback.
 
-The mock Bicep uses the managed-identity path and needs no mailbox certificate/secret. Optional Application Insights connection settings concern telemetry ingestion, not Exchange access.
+Hosted Exchange uses the managed-identity path and needs no mailbox certificate/secret.
 
 ## 6. Journey and step boundaries
 
-The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, journey, action functions, tests, and queries. Reusable HTTP, authentication, scheduling, and OTel utilities live in [utils/](./synthetic-tests/utils/).
+The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, journeys, action functions and tests. Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
 
-The journey is authenticate -> create draft -> send -> confirm Inbox delivery -> cleanup. Each executed step emits its own 1/0 success and duration. A blocked step is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
+The mail journey is authenticate -> create draft -> send -> confirm Inbox delivery -> cleanup. A second journey edits and reopens an owned draft without sending. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 
-The root health model references an independent Exchange model. Its **User Journey** and action entities receive aggregated worker health reports; optional OTEL enables corresponding KQL success/duration signals on those same entities. No mailbox inventory is sent to the model or retained between cycles. One mailbox sending to itself is not employee-to-employee delivery, Outlook UI coverage, or tenant-wide availability.
+The root health model references an independent Exchange model. Its two journey entities receive whole-journey reports and six separate business-step child entities receive action reports, using **External Reports** only. Token acquisition and cleanup remain internal, with no standalone step reports or graph nodes. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. One mailbox sending to itself is not employee-to-employee delivery, Outlook UI coverage, or tenant-wide availability.
 
 ## 7. Not required by this Exchange test
 
@@ -178,7 +174,7 @@ Teams Bot Connector authorization remains a separate implementation/installation
 
 The optional provider collectors require the additional read permissions listed above only when enabled. They do not broaden the core Exchange journey's mailbox scope.
 
-Cross-tenant managed identity is not enabled by this same-tenant mock. A different tenant needs a separately reviewed federation/application authorization design; simply changing a tenant-ID setting on a managed identity does not move its identity into another directory.
+Cross-tenant managed identity is not enabled by this same-tenant implementation. A different tenant needs a separately reviewed federation/application authorization design; simply changing a tenant-ID setting on a managed identity does not move its identity into another directory.
 
 ## 8. Copy-and-send request
 

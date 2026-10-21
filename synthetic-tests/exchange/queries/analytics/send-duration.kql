@@ -1,8 +1,0 @@
-AppMetrics
-| where TimeGenerated between (ago(5m) .. now())
-| where Name == "mailflow.send.duration"
-| where tostring(Properties["probe.service"]) == "exchange"
-| where tostring(Properties["probe.mode"]) == "live"
-| summarize DurationSeconds = sum(Sum), Requests = sum(ItemCount) by _ResourceId
-| where Requests > 0
-| project _ResourceId, MeanSendSeconds = DurationSeconds / Requests

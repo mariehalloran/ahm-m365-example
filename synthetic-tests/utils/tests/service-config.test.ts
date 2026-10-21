@@ -7,10 +7,18 @@ const raw = {
   cohort: "exchange-global", targets: [{ id: "exchange-001" }],
 };
 describe("strict config-first service settings", () => {
-  it("defaults to console telemetry and one target with no history or policy", () => {
+  it("defaults to explicit managed identity and one target with no history or exporter settings", () => {
     const service = parseServiceConfig(raw);
-    expect(service).toMatchObject({ scenario: "healthy", telemetry: "console", graphAuthentication: "managed-identity" });
+    expect(service).toMatchObject({ scenario: "healthy", graphAuthentication: "managed-identity" });
+    expect(service).not.toHaveProperty("telemetry");
     expect(serviceSettings(service, {}).probes).toHaveLength(1);
+  });
+  it("expands only selected journeys while reusing the target without extra target inventories", () => {
+    const service = parseServiceConfig(raw);
+    expect(serviceSettings(service, {}, { "send-receive-mail": true, "edit-reopen-draft": true }).probes.map(probe => probe.type))
+      .toEqual(["exchange-mail-flow", "exchange-draft"]);
+    expect(serviceSettings(service, {}, { "send-receive-mail": false, "edit-reopen-draft": true }).probes.map(probe => probe.type))
+      .toEqual(["exchange-draft"]);
   });
   it.each([null, [], "exchange", { ...raw, unexpected: true }, { ...raw, type: "unknown" }, { ...raw, enabled: "true" }])(
     "rejects invalid top-level JSON objects", value => expect(() => parseServiceConfig(value)).toThrow("Invalid service config"),
@@ -18,8 +26,8 @@ describe("strict config-first service settings", () => {
   it.each([false, true])("explicitly rejects obsolete reportToHealthModel=%s", reportToHealthModel => {
     expect(() => parseServiceConfig({ ...raw, reportToHealthModel })).toThrow("Invalid service config");
   });
-  it.each(["otlp", "prometheus", "", true])("rejects unsupported telemetry destination %s", telemetry => {
-    expect(() => parseServiceConfig({ ...raw, telemetry })).toThrow("telemetry");
+  it.each(["none", "console", "", true])("rejects removed exporter settings %s", telemetry => {
+    expect(() => parseServiceConfig({ ...raw, telemetry })).toThrow("Invalid service config");
   });
   it.each(["default", "cli", "", null, true])("rejects unsupported Graph authentication %s", graphAuthentication => {
     expect(() => parseServiceConfig({ ...raw, graphAuthentication })).toThrow("graphAuthentication");
@@ -83,7 +91,7 @@ describe("strict config-first service settings", () => {
       ...teams, targets: [{ ...teams.targets[0], mailbox: "wrong-service@example.invalid" }],
     })).toThrow("targets");
   });
-  it("requires live consent and dedicated resources independently of telemetry", () => {
+  it("requires live consent and dedicated resources", () => {
     const service = parseServiceConfig({ ...raw, mode: "live" });
     expect(() => serviceSettings(service, {})).toThrow("ENABLE_LIVE_M365");
     expect(() => serviceSettings(service, { ENABLE_LIVE_M365: "true" })).toThrow("Missing dedicated resources");

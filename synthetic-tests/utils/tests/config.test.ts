@@ -19,6 +19,13 @@ describe("safe runtime configuration", () => {
       PROBES_JSON: JSON.stringify([probe, { ...probe, id: "probe-002", type: "sharepoint-file" }]),
     })).toThrow("mix");
   });
+  it("allows the same opaque target ID and cohort across two journeys of one service", () => {
+    const target = { id: "shared-target", cohort: "exchange-global", mailbox: "synthetic@example.invalid" };
+    const config = loadConfig({ PROBES_JSON: JSON.stringify([
+      { ...target, type: "exchange-mail-flow" }, { ...target, type: "exchange-draft" },
+    ]) });
+    expect(config.probes).toHaveLength(2);
+  });
   it.each(["NaN", "-1", "0", "120001"])("rejects invalid execution deadlines %s", PROBE_TIMEOUT_MS => {
     expect(() => loadConfig({ PROBE_TIMEOUT_MS })).toThrow("PROBE_TIMEOUT_MS");
   });

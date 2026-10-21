@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { aggregateHealthReports, createHealthReporter, type CycleResults } from "../src/health-reports.js";
+import { aggregateHealthReports, createHealthReporter, serviceHealthReport, type HealthReporter, type CycleResults } from "../src/health-reports.js";
 import { readProjectConfig } from "../src/project-config.js";
 import { baseResult } from "../src/probes.js";
 import { runCycle } from "../src/runner.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
 import type { SyntheticResult } from "../src/contracts.js";
+import type { ProviderDiagnostic } from "../src/provider-diagnostics.js";
 
 const project = await readProjectConfig("../monitoring.config.json");
 const service = parseServiceConfig({
@@ -33,14 +34,16 @@ describe("single-cycle journey/action health aggregation", () => {
     ];
     const reports = aggregateHealthReports("exchange", cycle([sample(), failed]), project.healthModel);
     expect(reports).toHaveLength(8);
-    expect(reports.every(report => report.entityName === "exchange-global")).toBe(true);
-    expect(reports.every(report => !/authenticate|cleanup/.test(report.body.signalName))).toBe(true);
+    expect(new Set(reports.map(report => report.entityName))).toEqual(new Set([
+      "exchange-global", "exchange-global-create-draft", "exchange-global-send", "exchange-global-confirm-delivery",
+    ]));
+    expect(reports.every(report => !/authenticate|cleanup/.test(report.entityName))).toBe(true);
     expect(reports.find(report => report.entityName === "exchange-global")?.body).toMatchObject({
       signalName: "synthetic-success-percentage", healthState: "Unhealthy", value: 50, expiresInMinutes: 15,
     });
-    expect(reports.find(report => report.body.signalName === "send-mean-duration")?.body.value).toBe(500);
-    expect(reports.find(report => report.body.signalName === "send-success-percentage")?.body).toMatchObject({ healthState: "Healthy", value: 100 });
-    for (const report of reports.filter(report => report.body.signalName.startsWith("confirm-delivery-"))) {
+    expect(reports.find(report => report.entityName === "exchange-global-send" && report.body.signalName === "synthetic-mean-duration")?.body.value).toBe(500);
+    expect(reports.find(report => report.entityName === "exchange-global-send")?.body).toMatchObject({ healthState: "Healthy", value: 100 });
+    for (const report of reports.filter(report => report.entityName === "exchange-global-confirm-delivery")) {
       expect(report.body).toMatchObject({ healthState: "Unknown" });
       expect(report.body).not.toHaveProperty("value");
     }
@@ -69,7 +72,7 @@ describe("single-cycle journey/action health aggregation", () => {
   });
 });
 
-describe("direct health reports independent of OTEL", () => {
+describe("direct health reports", () => {
   it("uses no credentials/network in simulation and clearly previews rather than publishes", async () => {
     const output = { emit: vi.fn() };
     const credential = { getToken: vi.fn() };
@@ -93,11 +96,11 @@ describe("direct health reports independent of OTEL", () => {
       active--;
       return new Response(null, { status: 204 });
     };
-    await createHealthReporter({ ...project, otel: { enabled: false, destination: "console" } }, { ...service, mode: "live" }, output, {}, {
+    await createHealthReporter(project, { ...service, mode: "live" }, output, {}, {
       credential, fetch: fetcher,
     })(cycle());
     expect(requests).toHaveLength(8);
-    expect(new Set(requests.map(request => request.url)).size).toBe(1);
+    expect(new Set(requests.map(request => request.url)).size).toBe(4);
     expect(maximumActive).toBeLessThanOrEqual(3);
     expect(requests.every(request => request.url.includes("/healthmodels/m365-experience-poc-exchange/entities/exchange-") &&
       request.url.endsWith("/ingestHealthReport?api-version=2026-05-01-preview"))).toBe(true);
@@ -144,20 +147,20 @@ describe("direct health reports independent of OTEL", () => {
 describe("independent reporting failure paths", () => {
   const dependencies = () => ({
     telemetry: { emit: vi.fn() },
-    results: { record: vi.fn(), recordDiagnostic: vi.fn(), forceFlush: vi.fn(async () => undefined), shutdown: vi.fn(async () => undefined) },
-    reportHealth: vi.fn(async (_cycle: CycleResults) => undefined),
+    results: { record: vi.fn(), recordDiagnostic: vi.fn() },
+    reportHealth: vi.fn<HealthReporter>(async () => undefined),
   });
-  it("reports health even when OTEL flush fails", async () => {
+  it("reports health even when console output fails", async () => {
     const deps = dependencies();
-    deps.results.forceFlush.mockRejectedValue(new Error("export failed"));
+    deps.results.record.mockImplementation(() => { throw new Error("output failed"); });
     await expect(runCycle(serviceSettings(service, {}), deps)).rejects.toThrow("Synthetic cycle failed");
     expect(deps.reportHealth).toHaveBeenCalledWith(expect.objectContaining({ results: [expect.anything()] }));
   });
-  it("still exports OTEL when health-report ingestion fails", async () => {
+  it("still outputs observed results when health-report ingestion fails", async () => {
     const deps = dependencies();
     deps.reportHealth.mockRejectedValue(new Error("ingestion denied"));
     await expect(runCycle(serviceSettings(service, {}), deps)).rejects.toThrow("Synthetic cycle failed");
-    expect(deps.results.forceFlush).toHaveBeenCalledOnce();
+    expect(deps.results.record).toHaveBeenCalledOnce();
   });
   it("keeps executing/aggregating targets after a telemetry record failure without duplicating results", async () => {
     const deps = dependencies();
@@ -165,8 +168,8 @@ describe("independent reporting failure paths", () => {
     const selected = parseServiceConfig({ ...service, targets: [{ id: "target-one" }, { id: "target-two" }] });
     await expect(runCycle(serviceSettings(selected, {}), deps)).rejects.toThrow("Synthetic cycle failed");
     expect(deps.results.record).toHaveBeenCalledTimes(2);
-    expect(deps.reportHealth.mock.calls[0]?.[0].results).toHaveLength(2);
-    expect(deps.results.forceFlush).toHaveBeenCalledOnce();
+    expect(deps.reportHealth).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
+    expect((deps.reportHealth.mock.calls[0]?.[0] as CycleResults).results).toHaveLength(2);
   });
   it("does not publish a healthy partial aggregate after cancellation", async () => {
     const deps = dependencies();
@@ -185,7 +188,94 @@ describe("independent reporting failure paths", () => {
       },
     }, stop.signal);
     expect(deps.reportHealth).not.toHaveBeenCalled();
-    expect(deps.results.forceFlush).toHaveBeenCalledOnce();
+    expect(deps.results.record).toHaveBeenCalled();
     expect(deps.telemetry.emit).toHaveBeenCalledWith("health-report-skipped-incomplete-cycle", expect.anything());
+  });
+
+  describe("observed stable Microsoft Service Health reports", () => {
+    const diagnostic = (status: string): ProviderDiagnostic => ({
+      kind: "overview", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
+      serviceId: "Exchange", serviceName: "Exchange Online", status,
+    });
+    const report = (providerDiagnostics: ProviderDiagnostic[]) => serviceHealthReport("exchange", {
+      cycleId: "provider-cycle", providerDiagnostics,
+    }, project.healthModel.reportTtlMinutes);
+    it.each([
+      ...["serviceOperational", "serviceRestored", "resolved", "resolvedExternal", "falsePositive", "postIncidentReviewPublished"]
+        .map(status => [status, 100, "Healthy"] as const),
+      ["serviceInterruption", 0, "Unhealthy"] as const,
+      ...["serviceDegradation", "investigating", "restoringService", "verifyingService", "extendedRecovery",
+        "investigationSuspended", "mitigated", "mitigatedExternal", "confirmed", "reported"]
+        .map(status => [status, 50, "Degraded"] as const),
+    ])("maps observed overview %s to %s (%s)", (status, value, healthState) => {
+      expect(report([diagnostic(String(status))])).toMatchObject({
+        entityName: "exchange-service-health",
+        body: { signalName: "microsoft-reported-service-status", value, healthState, expiresInMinutes: 15 },
+      });
+    });
+    it.each([{ records: [] }, { records: [diagnostic("unknownFutureStatus")] }])("reports missing/unrecognized observations as Unknown without a score", ({ records }) => {
+      const observed = report(records);
+      expect(observed.body.healthState).toBe("Unknown");
+      expect(observed.body).not.toHaveProperty("value");
+      expect(observed.body).not.toHaveProperty("evaluationRules");
+    });
+    it("does not turn a permission/collection failure or partial snapshot into a Microsoft outage or healthy data", () => {
+      const observed = report([diagnostic("serviceOperational"), {
+        kind: "failure", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
+        source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0", category: "permission-failure", httpStatus: 403,
+      }]);
+      expect(observed.body.healthState).toBe("Unknown");
+      expect(observed.body).not.toHaveProperty("value");
+      expect(JSON.parse(observed.body.additionalContext)).toMatchObject({
+        diagnosticCategories: ["permission-failure"], httpStatuses: [403],
+      });
+    });
+    it("keeps issues and beta diagnostics out of status, even if their collection fails", () => {
+      expect(report([diagnostic("serviceOperational"), {
+        kind: "failure", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
+        source: "serviceAnnouncement.issues", apiVersion: "v1.0", category: "permission-failure", httpStatus: 403,
+      }, {
+        kind: "failure", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
+        source: "getConnectivityMetricsForExchange", apiVersion: "beta", category: "collector-failure",
+      }]).body).toMatchObject({ healthState: "Healthy", value: 100 });
+    });
+    it("ignores other service snapshots, treats skipped source data as Unknown, and bounds approved context", () => {
+      expect(report([{ ...diagnostic("serviceInterruption"), service: "teams" }]).body.healthState).toBe("Unknown");
+      expect(report([diagnostic("serviceOperational"), {
+        kind: "skipped", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
+        source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0", reason: "simulation",
+      }]).body).toMatchObject({ healthState: "Unknown" });
+      const observed = report(Array.from({ length: 500 }, (_, index) => diagnostic(`${index}-${"x".repeat(120)}`)));
+      expect(observed.body.additionalContext.length).toBeLessThan(1600);
+      expect(JSON.parse(observed.body.additionalContext).statuses).toHaveLength(8);
+    });
+    it.each([
+      { mode: "simulation" as const, serviceHealth: true },
+      { mode: "live" as const, serviceHealth: false },
+    ])("never publishes or previews provider state for $mode / enabled=$serviceHealth", async settings => {
+      const output = { emit: vi.fn() };
+      const credential = { getToken: vi.fn() };
+      const fetcher = vi.fn();
+      await createHealthReporter(project, { ...service, ...settings }, output, {}, { credential, fetch: fetcher })({
+        cycleId: "provider-cycle", providerDiagnostics: [diagnostic("serviceInterruption")],
+      });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(credential.getToken).not.toHaveBeenCalled();
+      expect(output.emit).not.toHaveBeenCalled();
+    });
+    it.each(["exchange", "teams", "sharepoint"] as const)("uses the authenticated bounded publisher and selected %s model", async type => {
+      const requests: { url: string; body: unknown }[] = [];
+      const credential = { getToken: vi.fn(async () => ({ token: "test-only", expiresOnTimestamp: Date.now() + 60000 })) };
+      await createHealthReporter(project, { ...service, type, mode: "live", serviceHealth: true } as typeof service, { emit: vi.fn() }, {}, {
+        credential, fetch: async (url, init) => {
+          requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+          return new Response(null, { status: 204 });
+        },
+      })({ cycleId: "provider-cycle", providerDiagnostics: [{ ...diagnostic("serviceOperational"), service: type }] });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health/`);
+      expect(requests[0]?.body).toMatchObject({ signalName: "microsoft-reported-service-status", healthState: "Healthy", value: 100 });
+      expect(credential.getToken).toHaveBeenCalledWith("https://management.azure.com/.default", expect.anything());
+    });
   });
 });

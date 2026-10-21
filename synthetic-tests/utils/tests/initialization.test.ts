@@ -5,7 +5,6 @@ import { parseServiceConfig } from "../src/service-config.js";
 import { runServiceWorker, type WorkerOptions } from "../src/worker.js";
 import { baseResult } from "../src/probes.js";
 import { outcomeOf } from "../src/results.js";
-import * as azureMonitor from "../src/azure-monitor.js";
 
 const credential = vi.hoisted(() => ({
   getToken: vi.fn(async (_scope: string | string[], _options?: unknown) => ({
@@ -20,8 +19,13 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(
 
 const checkedIn = await readProjectConfig("../monitoring.config.json");
 const project = () => ({
-  ...structuredClone(checkedIn), otel: { enabled: false, destination: "console" as const },
+  ...structuredClone(checkedIn),
   healthModel: { ...checkedIn.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
+  services: {
+    exchange: { ...structuredClone(checkedIn.services.exchange), scenarios: { "send-receive-mail": true, "edit-reopen-draft": false } },
+    teams: { ...structuredClone(checkedIn.services.teams), scenarios: { "publish-channel-message": true, "reply-channel-message": false } },
+    sharepoint: { ...structuredClone(checkedIn.services.sharepoint), scenarios: { "save-reopen-file": true, "rename-reopen-file": false } },
+  },
 });
 const env = { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222" };
 const service = (type: "exchange" | "teams" | "sharepoint") => parseServiceConfig({
@@ -30,25 +34,18 @@ const service = (type: "exchange" | "teams" | "sharepoint") => parseServiceConfi
 });
 
 describe("observed initialization failures", () => {
-  it.each([false, true])("attempts both startup-result telemetry and direct health even if OTEL flush fails: %s", async failFlush => {
-    const configured = { ...project(), otel: { enabled: true, destination: "azure-monitor" as const } };
+  it("outputs observed startup failures and still publishes direct health when console result output fails", async () => {
+    const configured = project();
     const output = { emit: vi.fn() };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetcher);
-    const exporter = {
-      record: vi.fn(), recordDiagnostic: vi.fn(), shutdown: vi.fn(async () => undefined),
-      forceFlush: vi.fn(async () => { if (failFlush) throw new Error("OTEL flush failed"); }),
-    };
-    const bootstrap = vi.spyOn(azureMonitor, "createProbeTelemetry").mockResolvedValue(exporter);
+    output.emit.mockImplementation((event: string) => { if (event === "synthetic-result") throw new Error("Console write failed"); });
     await expect(runServiceWorker(service("sharepoint"), {
       project: configured, once: true, env, telemetry: output,
-    })).rejects.toThrow(failFlush ? "OTEL flush failed" : "Missing dedicated resources");
-    expect(bootstrap).toHaveBeenCalledOnce();
-    expect(exporter.record).toHaveBeenCalledWith(expect.objectContaining({
-      success: false, steps: [], diagnosticCategory: "configuration-failure",
-    }), "live");
-    expect(exporter.forceFlush).toHaveBeenCalledOnce();
-    expect(exporter.shutdown).toHaveBeenCalledOnce();
+    })).rejects.toThrow("Multiple service worker operations failed");
+    expect(output.emit).toHaveBeenCalledWith("synthetic-result", expect.objectContaining({
+      result: expect.objectContaining({ success: false, steps: [], diagnosticCategory: "configuration-failure" }),
+    }));
     expect(fetcher).toHaveBeenCalledTimes(8);
   });
 
@@ -92,11 +89,11 @@ describe("observed initialization failures", () => {
     expect(output.emit.mock.calls.some(([event]) => event === "service-cycle-summary")).toBe(false);
     expect(output.emit).toHaveBeenCalledWith("service-worker-stopped", expect.objectContaining({ cancelled: true }));
   });
-  it("can initialize successfully after a transient setup failure and shuts down the initialized exporter", async () => {
+  it("can initialize successfully after a transient setup failure", async () => {
     const stop = new AbortController();
     const output = { emit: vi.fn((event: string) => { if (event === "service-cycle-summary") stop.abort(); }) };
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(null, { status: 204 })));
-    const results = { record: vi.fn(), recordDiagnostic: vi.fn(), forceFlush: vi.fn(async () => undefined), shutdown: vi.fn(async () => undefined) };
+    const results = { record: vi.fn(), recordDiagnostic: vi.fn() };
     const createDependencies = vi.fn<NonNullable<WorkerOptions["createDependencies"]>>()
       .mockRejectedValueOnce(new ConfigurationError("Required initialization setting is missing"))
       .mockImplementation(async (_service, _config, telemetry) => ({ results, telemetry }));
@@ -106,7 +103,7 @@ describe("observed initialization failures", () => {
       handler: async probe => ({ ...baseResult(probe, Date.now()), success: true, durationMs: 1 }),
     });
     expect(createDependencies).toHaveBeenCalledTimes(2);
-    expect(results.shutdown).toHaveBeenCalledOnce();
+    expect(results.record).toHaveBeenCalledOnce();
     expect(output.emit.mock.calls.filter(([event]) => event === "service-initialization-failed")).toHaveLength(1);
   });
 });

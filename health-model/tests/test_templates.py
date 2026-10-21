@@ -62,9 +62,8 @@ class ModelTemplateContracts(unittest.TestCase):
         selected = self.selected(self.project)
         journeys = [journey for service in selected for journey in service["journeys"]]
         steps = sum(len(journey["steps"]) for journey in journeys)
-        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys), len(selected) * 2 + len(journeys)), (4, 13, 9))
-        self.assertEqual(len(selected) + len(journeys) * 2 + steps * 2, 25)
-        self.assertEqual(steps, 8)
+        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps, len(selected) * 2 + len(journeys) + steps), (4, 34, 30))
+        self.assertEqual(steps, 18)
         for service in self.catalog:
             for journey in service["journeys"]:
                 self.assertIn(journey["name"], self.project["services"][service["service"]]["scenarios"])
@@ -97,9 +96,9 @@ class ModelTemplateContracts(unittest.TestCase):
         catalog[0]["journeys"].append(additional)
         project = copy.deepcopy(self.project)
         project["services"]["exchange"]["scenarios"]["future-journey"] = True
-        self.assertEqual(len(self.selected(project, catalog)[0]["journeys"]), 2)
+        self.assertEqual(len(self.selected(project, catalog)[0]["journeys"]), 3)
         project["services"]["exchange"]["scenarios"]["send-receive-mail"] = False
-        self.assertEqual([journey["entityName"] for journey in self.selected(project, catalog)[0]["journeys"]], ["exchange-future"])
+        self.assertEqual([journey["entityName"] for journey in self.selected(project, catalog)[0]["journeys"]], ["exchange-draft", "exchange-future"])
 
     def test_all_services_disabled_keeps_evidence_free_root(self):
         project = copy.deepcopy(self.project)
@@ -114,18 +113,16 @@ class ModelTemplateContracts(unittest.TestCase):
             "aggregationType": "WorstOf", "ignoreUnknown": False,
         })
 
-    def test_otel_conditions_exclude_every_query_dependency(self):
-        self.assertEqual(self.template["variables"]["useOtel"],
-                         "[and(parameters('projectConfig').otel.enabled, not(empty(variables('enabledServices'))))]")
-        for resource in self.resources:
-            if resource["type"] in ("Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components"):
-                self.assertEqual(resource["condition"], "[variables('useOtel')]")
-        self.assertEqual(self.module["properties"]["parameters"]["enableOtel"]["value"], "[variables('useOtel')]")
-        for resource in self.service_resources:
-            if resource["type"] in ("Microsoft.Authorization/roleAssignments", "Microsoft.CloudHealth/healthmodels/authenticationsettings"):
-                self.assertEqual(resource["condition"], "[parameters('enableOtel')]")
-        entities = next(item for item in self.service_resources if item["type"].endswith("/entities"))
-        self.assertIn("if(parameters('enableOtel')", entities["properties"]["signalGroups"])
+    def test_models_have_no_workspace_query_or_export_dependencies(self):
+        self.assertEqual(set(self.service_template["parameters"]), {"modelName", "location", "service"})
+        self.assertEqual({resource["type"] for resource in self.service_resources}, {
+            "Microsoft.CloudHealth/healthmodels",
+            "Microsoft.CloudHealth/healthmodels/entities",
+            "Microsoft.CloudHealth/healthmodels/relationships",
+        })
+        for name in ("azureLogAnalytics", "LogAnalyticsQuery", "workspace-query", "applicationInsights"):
+            self.assertNotIn(name, json.dumps(self.template))
+        self.assertNotIn("otel", self.project)
 
     def test_native_references_and_scoped_reader(self):
         reference = next(item for item in self.resources if item.get("copy", {}).get("name") == "serviceReferences")
@@ -137,44 +134,44 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("Microsoft.CloudHealth/healthmodels", reader["scope"])
         self.assertNotIn("condition", reader)
 
-    def test_journey_entities_replace_action_nodes_and_keep_suppressed_context(self):
+    def test_journeys_have_distinct_business_step_entities_and_suppressed_context(self):
         variables = self.service_template["variables"]
         nodes = variables["nodes"]
         self.assertIn("parameters('service').journeys", nodes)
         self.assertIn("lambdaVariables('journey').entityName", nodes)
-        self.assertNotIn("parameters('service').steps", nodes)
+        self.assertIn("lambdaVariables('journey').steps", nodes)
+        self.assertIn("lambdaVariables('step').name", nodes)
+        self.assertIn("'kind', 'step'", nodes)
         self.assertIn("'impact', 'Suppressed'", nodes)
         self.assertIn("parameters('service').journeys", variables["relationships"])
 
-    def test_query_signal_factory_preserves_common_fields(self):
-        self.assertEqual(self.functions["createQuerySignal"]["output"]["value"], {
+    def test_external_source_group_preserves_rollup_policy(self):
+        self.assertEqual(self.functions["sourceGroup"]["output"]["value"], {
             "name": "[parameters('name')]",
             "displayName": "[parameters('displayName')]",
-            "signalKind": "LogAnalyticsQuery",
-            "queryText": "[parameters('queryText')]",
-            "valueColumnName": "Value",
-            "refreshInterval": "PT1M",
-            "timeGrain": "[parameters('timeGrain')]",
-            "evaluationRules": "[parameters('evaluationRules')]",
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": False,
+            "members": "[parameters('members')]",
         })
-        journey_signals = self.functions["journeySignals"]["output"]["value"]
-        self.assertIn("__bicep.createQuerySignal(", journey_signals)
-        self.assertIn("success-percentage", journey_signals)
-        context = self.service_template["variables"]["contextGroup"]["azureLogAnalytics"]["signals"][0]
-        self.assertIn("'refreshInterval', 'PT5M'", context)
-        self.assertIn("'dataUnit', 'Provider status score'", context)
 
-    def test_query_binding_preserves_step_and_resource_scoping(self):
-        self.assertEqual(self.functions["bindQuery"]["output"]["value"],
-                         "[replace(replace(parameters('queryText'), '__STEP__', parameters('stepName')), '__APPLICATION_INSIGHTS_RESOURCE_ID__', parameters('applicationInsightsId'))]")
+    def test_catalog_contains_only_journey_and_business_step_metadata(self):
         for service in self.catalog:
-            self.assertIn("__APPLICATION_INSIGHTS_RESOURCE_ID__", service["serviceHealthQuery"])
+            self.assertEqual(set(service), {"service", "displayName", "journeys"})
             for journey in service["journeys"]:
-                for name in ("successQuery", "latencyQuery", "stepSuccessQuery", "stepDurationQuery"):
-                    query = journey[name]
-                    self.assertIn("__APPLICATION_INSIGHTS_RESOURCE_ID__", query)
-                    if name.startswith("step"):
-                        self.assertIn("__STEP__", query)
+                self.assertEqual(set(journey), {"name", "entityName", "displayName", "steps"})
+                self.assertTrue(all(set(step) == {"name", "displayName"} for step in journey["steps"]))
+
+    def test_journey_steps_and_provider_context_use_only_external_reports(self):
+        entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
+        self.assertEqual(entity["apiVersion"], "2026-10-01-preview")
+        groups = entity["properties"]
+        self.assertIn("External Reports", groups)
+        self.assertNotIn("Log Analytics", groups)
+        self.assertIn("synthetic-success-percentage", groups)
+        self.assertIn("synthetic-mean-duration", groups)
+        self.assertIn("microsoft-reported-service-status", groups)
+        self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'root')", groups)
+        self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'context')", groups)
 
 
 if __name__ == "__main__":

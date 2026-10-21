@@ -2,23 +2,23 @@
 
 ## Keep measurement simple
 
-The worker performs a bounded journey, cleans up its artifacts, and aggregates this cycle's executed samples by journey/action. It sends evaluated success-percentage and mean-duration health reports directly to Azure Monitor Health Models, without storing cross-cycle history. OTEL/Log Analytics is optional historical evidence, not a prerequisite for reporting.
+The worker performs a bounded journey, cleans up its artifacts, and aggregates this cycle's executed samples by journey/action. It sends evaluated success-percentage and mean-duration health reports directly to Azure Monitor Health Models, without storing cross-cycle history or a durable outbox. Console diagnostics remain available; there is no separate telemetry export path.
 
-The [root configuration](../monitoring.config.json) selects services, supported journey scenarios, account/target metadata, OTEL and report policy. All supported services/scenarios and OTEL default to enabled, while safe simulation/console defaults and separate live/beta gates remain. Each service has its own config/process and independent cadence, with an optional embedded OTel SDK. Azure Container Apps is the intended host; separate Container Apps reuse the same program. There is no separate telemetry worker or Kubernetes requirement.
+The [root configuration](../monitoring.config.json) selects services, supported journey scenarios, account/target metadata and report policy. All supported services/scenarios default to enabled, while safe simulation defaults and separate live/beta gates remain. Each service has its own config/process and independent cadence. Azure Container Apps is the intended host; separate no-ingress apps reuse one image, with explicit managed identities, single-revision mode, 0.25 CPU/0.5 GiB each and configuration-hash rollouts.
 
-The [shared utilities guide](../synthetic-tests/utils/README.md#measurements-and-queries) documents measurement semantics; each service under `synthetic-tests/` owns its worker, configuration, journey/actions, tests and `queries/analytics` plus `queries/health-model`. Reusable helpers remain in `synthetic-tests/utils/`, and model infrastructure remains in root `health-model/`. No generic runner or separate telemetry source component is needed. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
+The [shared utilities guide](../synthetic-tests/utils/README.md#measurement-semantics) documents measurement semantics; each service under `synthetic-tests/` owns its worker, configuration, journey/actions and tests. Reusable helpers remain in `synthetic-tests/utils/`, and model infrastructure remains in root `health-model/`. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
 
 ## Optional Microsoft-reported providers
 
-Service-owned collectors now reuse the existing process, Graph identity and embedded SDK, once per service cycle independently of target count. Stable `serviceHealth` and beta `serviceActivity` both default off; scoped synthetic access must not silently expand to tenant provider permissions.
+Service-owned collectors reuse the existing process and Graph identity, once per service cycle independently of target/journey count or journey-initialization success. Safe simulation configs keep providers off; live examples enable stable `serviceHealth`, while beta `serviceActivity` remains off. Scoped synthetic access must not silently expand to tenant provider permissions; denied provider calls remain explicit diagnostics.
 
-Stable health overviews and issue history need `ServiceHealth.Read.All` and remain **context-only/impact-suppressed**. Only fresh exact live v1.0 overview records can supply the separate context signal; issues/history never populate journey health.
+Stable health overviews and issue history need `ServiceHealth.Read.All` admin consent and remain **context-only/impact-suppressed**. Exact live v1.0 overview status reports directly to `${service}-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Failed/missing/unknown overview status yields Unknown without a numeric value and with failure context. The existing trial observes Graph 403 pending consent. Issues/history never populate journey health.
 
 Exchange's verified beta report is `getConnectivityMetricsForExchange`; Teams' is `getMessageVolumeMetricsForTeamsChat`. They need explicit `ENABLE_BETA_SERVICE_ACTIVITY=true`, service-specific approved application permissions and tenant eligibility/enablement. Beta is experimental, unsupported for production, and **diagnostic-only—never bubbles into Experience or journey health**. No verified SharePoint report exists, so enabling it is rejected rather than substituting OfficeApps. Optional/unverified functions are not exposed.
 
 Basic tenants can run the API-backed synthetics and stable Service Health with the subscribed services/appropriate Teams SKU and approved access. Do not promise beta reports on Basic: API permission documentation does not explicitly confirm Basic entitlement. The separate [advanced Microsoft 365 monitoring feature](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service. That published feature threshold is not a verified beta API licensing rule; tenant report eligibility must still be checked.
 
-When OTEL is enabled for Azure, provider observations use ordinary Logger-only AppTraces, not synthetic/step metrics; with OTEL off they remain structured console diagnostics. Bounded UTC historical windows overlap; do not count each repeated snapshot as new requests or derive synthetic success rates from it. Explicit source failure/no-data/truncation diagnostics accompany independent summary counts; no empty healthy fallback is used. Simulation skips provider I/O and credentials. See the [exact configuration/diagnostic contract](../synthetic-tests/utils/README.md#optional-provider-collectors). Local mocked validation proves neither live access nor tenant eligibility and grants no permission.
+Provider issue/history and beta observations remain structured console diagnostics, never synthetic/step samples. Bounded UTC historical windows overlap; do not count each repeated snapshot as new requests or derive synthetic success rates from it. Explicit source failure/no-data/truncation diagnostics accompany independent summary counts; no empty healthy fallback is used. Simulation skips provider I/O and credentials. See the [exact configuration/diagnostic contract](../synthetic-tests/utils/README.md#optional-provider-collectors). Local mocked validation proves neither live access nor tenant eligibility and grants no permission.
 
 ## Teams: bot-backed channel journey
 
@@ -42,26 +42,26 @@ SharePoint verifies the approved site/drive with bounded pagination, uploads a u
 
 Use scoped permissions and dedicated resources. One mailbox/site tests an integration, not tenant-wide availability. Labels do not change the execution location; regional claims require actually placed runners.
 
-## Per-cycle reporting and optional historical evaluation
+## Per-cycle reporting and its limits
 
 - Choose success-rate denominators explicitly and show unexecutable attempts separately.
-- Use weighted mean duration for the simple metric path; don't mislabel it as p95.
-- Independently track execution and accepted-report freshness, allowing for cadence/publication/propagation delay; optionally also monitor OTEL reporting gaps. No mailbox inventory is required.
+- Use the cycle's mean duration; don't mislabel it as p95 or promise historical weighted statistics from means alone.
+- Independently track execution and accepted-report freshness, allowing for cadence/publication/propagation delay. No mailbox inventory is required.
 - Keep simulation out of live availability calculations.
-- Configure query-based model signals only after validating actual ingested tables and query results.
+- Treat reports as current-cycle aggregates, not a full metrics store, percentile history or arbitrary logs query interface.
 - Use model dependencies for rollup and keep Microsoft-reported provider context separate.
-- Reuse service-owned named actions and attribute executed step 1/0/duration measurements to the fixed journey/step IDs. A cleanup failure changes only its own step and the overall attempt, not earlier successful action observations.
+- Reuse service-owned named business actions and attribute their measurements to fixed journey/step IDs. Token acquisition and cleanup remain internal; their failures can explain the overall result without emitting standalone steps or rewriting successful business-action observations.
 
-The [model templates](../health-model/README.md) create a root model referencing separate enabled service models. User Journey/action entities receive direct external reports; enabling root OTEL adds corresponding query signals on those same entities. Cloud rollout is independent of local validation; the isolated development model family and [shared worker deployment](../synthetic-tests/infra/README.md) are intended to verify real failure reporting before successful Microsoft 365 access is available. Reports replace the previous cycle with a TTL; expiry removes external signals rather than necessarily overriding remaining query evidence. Service aggregates do not identify individual missing mailboxes, and no “last healthy” state is preserved in a worker.
+The [model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of six journey entities receives whole-journey reports; 18 separate business-step child entities receive action reports. **External Reports** is their only signal group. The family has four models, 34 entities and 30 relationships. Cloud rollout is independent of local validation; the isolated development model family and [shared worker deployment](../synthetic-tests/infra/README.md) exercise real failure reporting before successful Microsoft 365 access is available. The report-only migration still needs cloud verification. Reports replace the previous cycle with a TTL; expiry removes external signals, not a guaranteed Unhealthy state or alert. Service aggregates do not identify individual missing mailboxes, and no “last healthy” state is preserved in a worker.
 
 ## Recommended sequence
 
 1. Establish the root and selected service model topology from the reviewed root config.
-2. Run one stateless simulated service locally and verify its result/metric shape.
+2. Run one stateless simulated service locally and verify its console result/report-preview shape; never publish simulated cloud health.
 3. Containerize each selected service independently in Azure Container Apps and mount root/service configs.
 4. Obtain approved live resources and scoped Graph plus service-model report-ingestion permissions.
-5. Verify direct reports and root propagation **with OTEL disabled**, including Unknown/skipped cases and report failure/expiry.
-6. Optionally enable Application Insights/Log Analytics and same-entity queries; independently detect execution/report gaps either way.
+5. Verify separate journey/step reports, suppressed provider reports and root propagation, including Unknown/skipped cases and report failure/expiry.
+6. Complete [obsolete telemetry removal](../health-model/README.md#apply-and-migrate), redeploy report-only workers, and independently detect execution/report gaps.
 7. Validate the bot-backed Teams journey against approved resources before enabling live Teams producers or considering employee/call/media journeys.
 
-Production acceptance still needs actual live evidence, safe cleanup, ingestion/failure tests, retention/cost approval, credential rotation, and monitoring of stopped workers.
+Production acceptance still needs actual live evidence, safe cleanup, report-ingestion/failure tests, retention/cost approval, credential rotation, stopped/stalled-worker detection, and end-to-end notification tests.

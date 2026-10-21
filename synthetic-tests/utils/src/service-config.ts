@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import { probeSchema, scenarios, type Probe } from "./contracts.js";
+import { probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
 import { ConfigurationError, loadConfig, type Config } from "./config.js";
 
 export const activityFunctions = {
@@ -31,7 +31,6 @@ export type ServiceFileConfig = z.infer<typeof serviceFileSchema>;
 const common = {
   ...serviceFields,
   enabled: z.boolean(),
-  telemetry: z.enum(["none", "console", "azure-monitor"]).default("console"),
 };
 const target = probeSchema.pick({ id: true, region: true, scenario: true });
 const serviceSchema = z.discriminatedUnion("type", [
@@ -72,7 +71,7 @@ function validateProviderSettings(service: ServiceFileConfig): void {
 export function parseServiceFileConfig(raw: unknown): ServiceFileConfig {
   const parsed = serviceFileSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new ConfigurationError(`Invalid service config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}; enabled, targets and telemetry belong in the root project config`);
+    throw new ConfigurationError(`Invalid service config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}; enabled and targets belong in the root project config`);
   }
   validateProviderSettings(parsed.data);
   return parsed.data;
@@ -102,14 +101,17 @@ export async function readServiceConfig(file: string): Promise<ServiceFileConfig
   return parseServiceFileConfig(raw);
 }
 
-export function serviceProbes(service: ServiceConfig): Probe[] {
-  const type = service.type === "exchange"
-    ? "exchange-mail-flow"
-    : service.type === "sharepoint" ? "sharepoint-file" : "teams-channel-message";
-  return service.targets.map(item => ({ ...item, cohort: service.cohort, type }));
+export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readonly<Record<string, boolean>>): Probe[] {
+  const supported = testTypes.filter(type => probeServices[type].service === service.type);
+  const selected = selectedScenarios
+    ? supported.filter(type => selectedScenarios[probeServices[type].journey])
+    : supported.slice(0, 1);
+  return selected.flatMap(type => service.targets.map(item => ({ ...item, cohort: service.cohort, type })));
 }
 
-export function serviceSettings(service: ServiceConfig, env: NodeJS.ProcessEnv = process.env): Config {
+export function serviceSettings(
+  service: ServiceConfig, env: NodeJS.ProcessEnv = process.env, selectedScenarios?: Readonly<Record<string, boolean>>,
+): Config {
   if (!service.enabled) throw new ConfigurationError("Disabled configs do not create a runtime");
   if (service.serviceActivity.enabled && env.ENABLE_BETA_SERVICE_ACTIVITY !== "true") {
     throw new ConfigurationError("serviceActivity.enabled requires ENABLE_BETA_SERVICE_ACTIVITY=true (experimental diagnostics only)");
@@ -119,6 +121,6 @@ export function serviceSettings(service: ServiceConfig, env: NodeJS.ProcessEnv =
     EXECUTION_MODE: service.mode,
     SYNTHETIC_SCENARIO: service.scenario,
     PROBE_TIMEOUT_MS: String(service.timeoutSeconds * 1000),
-    PROBES_JSON: JSON.stringify(serviceProbes(service)),
+    PROBES_JSON: JSON.stringify(serviceProbes(service, selectedScenarios)),
   });
 }

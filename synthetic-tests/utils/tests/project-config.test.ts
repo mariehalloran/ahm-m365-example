@@ -19,52 +19,51 @@ const service = parseServiceConfig({
 });
 
 describe("project-root monitoring configuration", () => {
-  it("enables every implemented service/scenario and OTEL without enabling live I/O", async () => {
-    expect(checkedIn.otel).toEqual({ enabled: true, destination: "console" });
+  it("enables every implemented service/scenario without enabling live I/O", async () => {
+    expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "schemaVersion", "services"]);
     for (const type of ["exchange", "teams", "sharepoint"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
-      expect(Object.values(checkedIn.services[type].scenarios)).toEqual([true]);
+      expect(Object.values(checkedIn.services[type].scenarios)).toEqual([true, true]);
       const selected = await readProjectService(type, "../monitoring.config.json");
-      expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation", telemetry: "console" });
+      expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
   });
-  it("supplies targets, enablement and OTEL exclusively from the root", () => {
+  it("supplies targets and enablement exclusively from the root", () => {
     const project = structuredClone(checkedIn);
-    project.otel.enabled = false;
     expect(applyProjectConfig(project, service)).toMatchObject({
-      telemetry: "none", targets: project.services.exchange.targets,
+      targets: project.services.exchange.targets,
     });
-    project.otel.enabled = true;
-    project.otel.destination = "azure-monitor";
-    expect(applyProjectConfig(project, service).telemetry).toBe("azure-monitor");
+    expect(applyProjectConfig(project, service)).not.toHaveProperty("telemetry");
     const previousRuntime = { ...service, enabled: false };
     expect(applyProjectConfig(project, previousRuntime).enabled).toBe(true);
   });
   it.each(["service", "scenario"] as const)("disables execution through the root %s gate before creating dependencies", async gate => {
     const project = structuredClone(checkedIn);
     if (gate === "service") project.services.exchange.enabled = false;
-    if (gate === "scenario") project.services.exchange.scenarios["send-receive-mail"] = false;
+    if (gate === "scenario") {
+      project.services.exchange.scenarios["send-receive-mail"] = false;
+      project.services.exchange.scenarios["edit-reopen-draft"] = false;
+    }
     const createDependencies = vi.fn();
     await runServiceWorker(service, {
       project, once: true, env: {}, telemetry: { emit: vi.fn() }, createDependencies,
     });
     expect(createDependencies).not.toHaveBeenCalled();
   });
-  it("runs with OTEL disabled and previews aggregated reports without any Azure settings", async () => {
+  it("previews aggregated reports without any Azure settings", async () => {
     const project = structuredClone(checkedIn);
-    project.otel.enabled = false;
     const output = { emit: vi.fn() };
     await runServiceWorker(service, { project, once: true, env: {}, telemetry: output });
     const events = output.emit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event === "health-report-preview")).toHaveLength(8);
-    expect(events.filter(event => event === "synthetic-result")).toHaveLength(1);
+    expect(events.filter(event => event === "health-report-preview")).toHaveLength(16);
+    expect(events.filter(event => event === "synthetic-result")).toHaveLength(2);
     expect(events).not.toContain("probe-metrics");
     expect(events).not.toContain("health-report-published");
     expect(JSON.stringify(output.emit.mock.calls)).not.toContain("dedicated-synthetic@example.invalid");
   });
-  it("wires a live worker from root selection through aggregation to direct reports with OTEL disabled", async () => {
+  it("wires a live worker from root selection through aggregation to direct reports", async () => {
     const project = structuredClone(checkedIn);
-    project.otel.enabled = false;
+    project.services.exchange.scenarios["edit-reopen-draft"] = false;
     project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
     const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetcher);
@@ -87,7 +86,6 @@ describe("project-root monitoring configuration", () => {
   it("rejects invalid fields, wrong-service targets and unsupported journeys without echoing values", () => {
     const invalid = [
       { ...checkedIn, unexpected: true },
-      { ...checkedIn, otel: { enabled: "yes" } },
       { ...checkedIn, services: { ...checkedIn.services, exchange: {
         ...checkedIn.services.exchange, scenarios: { "unsupported-private-value": true },
       } } },
@@ -109,6 +107,7 @@ describe("project-root monitoring configuration", () => {
     project.services.exchange.targets = [];
     expect(() => parseProjectConfig(project)).toThrow("at least one target");
     project.services.exchange.scenarios["send-receive-mail"] = false;
+    project.services.exchange.scenarios["edit-reopen-draft"] = false;
     expect(applyProjectConfig(parseProjectConfig(project), service)).toMatchObject({ enabled: false, targets: [] });
   });
   it("requires a real subscription and enough report TTL before live credentials or operations", () => {

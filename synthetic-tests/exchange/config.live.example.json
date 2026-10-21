@@ -4,7 +4,7 @@
   "timeoutSeconds": 45,
   "mode": "live",
   "graphAuthentication": "managed-identity",
-  "serviceHealth": false,
+  "serviceHealth": true,
   "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
   "cohort": "exchange-global"
 }

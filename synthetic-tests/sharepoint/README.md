@@ -4,17 +4,19 @@
 
 **Status:** the [journey](./src/journey.ts) orchestrates separately reusable [actions](./src/steps.ts): `authenticate`, `verifyDrive`, `uploadFile`, `readFile`, `cleanup`. It has not been validated against an approved live tenant. The checked-in [config](./config.json) uses simulation, so it performs none of these network calls.
 
-Journey ID `save-reopen-file` has ordered step IDs `authenticate`, `verify-drive`, `upload-file`, `read-file`, `cleanup`. Every executed step records success (1/0) and seconds. A failed prerequisite blocks later operations; skipped steps have no success/duration sample. Attempted uploads always receive independent bounded cleanup, including after cancellation.
+Journey `save-reopen-file` has `verify-drive`, `upload-file`, and `read-file` child entities beneath `sharepoint-global`. The second journey, `rename-reopen-file`, adds `rename-file` before `read-file` beneath separate entity `sharepoint-rename`. Step IDs are journey-scoped; each journey/step receives direct success/duration reports in **External Reports**, its only signal group. Token acquisition and cleanup remain internal, without entities or published step data. Failed prerequisites block later operations; skipped actions have no success/duration sample. Attempted uploads still receive independent bounded cleanup, including after cancellation.
 
-[HTTP tests](./tests/probe.test.ts) cover both the journey and direct action calls; [analytics](./queries/analytics/) and [model queries](./queries/health-model/) are service-owned.
+The [rename journey](./src/rename-journey.ts) uses [rename/readback operations](./src/rename-steps.ts) to update only its newly created file, verify the returned item ID/name, then reopen and check its renamed metadata and original content. Both root scenarios default enabled and share this worker, site-scoped write permission and cadence.
+
+[HTTP tests](./tests/probe.test.ts) cover both the journey and direct action calls.
 
 ## Optional Microsoft-reported context
 
-[sharepointProviders](./src/providers.ts) optionally reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues`, once per cycle in the same process—not per site/target. `serviceHealth` defaults `false`; enabling it requires separately approved `ServiceHealth.Read.All` and exact subscribed service name `SharePoint Online`. This is **context-only and impact-suppressed**; issue/history records do not supply journey health, and source failures never change successful file-operation 1/0.
+[sharepointProviders](./src/providers.ts) optionally reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues`, once per cycle in the same process—not per site/target or journey. Simulation keeps `serviceHealth: false`; the live example enables it independently of journey initialization. It requires separate `ServiceHealth.Read.All` admin consent and exact subscribed service name `SharePoint Online`. Overview status reports directly to `sharepoint-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption, with `impactSuppressed`. Failed/missing/unknown overview status reports Unknown without a value and with failure context. The existing trial receives Graph 403 pending consent. Issue/history records do not supply journey health, and source failures never change successful file-operation 1/0.
 
 **There is no verified SharePoint-specific serviceActivity beta function.** `serviceActivity.enabled: true` or any nonempty function list is rejected before credentials/mutations; an OfficeApps report is not silently relabeled as SharePoint. Simulation skips configured stable sources without credentials/network or fabricated Microsoft health. Nothing grants access automatically.
 
-See the [strict config, independent source bounds, truncation and Logger-only fields](../utils/README.md#optional-provider-collectors), [context analytics](./queries/analytics/service-health-context.kql), and [collector tests](../utils/tests/providers.test.ts). References: [health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [beta serviceActivity catalog](https://learn.microsoft.com/graph/api/resources/serviceactivity?view=graph-rest-beta).
+See the [strict config, independent source bounds, truncation and console diagnostics](../utils/README.md#optional-provider-collectors) and [collector tests](../utils/tests/providers.test.ts). References: [health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [beta serviceActivity catalog](https://learn.microsoft.com/graph/api/resources/serviceactivity?view=graph-rest-beta).
 
 ## Resources prepared once
 
@@ -37,6 +39,8 @@ All relative paths use `https://graph.microsoft.com/v1.0`. Each run generates an
 | --- | --- | --- |
 | 1. Confirm the library belongs to the site | `GET /sites/{siteId}/drives?$select=id` | The configured `driveId` is in the approved site's drives; otherwise stop before uploading |
 | 2. Save the file | `PUT /drives/{driveId}/items/{folderId}:/{fileName}:/content` | Returned file ID is nonempty and filename matches this run |
+| Rename owned file (rename journey only) | `PATCH /drives/{driveId}/items/{itemId}` | Change only this run's known file to another unique name; verify returned ID/name |
+| Verify renamed metadata (rename journey only) | `GET /drives/{driveId}/items/{itemId}` | The owned item ID and new filename must match before content readback |
 | 3. Reopen the saved file | `GET /drives/{driveId}/items/{itemId}/content` | Graph returns a short-lived preauthenticated download redirect |
 | 4. Read and verify content | `GET {preauthenticatedDownloadUrl}` | Follow the approved HTTPS SharePoint URL without a Graph Authorization header; verify the exact correlation-only JSON payload |
 | 5. Clean up by known ID | `DELETE /drives/{driveId}/items/{itemId}` | Delete only the file created by this run |
@@ -61,11 +65,11 @@ A future folder/file-selected permission may narrow access further, but it canno
 
 ## Measurements
 
-**Existing:** total attempt duration through cleanup, authentication duration, success/failure, diagnostic category, and cleanup status. Each run produces structured results; optional OTEL adds total-duration/outcome measurements alongside mandatory live health reports.
+Each published run includes total attempt duration through cleanup, success/failure and diagnostic category. Authentication duration and cleanup status stay internal. Each attempt contributes one binary success observation (1 or 0) to cycle aggregation.
 
-**Implemented phase measurements:** `uploadDurationMs` measures upload request/response validation; `readDurationMs` measures download/readback verification. Each attempted phase reports timing even if it fails. Embedded OTel exports `sharepoint.file.upload.duration` and `sharepoint.file.read.duration` in seconds, separate from total duration.
+**Implemented phase measurements:** `uploadDurationMs` measures upload request/response validation; `readDurationMs` measures download/readback verification. Console observations retain each attempted phase's timing even if it fails, separate from total duration.
 
-An accepted upload alone is not success: downloaded bytes must match the unique payload. Failed cleanup makes the overall test fail. Download or identity failures are explicit. The [root config](../../monitoring.config.json) selects this journey and site/drive/folder targets; the shared worker aggregates each complete cycle and publishes journey/action health reports directly to the SharePoint model. Optional OTEL adds query evidence on those entities, not a prerequisite for reports. See [report semantics](../utils/README.md#per-cycle-health-reports).
+An accepted upload alone is not success: downloaded bytes must match the unique payload. Failed cleanup makes the overall test fail. Download or identity failures are explicit. The [root config](../../monitoring.config.json) selects both journeys and site/drive/folder targets; the shared worker aggregates each complete cycle and publishes health reports directly to separate journey/business-step entities in the SharePoint model. Reports replace cycle aggregates rather than providing a full metrics store or percentiles. See [report semantics](../utils/README.md#per-cycle-health-reports).
 
 ## Second-stage journey: writer and independent reader
 
@@ -86,7 +90,7 @@ This two-identity path is **not implemented** in the current config/handler.
 - Prove one allowed upload/read/verify/delete against the approved live site.
 - Confirm an unauthorized site/drive is rejected before mutation.
 - Test corrupted readback, download redirect rejection, timeout, ambiguous upload, and cleanup failure.
-- Validate aggregated journey/action health reports and, when OTEL is enabled for Azure, durations and per-run telemetry in Log Analytics.
+- Validate separate aggregated journey/business-step health reports, console phase timings, and suppressed provider status.
 - Agree on retention and recycle-bin handling; normal deletion is not permanent purge.
 - Enable the independent cadence only after downstream missing-result notifications and ownership are established.
 
@@ -100,9 +104,9 @@ npm run sharepoint -- --once
 node dist/sharepoint/src/worker.js --once
 ```
 
-The root configuration selects the service file (by default `sharepoint/config.json`), targets and OTEL. `--config <file>` overrides only service-specific settings; duplicate root-owned keys are rejected. Other service types are rejected before credentials or operations. See [operations](../../docs/operations.md) for live opt-in, credential protection, telemetry, and monitoring requirements.
+The root configuration selects the service file (by default `sharepoint/config.json`), targets and report policy. `--config <file>` overrides only service-specific settings; duplicate root-owned keys are rejected. Other service types are rejected before credentials or operations. See [operations](../../docs/operations.md) for live opt-in, credential protection, independent worker/report monitoring, and notification requirements.
 
-To prepare live access, copy the [live settings example](./config.live.example.json) to a private config location and select it through root `services.sharepoint.configFile`. Put approved site/drive/folder IDs only in root targets, select the approved Graph identity, and set the live environment gate only after authorization checks. The template neither creates resources nor grants permissions. Disable root OTEL or keep its destination `console` for the first manual validation if Azure export is not wanted.
+To prepare live access, copy the [live settings example](./config.live.example.json) to a private config location and select it through root `services.sharepoint.configFile`. Put approved site/drive/folder IDs only in root targets, select the approved Graph identity, and set the live environment gate only after authorization checks. The example config neither creates resources nor grants permissions. Simulation remains local previews only, never simulated cloud health.
 
 ## Microsoft references
 

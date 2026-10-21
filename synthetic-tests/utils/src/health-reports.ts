@@ -1,9 +1,10 @@
 import type { TokenCredential } from "@azure/identity";
 import { createServiceCredential } from "./auth.js";
-import { isReportedStep, probeServices, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { isReportedStep, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
+import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
@@ -18,7 +19,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: `${"synthetic" | ReportedStepName}-${"success-percentage" | "mean-duration"}`;
+    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status";
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -27,7 +28,8 @@ export interface HealthReport {
   };
 }
 export interface CycleResults { cycleId: string; results: SyntheticResult[] }
-export type HealthReporter = (cycle: CycleResults) => Promise<void>;
+export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[] }
+export type HealthReporter = (cycle: CycleResults | ProviderCycle) => Promise<void>;
 
 interface MeasurementSample {
   success: boolean;
@@ -36,7 +38,6 @@ interface MeasurementSample {
 }
 interface EntitySamples {
   entityName: string;
-  signalPrefix: "synthetic" | ReportedStepName;
   samples: MeasurementSample[];
   skipped: number;
 }
@@ -75,12 +76,16 @@ function collectActionSamples(name: ReportedStepName, results: SyntheticResult[]
 }
 
 function collectEntitySamples(service: ServiceConfig["type"], results: SyntheticResult[]): EntitySamples[] {
-  return Object.entries(probeServices).filter(([, journey]) => journey.service === service).flatMap(([testType, journey]) => {
+  const supported = testTypes.filter(type => probeServices[type].service === service);
+  const observed = results.length
+    ? supported.filter(type => results.some(result => result.testType === type))
+    : supported.slice(0, 1);
+  return observed.flatMap(testType => {
+    const journey = probeServices[testType];
     const journeyResults = results.filter(result => result.testType === testType);
     const groups: EntitySamples[] = [
       {
         entityName: journey.entityName,
-        signalPrefix: "synthetic",
         samples: journeyResults.map(result => ({
           success: result.success, durationMs: result.durationMs,
           ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
@@ -90,7 +95,7 @@ function collectEntitySamples(service: ServiceConfig["type"], results: Synthetic
       ...journey.steps.filter(isReportedStep).map(name => {
         const samples = collectActionSamples(name, journeyResults);
         return {
-          entityName: journey.entityName, signalPrefix: name, samples,
+          entityName: `${journey.entityName}-${name}`, samples,
           skipped: journeyResults.length - samples.length,
         };
       }),
@@ -131,11 +136,11 @@ function createEntityReports(group: EntitySamples, cycleId: string, policy: Poli
   };
   const measurements: Measurement[] = [
     {
-      signalName: `${group.signalPrefix}-success-percentage`, rules: successRules,
+      signalName: "synthetic-success-percentage", rules: successRules,
       value: attempted ? 100 * succeeded / attempted : undefined,
     },
     {
-      signalName: `${group.signalPrefix}-mean-duration`, rules: durationRules,
+      signalName: "synthetic-mean-duration", rules: durationRules,
       value: attempted ? group.samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
     },
   ];
@@ -147,6 +152,47 @@ export function aggregateHealthReports(
 ): HealthReport[] {
   return collectEntitySamples(service, cycle.results).flatMap(group =>
     createEntityReports(group, cycle.cycleId, policy));
+}
+
+const serviceStatusScores: Readonly<Record<string, number>> = {
+  serviceoperational: 100, servicerestored: 100, resolved: 100, resolvedexternal: 100,
+  falsepositive: 100, postincidentreviewpublished: 100,
+  serviceinterruption: 0,
+  servicedegradation: 50, investigating: 50, restoringservice: 50, verifyingservice: 50,
+  extendedrecovery: 50, investigationsuspended: 50, mitigated: 50, mitigatedexternal: 50,
+  confirmed: 50, reported: 50,
+};
+
+export function serviceHealthReport(
+  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number,
+): HealthReport {
+  const records = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.parse(record))
+    .filter(record => record.service === service);
+  const overviews = records.filter(record => record.kind === "overview");
+  const failures = records.filter((record): record is Extract<ProviderDiagnostic, { kind: "failure" }> =>
+    record.kind === "failure" && record.apiVersion === "v1.0" && record.source === "serviceAnnouncement.healthOverviews");
+  const skipped = records.some(record =>
+    record.kind === "skipped" && record.source === "serviceAnnouncement.healthOverviews");
+  const scores = overviews.map(record => serviceStatusScores[record.status.toLowerCase()]);
+  const knownScores = scores.filter((score): score is number => typeof score === "number");
+  const value = failures.length || skipped || !scores.length || knownScores.length !== scores.length
+    ? undefined : Math.min(...knownScores);
+  return {
+    entityName: `${service}-service-health`,
+    body: {
+      signalName: "microsoft-reported-service-status", expiresInMinutes: ttlMinutes,
+      healthState: value === undefined ? "Unknown" : value === 100 ? "Healthy" : value === 0 ? "Unhealthy" : "Degraded",
+      ...(value === undefined ? {} : { value }),
+      additionalContext: JSON.stringify({
+        cycleId: cycle.cycleId, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
+        overviewCount: overviews.length,
+        statuses: [...new Set(overviews.map(record => record.status))].slice(0, 8),
+        diagnosticCategories: failures.length ? [...new Set(failures.map(record => record.category))]
+          : !overviews.length ? ["no-data"] : [],
+        httpStatuses: [...new Set(failures.flatMap(record => record.httpStatus === undefined ? [] : [record.httpStatus]))].slice(0, 8),
+      }),
+    },
+  };
 }
 
 async function sendHealthReport(context: PublicationContext, report: HealthReport, signal: AbortSignal): Promise<void> {
@@ -198,7 +244,8 @@ export function createHealthReporter(
   const modelPath = `https://management.azure.com/subscriptions/${encodeURIComponent(policy.subscriptionId)}`
     + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(modelName)}`;
   return async cycle => {
-    const reports = aggregateHealthReports(service.type, cycle, policy);
+    const reports = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
+      : service.mode === "live" && service.serviceHealth ? [serviceHealthReport(service.type, cycle, policy.reportTtlMinutes)] : [];
     if (!http) {
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;

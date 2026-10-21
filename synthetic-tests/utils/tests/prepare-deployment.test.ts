@@ -1,5 +1,5 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prepareDeploymentParameters } from "../src/prepare-deployment.js";
@@ -10,7 +10,8 @@ let directory: string;
 let projectFile: string;
 const checkedIn = await readProjectConfig("../monitoring.config.json");
 beforeEach(async () => {
-  directory = await mkdtemp(join(tmpdir(), "m365-deployment-"));
+  directory = `.deployment-test-${randomUUID()}`;
+  await mkdir(directory);
   projectFile = join(directory, "monitoring.json");
   await mkdir(join(directory, "profiles"));
   const project = structuredClone(checkedIn);
@@ -28,6 +29,9 @@ describe("deployment parameter preparation", () => {
     const parameters = await prepareDeploymentParameters(projectFile);
     expect(parameters.parameters.deployWorkers.value).toBe(false);
     expect(parameters.parameters.enableLiveProbes.value).toBe(false);
+    expect(Object.keys(parameters.parameters).sort()).toEqual([
+      "deployWorkers", "enableLiveProbes", "projectConfig", "serviceConfigs", "workerImage",
+    ]);
     for (const profile of Object.values(parameters.parameters.serviceConfigs.value)) {
       expect(profile.mode).toBe("simulation");
       for (const key of ["enabled", "targets", "telemetry"]) expect(profile).not.toHaveProperty(key);

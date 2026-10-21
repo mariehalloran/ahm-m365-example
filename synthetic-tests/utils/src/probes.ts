@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { probeServices, type Probe, type Scenario, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { probeServices, type Probe, type Scenario, type StepName, type SyntheticResult, type Telemetry, type TestType } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
+import { IntegrationError } from "./http.js";
 
 export interface ProbeContext {
   config: {
@@ -17,6 +18,14 @@ export interface ProbeContext {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 export type ProbeHandler = (probe: Probe, context: ProbeContext) => Promise<SyntheticResult>;
+
+export function dispatchProbeHandlers(handlers: Partial<Record<TestType, ProbeHandler>>): ProbeHandler {
+  return (probe, context) => {
+    const handler = handlers[probe.type];
+    if (!handler) throw new IntegrationError("collector-failure");
+    return handler(probe, context);
+  };
+}
 
 export function baseResult(probe: Probe, now: number): SyntheticResult {
   return {
@@ -37,45 +46,40 @@ export function baseResult(probe: Probe, now: number): SyntheticResult {
 
 export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) => {
   const result = baseResult(probe, now());
+  const metadata = probeServices[probe.type];
+  const orderedSteps: readonly StepName[] = metadata.steps;
   const scenario = probe.scenario ?? config.SYNTHETIC_SCENARIO;
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
   result.durationMs = scenario === "slow" ? 30000 : scenario === "timeout" ? 65000 : 3200;
-  if (probe.type === "exchange-mail-flow" || probe.type === "teams-channel-message") {
-    result.sendDurationMs = 200;
-  }
-  if (probe.type === "exchange-mail-flow" && result.success) {
-    result.deliveryDurationMs = result.durationMs;
-  }
-  if (probe.type === "teams-channel-message" && result.success) {
-    result.publicationDurationMs = result.durationMs;
-  }
-  if (probe.type === "sharepoint-file") {
-    result.uploadDurationMs = 200;
-    result.readDurationMs = result.durationMs - 500;
-  }
   result.diagnosticCategory = scenario === "failed"
-    ? probe.type === "sharepoint-file" ? "read-failure" : "send-failure"
+    ? metadata.service === "sharepoint" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
     : scenario === "timeout" ? "delivery-timeout" : null;
   result.diagnosticContext.testStage = "simulated";
   result.diagnosticContext.cleanupSucceeded = true;
   if (scenario === "stale") {
     result.observedAt = new Date(now() - 30 * 60 * 1000).toISOString();
   }
-  const metadata = probeServices[probe.type];
-  const failedStep = scenario === "failed"
-    ? probe.type === "exchange-mail-flow" ? "send" : probe.type === "teams-channel-message" ? "post-message" : "read-file"
-    : scenario === "timeout"
-      ? probe.type === "exchange-mail-flow" ? "confirm-delivery" : probe.type === "teams-channel-message" ? "confirm-publication" : "read-file"
-      : undefined;
+  const failureSteps = {
+    "exchange-mail-flow": "send", "exchange-draft": "update-draft",
+    "teams-channel-message": "post-message", "teams-channel-reply": "post-reply",
+    "sharepoint-file": "read-file", "sharepoint-rename": "rename-file",
+  } as const;
+  const completionSteps = {
+    "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
+    "teams-channel-message": "confirm-publication", "teams-channel-reply": "confirm-reply",
+    "sharepoint-file": "read-file", "sharepoint-rename": "read-file",
+  } as const;
+  const failedStep = scenario === "failed" ? failureSteps[probe.type]
+    : scenario === "timeout" ? completionSteps[probe.type] : undefined;
+  const longStep = failedStep ?? completionSteps[probe.type];
+  const baseline = (name: StepName) => ["authenticate", "cleanup", "verify-drive"].includes(name) ? 100 : 200;
+  const fixedDuration = orderedSteps.reduce((sum, name) =>
+    sum + (name === longStep || (failedStep && name !== "cleanup" && orderedSteps.indexOf(name) > orderedSteps.indexOf(failedStep)) ? 0 : baseline(name)), 0);
   let blocked = false;
-  result.steps = metadata.steps.map(name => {
+  result.steps = orderedSteps.map(name => {
     const common = { name, observedAt: result.observedAt };
     if (blocked && name !== "cleanup") return { ...common, status: "skipped", reason: "prerequisite-failed" };
-    const durationMs = name === failedStep && scenario === "failed" && name !== "read-file"
-      ? result.durationMs - (probe.type === "exchange-mail-flow" ? 400 : 200)
-      : name.startsWith("confirm-") || name === "read-file"
-      ? result.durationMs - (probe.type === "exchange-mail-flow" ? 600 : probe.type === "teams-channel-message" ? 400 : 500)
-      : name === "send" || name === "post-message" || name === "create-draft" || name === "upload-file" ? 200 : 100;
+    const durationMs = name === longStep ? Math.max(0, result.durationMs - fixedDuration) : baseline(name);
     if (name === failedStep) {
       blocked = true;
       return { ...common, status: "failed", durationMs, diagnosticCategory: result.diagnosticCategory! };
@@ -84,16 +88,32 @@ export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) 
   });
   const stepDuration = (name: string) => {
     const step = result.steps.find(step => step.name === name);
-    return step && step.status !== "skipped" ? step.durationMs : 0;
+    return step && step.status !== "skipped" ? step.durationMs : undefined;
   };
-  if (probe.type !== "sharepoint-file") {
-    result.sendDurationMs = stepDuration(probe.type === "exchange-mail-flow" ? "send" : "post-message");
+  const confirmedDuration = (request: string, completion: string) => {
+    const submitted = stepDuration(request);
+    const confirmed = stepDuration(completion);
+    if (submitted === undefined || confirmed === undefined) throw new IntegrationError("malformed-response");
+    return submitted + confirmed;
+  };
+  const sendStep = metadata.service === "teams"
+    ? probe.type === "teams-channel-reply" ? "post-reply" : "post-message"
+    : probe.type === "exchange-mail-flow" ? "send" : undefined;
+  if (sendStep) {
+    const measured = stepDuration(sendStep);
+    if (measured !== undefined) result.sendDurationMs = measured;
   }
   if (probe.type === "exchange-mail-flow" && result.success) {
-    result.deliveryDurationMs = stepDuration("send") + stepDuration("confirm-delivery");
+    result.deliveryDurationMs = confirmedDuration("send", "confirm-delivery");
   }
-  if (probe.type === "teams-channel-message" && result.success) {
-    result.publicationDurationMs = stepDuration("post-message") + stepDuration("confirm-publication");
+  if (metadata.service === "teams" && result.success && sendStep) {
+    result.publicationDurationMs = confirmedDuration(sendStep, completionSteps[probe.type]);
+  }
+  if (metadata.service === "sharepoint") {
+    const upload = stepDuration("upload-file");
+    const read = stepDuration("read-file");
+    if (upload !== undefined) result.uploadDurationMs = upload;
+    if (read !== undefined) result.readDurationMs = read;
   }
   return result;
 };

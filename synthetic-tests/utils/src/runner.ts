@@ -5,7 +5,7 @@ import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
-import { publishTelemetryAndHealth, type ResultTelemetry } from "./results.js";
+import type { ResultOutput } from "./results.js";
 import type { CycleResults, HealthReporter } from "./health-reports.js";
 
 const MAX_CONCURRENT_PROBES = 3;
@@ -13,7 +13,7 @@ const CYCLE_TIMEOUT_MS = 170_000;
 const CLEANUP_GRACE_MS = 12_000;
 
 export interface RunnerDependencies {
-  results: ResultTelemetry;
+  results: ResultOutput;
   telemetry: Telemetry;
   graph?: GraphClient;
   teamsBot?: TeamsBotClient;
@@ -131,12 +131,12 @@ async function executeProbes(
       const result = await runSingleProbe(probe, config, dependencies, cycle);
       results.push(result);
 
-      // Export errors must not be turned into a second, fabricated probe result.
+      // Output errors must not be turned into a second, fabricated probe result.
       try { dependencies.results.record(result, config.EXECUTION_MODE); }
       catch (error) {
         if (!dependencies.reportHealth) throw error;
         telemetryErrors.push(error);
-        dependencies.telemetry.emit("result-telemetry-failed", { cycleId: cycle.cycleId, category: categoryOf(error) });
+        dependencies.telemetry.emit("result-output-failed", { cycleId: cycle.cycleId, category: categoryOf(error) });
       }
     }
   };
@@ -164,8 +164,7 @@ async function publishCycleResults(
       cycleId: cycle.cycleId, probeCount: cycle.results.length,
     });
   }
-  await publishTelemetryAndHealth(dependencies.results, () =>
-    complete ? dependencies.reportHealth?.(cycle) : undefined);
+  if (complete) await dependencies.reportHealth?.(cycle);
   if (telemetryErrors.length) throw telemetryErrors[0];
 }
 

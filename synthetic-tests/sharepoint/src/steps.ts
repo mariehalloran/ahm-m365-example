@@ -45,7 +45,7 @@ export async function uploadFile(graph: GraphClient, attempt: FileAttempt, signa
   attempt.mutationAttempted = true;
   const file = await graph.json(`${location.file}:/content`, driveItemSchema, signal, "PUT", {
     correlationId: attempt.correlationId,
-  });
+  }, false);
   if (file.name !== location.name) throw new IntegrationError("malformed-response");
   attempt.uploadedFileId = file.id;
   return file.id;

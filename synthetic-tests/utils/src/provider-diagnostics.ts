@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { Attributes } from "@opentelemetry/api";
 import { categories } from "./contracts.js";
 
 export const providerServices = ["exchange", "teams", "sharepoint"] as const;
@@ -44,9 +43,9 @@ export type ProviderSource = (typeof providerSources)[number];
 export type ProviderCategory = (typeof providerCategories)[number];
 
 // This facade accepts only approved provider fields, never arbitrary log attributes or HTTP errors.
-export function providerLog(raw: ProviderDiagnostic): { body: string; timestamp: Date; attributes: Attributes } {
+export function providerLog(raw: ProviderDiagnostic): { body: string; timestamp: Date; attributes: Record<string, string | number | boolean> } {
   const record = providerDiagnosticSchema.parse(raw);
-  const attributes: Attributes = {
+  const attributes: Record<string, string | number | boolean> = {
     "provider.service": record.service, "provider.collected_at": record.collectedAt,
     "provider.mode": record.kind === "skipped" ? "simulation" : "live",
   };

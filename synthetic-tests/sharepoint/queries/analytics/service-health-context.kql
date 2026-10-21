@@ -1,8 +1,0 @@
-AppTraces
-| where TimeGenerated > ago(1d)
-| where Message in ("m365-service-health-overview", "m365-service-health-issue")
-| where tostring(Properties["provider.service"]) == "sharepoint"
-| where tostring(Properties["provider.mode"]) == "live"
-| where tostring(Properties["provider.api_version"]) == "v1.0"
-| project TimeGenerated, RecordType = Message, Properties
-| order by TimeGenerated desc
