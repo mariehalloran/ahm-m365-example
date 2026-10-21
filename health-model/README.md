@@ -2,7 +2,7 @@
 
 The [root config](../monitoring.config.json) selects services/scenarios and report policy. The root health model references separate service models. Each selected journey has its own entity, with **business-step child entities**. Each journey and step has only an **External Reports** signal group.
 
-The isolated development family is `m365-experience-demo` in `rg-m365-demo`. The older `m365-experience-poc` remains separate: preserve its entities and root, removing only obsolete telemetry bindings. The report-only migration also requires explicit deletion of both families' old telemetry resources; see [Apply and migrate](#apply-and-migrate). Provisioning and failure-path testing do not prove successful Microsoft 365 access or production readiness.
+The isolated development family is `m365-experience-demo` in `rg-m365-demo`, redeployed report-only with four models, 34 entities, 30 relationships, six journeys and 18 business-step entities. The older `m365-experience-poc` remains separate: its model entities/root are retained and queries removed. Both families' old telemetry pairs and associated smart-detector rules have been deleted; see [Apply and migrate](#apply-and-migrate). Normal workspace deletion has a 14-day recovery window, not a permanent purge. Provisioning and failure-path testing do not prove successful Microsoft 365 access or production readiness.
 
 ## Structure
 
@@ -116,7 +116,9 @@ Deploy the model before the matching worker image so all six journey and journey
 
 **Incremental deployment does not delete obsolete resources.** The report-only migration must explicitly remove old query signals/groups, query authentication, scoped query-reader assignments, and obsolete app connection-string secrets/settings. Delete **both the current demo and original PoC Log Analytics/Application Insights pairs**, including their associated smart-detector rules, after confirming ownership and any retention/export obligations. This intentionally removes the former telemetry store; do not promise retained history after deletion. Preserve the original PoC model entities/root and remove only its telemetry bindings. Retain the demo's service roots/context, native references, and worker resources. Never use complete deployment mode on a shared resource group.
 
-Rebuild and redeploy the report-only workers with regenerated configuration, then verify current reports and model propagation. Source changes alone do not prove that cloud cleanup or redeployment has completed.
+For the current demo, cleanup and report-only redeployment are verified: both telemetry pairs and associated smart-detector rules are deleted, four workspace-query settings and four scoped reader-role assignments are removed, and all three apps have ready/running `--0000005` revisions with no Application Insights environment settings or ingestion secrets. Only root/service configuration secrets remain. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. The original PoC model entities/root remain with their queries removed.
+
+The [shared worker guide](../synthetic-tests/infra/README.md#verified-report-only-deployment) records the immutable image digest. Fresh SharePoint provider status is verified as Unknown with explicit Graph 403 diagnostics; all-service end-to-end report/rollup verification remains in progress. Source checks, successful deployment and a single provider observation do not establish that final gate.
 
 ## Validation and limits
 
@@ -129,4 +131,4 @@ Offline tests cover scenario selection, multiple journey definitions, external-o
 
 Verify live business-action data, fresh direct reports and service/root rollup after deployment. Successful token acquisition is not mailbox access, API-backed tests are not employee login/UI tests, and Unhealthy configuration failures are not proof of a Microsoft outage.
 
-With both journeys per product at default cadence, synthetic journey/step reports make about **38,304 calls/day before retries**, plus stable provider reports when enabled. No extra Container Apps are added. Review applicable pricing, report/API quotas and the [enterprise acceptance gate](../docs/operations.md#enterprise-reliability-acceptance-gate). No successful tenant journeys, report-only cloud migration, or end-to-end notifications are claimed by the earlier failure-path trial.
+With both journeys per product at default cadence, synthetic journey/step reports make about **38,304 calls/day before retries**, plus stable provider reports when enabled. No extra Container Apps are added. Review applicable pricing, report/API quotas and the [enterprise acceptance gate](../docs/operations.md#enterprise-reliability-acceptance-gate). The verified report-only deployment does not establish successful tenant journeys, completed all-service end-to-end verification, or notification delivery.

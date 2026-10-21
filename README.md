@@ -9,6 +9,10 @@ This example combines **synthetic user journeys** with **Azure Monitor Health Mo
 - **Synthetic tests provide evidence:** can a representative task actually be completed?
 - **Azure Monitor Health Models provides context:** which action, journey, and service experience does that evidence affect?
 
+![Exchange health model showing send-and-receive email and save-edit-reopen draft journeys, their business-step entities, and separate Service Health context.](./docs/images/exchange-health-model.png)
+
+*Exchange Experience: two journeys with business-step entities and separate, impact-suppressed Service Health context.*
+
 ## Why synthetic tests?
 
 Provider status and infrastructure metrics are useful, but they do not exercise our approved identities, resources, permissions, and access paths together.
@@ -81,6 +85,8 @@ Reports replace the previous cycle's aggregates; they are not a full metrics sto
 These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, employee read receipts, Teams media tests, or SharePoint coauthoring tests. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
 
 The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
+
+The demo has been redeployed report-only with four models, 34 entities, 30 relationships, six journeys and 18 business steps. All three apps have ready/running `--0000005` revisions using the same immutable image digest. Both the demo and original PoC telemetry resource pairs and associated smart-detector rules have been deleted; the original PoC model remains without queries. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. Fresh SharePoint provider reporting is verified as Unknown with explicit Graph 403 diagnostics; all-service end-to-end verification is still in progress. See [verified deployment details](./synthetic-tests/infra/README.md#verified-report-only-deployment) for the digest and remaining acceptance gates.
 
 ## How to use this example
 

@@ -238,13 +238,13 @@ Managed identity authenticates Graph with `ManagedIdentityCredential({ clientId 
 | --- | --- |
 | Exchange, Teams, SharePoint journeys and named steps | Implemented with safe simulation defaults and HTTP-mocked tests; no live tenant acceptance completed |
 | Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
-| Root model of service models and journey/step entities | Six journeys and 18 business steps; External Reports only; report-only cloud migration needs separate verification; previous PoC model entities/root retained |
+| Root model of service models and journey/step entities | Redeployed report-only: four models, 34 entities, 30 relationships, six journeys and 18 business steps; External Reports only; original PoC model retained without queries |
 | Stable provider context / beta diagnostics | Stable overview status reports are impact-suppressed; missing/failed/unknown overviews report Unknown; issues and beta are diagnostics only, never synthetic success samples |
-| Worker hosting and packaging | Non-root Docker image, private registry/shared environment template, three independent apps and root-driven parameter preparation; see the shared deployment guide |
+| Worker hosting and packaging | All three apps have ready/running `--0000005` revisions on the same immutable digest; no Application Insights environment settings or ingestion secrets, only root/service config secrets; see the shared deployment guide |
 | Tenant authorization and runtime settings | Successful mailbox/site/team access, Graph/Exchange grants, stable Service Health consent, and bot installation/certificates still need acceptance |
-| Production operations | Successful live journeys, report-only rollout, independent failure detection, notifications, and reliability acceptance are not yet proven/configured |
+| Production operations | Report-only rollout and telemetry deletion verified; fresh SharePoint provider Unknown/Graph 403 reporting verified; all-service end-to-end verification still running; successful journeys, independent failure detection and notification acceptance remain unproven |
 
-The earlier deployed live failure-path trial used real authentication/requests and reported actual failures. It does **not** establish successful Microsoft 365 availability, completed report-only cloud migration, or production readiness.
+The earlier deployed live failure-path trial used real authentication/requests and reported actual failures. The [current report-only deployment](./infra/README.md#verified-report-only-deployment) is verified on all three apps. Both the demo and original PoC telemetry pairs and associated smart-detector rules are deleted, along with four workspace-query settings and four scoped reader roles. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. These facts do **not** establish completed all-service end-to-end verification, successful Microsoft 365 availability, or production readiness.
 
 ## Components
 

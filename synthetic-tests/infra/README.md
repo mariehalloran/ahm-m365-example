@@ -84,7 +84,7 @@ No HTTP endpoint is exposed, so there is no app URL to probe. Use Azure resource
 
 ## Verified failure-path trial
 
-The isolated `m365-experience-demo` trial ran two journeys per product in the same three apps. Exchange managed-identity authentication succeeded but actual draft creation failed for the placeholder mailbox; Teams and SharePoint reported their actual missing-configuration failures. All six journeys were Unhealthy and the root rollup remained Unhealthy. This is evidence for the earlier real failure-reporting path, **not verification that report-only migration/redeployment has completed**.
+The isolated `m365-experience-demo` trial ran two journeys per product in the same three apps. Exchange managed-identity authentication succeeded but actual draft creation failed for the placeholder mailbox; Teams and SharePoint reported their actual missing-configuration failures. All six journeys were Unhealthy and the root rollup remained Unhealthy. This is evidence for the earlier real failure-reporting path, not successful Microsoft 365 availability.
 
 Stable Service Health collection attempts both overview and issue APIs once per cycle from every service even when its journeys cannot initialize. The earlier live trial verified **HTTP 403 / `permission-failure`** for all three worker identities. A tenant administrator must separately grant `ServiceHealth.Read.All` admin consent before real overview status can populate. The report-only implementation publishes `microsoft-reported-service-status` directly to `${service}-service-health` with `impactSuppressed`: 100 healthy, 50 degraded, 0 interruption. Failed/missing/unknown overviews publish Unknown without a numeric value and with failure context; neither a Microsoft outage nor a healthy provider snapshot is invented. Issue/history and optional beta remain console diagnostics only; experimental beta collection remains off.
 
@@ -92,8 +92,24 @@ No simulated cloud reports or Microsoft 365 permission grants were used. This ve
 
 For a later configuration change, regenerate parameters and redeploy; workers read config only at startup. An incremental deployment does not delete or stop an app omitted by a newly disabled service selection: stop/deactivate that existing worker explicitly before removing its deployment/reference. The foundation-only stage likewise does not stop previously deployed workers.
 
+## Verified report-only deployment
+
+The current demo models have been redeployed report-only: **four models, 34 entities, 30 relationships, six journeys and 18 business-step entities**, with **External Reports** as the only signal group on reporting entities.
+
+All three Container Apps have ready/running revisions ending in `--0000005`, using this immutable image digest:
+
+```text
+sha256:a9ede669f8fdbe70e0742328d898d96c3d6b37e888a270b4a4a267b8e7c001ac
+```
+
+No Application Insights environment settings or ingestion secrets remain in those apps; only root/service configuration secrets remain. The obsolete Exchange-only mock Bicep has also been stripped of telemetry and compiled.
+
+Fresh SharePoint external provider reporting is verified: `microsoft-reported-service-status` is Unknown without a fabricated value, with explicit Graph 403 diagnostics. `ServiceHealth.Read.All` admin consent remains required. **All-service end-to-end verification is still in progress**; ready/running revisions and this provider observation are not that final gate, successful tenant journeys, production acceptance, or end-to-end notification proof.
+
 ## Report-only migration cleanup
 
 Incremental model/app deployments do not delete obsolete telemetry resources. Explicitly remove old query signals/groups, query authentication and scoped reader grants, and app connection-string secrets/settings. Delete both the current demo and original PoC Log Analytics/Application Insights pairs and associated smart-detector rules after confirming ownership and retention/export obligations. Preserve the original PoC model entities/root, stripping only telemetry bindings; see the [model migration guide](../../health-model/README.md#apply-and-migrate).
 
-Rebuild/publish the report-only image, regenerate parameters with the same preparation CLI and optional image/`--enable-live` arguments shown above, and redeploy. Verify actual cloud deletion, the new revision/image/configuration, direct reports, provider Unknown/failure context, and service/root propagation before declaring migration complete. TTL expiry only removes external signals; independent stopped/stalled-worker, broken-reporting and notification tests remain acceptance gates. Reports replace current-cycle aggregates, not a full metrics store, percentile history or arbitrary log-query interface.
+For the current migration, both the demo and original PoC telemetry pairs and associated smart-detector rules have been deleted. Four workspace-query settings and four scoped reader-role assignments were removed. The original PoC model is retained, with its queries removed. Workspaces used normal deletion with a **14-day recovery window**, **not permanent purge**.
+
+For subsequent environments or changes, rebuild/publish the report-only image, regenerate parameters with the same preparation CLI and optional image/`--enable-live` arguments shown above, and redeploy. Verify actual cloud deletion, the new revision/image/configuration, direct reports, provider Unknown/failure context, and service/root propagation. The current all-service end-to-end check remains in progress. TTL expiry only removes external signals; independent stopped/stalled-worker, broken-reporting and notification tests remain acceptance gates. Reports replace current-cycle aggregates, not a full metrics store, percentile history or arbitrary log-query interface.
