@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { InMemoryLogRecordExporter, type LogRecordExporter } from "@opentelemetry/sdk-logs";
 import { AggregationTemporality, DataPointType, InMemoryMetricExporter, type PushMetricExporter } from "@opentelemetry/sdk-metrics";
-import type { SyntheticResult } from "../src/contracts.js";
+import { isReportedStep, type SyntheticResult } from "../src/contracts.js";
 import { baseResult, simulate } from "../src/probes.js";
 import { createResultTelemetry, outcomeOf } from "../src/results.js";
 
@@ -35,7 +35,7 @@ describe("real isolated OTel measurements", () => {
       await telemetry.forceFlush();
       const records = logs.getFinishedLogRecords();
       expect(records.filter(record => record.body === "synthetic-result")).toHaveLength(30);
-      expect(records.filter(record => record.body === "synthetic-step")).toHaveLength(150);
+      expect(records.filter(record => record.body === "synthetic-step")).toHaveLength(90);
     } finally { await telemetry.shutdown(); }
   });
   it.each(["exchange-mail-flow", "teams-channel-message", "sharepoint-file"] as const)(
@@ -53,7 +53,7 @@ describe("real isolated OTel measurements", () => {
         const duration = instruments.find(metric => metric.descriptor.name === "synthetic.step.duration");
         expect(success?.descriptor.unit).toBe("1");
         expect(duration?.descriptor.unit).toBe("s");
-        const executed = sample.steps.filter(step => step.status !== "skipped");
+        const executed = sample.steps.filter(step => isReportedStep(step.name)).filter(step => step.status !== "skipped");
         expect(success?.dataPoints).toHaveLength(executed.length);
         expect(duration?.dataPoints).toHaveLength(executed.length);
         for (const step of executed) {
@@ -72,7 +72,8 @@ describe("real isolated OTel measurements", () => {
             .toEqual(["probe.journey", "probe.mode", "probe.outcome", "probe.service"]);
         }
         const records = logs.getFinishedLogRecords();
-        expect(records.filter(record => record.body === "synthetic-step")).toHaveLength(sample.steps.length);
+        expect(records.filter(record => record.body === "synthetic-step")).toHaveLength(sample.steps.filter(step => isReportedStep(step.name)).length);
+        expect(records.every(record => !["authenticate", "cleanup"].includes(String(record.attributes["probe.step"])))).toBe(true);
         expect(records.filter(record => record.body === "synthetic-result")).toHaveLength(1);
         expect(JSON.stringify(metrics.getMetrics())).not.toMatch(/opaque-probe|opaque-cohort|correlation_id/);
       } finally { await telemetry.shutdown(); }
@@ -96,7 +97,8 @@ describe("real isolated OTel measurements", () => {
       const instruments = metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
       const success = instruments.find(metric => metric.descriptor.name === "synthetic.step.success");
       for (const point of success?.dataPoints ?? []) {
-        expect(point.value).toMatchObject({ count: 1, sum: point.attributes["probe.step"] === "cleanup" ? 0 : 1 });
+        expect(point.value).toMatchObject({ count: 1, sum: 1 });
+        expect(["authenticate", "cleanup"]).not.toContain(point.attributes["probe.step"]);
       }
       expect(instruments.find(metric => metric.descriptor.name === "mailflow.delivery.duration")?.dataPoints[0]?.value)
         .toMatchObject({ count: 1, sum: 0.7 });
@@ -117,8 +119,7 @@ describe("real isolated OTel measurements", () => {
       await telemetry.forceFlush();
       const steps = metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics))
         .filter(metric => metric.descriptor.name.startsWith("synthetic.step."));
-      expect(steps).toHaveLength(2);
-      expect(steps.every(metric => metric.dataPoints.length === 1 && metric.dataPoints[0]?.attributes["probe.step"] === "authenticate")).toBe(true);
+      expect(steps).toHaveLength(0);
     } finally { await telemetry.shutdown(); }
   });
   it("rejects unbounded or wrong-journey step labels before exporting", async () => {
@@ -238,7 +239,7 @@ describe("real isolated OTel measurements", () => {
         .toMatchObject({ count: 2, sum: 3.2 });
       expect(instruments.find(metric => metric.descriptor.name === "mailflow.delivery.duration")?.dataPoints[0]?.value)
         .toMatchObject({ count: 1, sum: 0.7 });
-      expect(logs.getFinishedLogRecords()[1]?.attributes["probe.cleanup_succeeded"]).toBe(false);
+      expect(logs.getFinishedLogRecords()[1]?.attributes).not.toHaveProperty("probe.cleanup_succeeded");
     } finally { await telemetry.shutdown(); }
   });
   it("calculates success from 0/1 observations independently for each service across unequal export batches", async () => {
@@ -363,8 +364,9 @@ describe("real isolated OTel measurements", () => {
         });
       }
       expect(logs.getFinishedLogRecords()[0]?.attributes).toMatchObject({
-        "probe.service": "teams", "probe.publication_duration_ms": 700, "probe.cleanup_succeeded": false,
+        "probe.service": "teams", "probe.publication_duration_ms": 700,
       });
+      expect(logs.getFinishedLogRecords()[0]?.attributes).not.toHaveProperty("probe.cleanup_succeeded");
     } finally { await telemetry.shutdown(); }
   });
   it("does not fabricate Exchange send or delivery duration for SharePoint", async () => {

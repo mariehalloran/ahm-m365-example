@@ -32,13 +32,15 @@ describe("single-cycle journey/action health aggregation", () => {
       { name: "send", status: "skipped", reason: "prerequisite-failed", observedAt: new Date().toISOString() },
     ];
     const reports = aggregateHealthReports("exchange", cycle([sample(), failed]), project.healthModel);
-    expect(reports).toHaveLength(12);
+    expect(reports).toHaveLength(8);
+    expect(reports.every(report => report.entityName === "exchange-global")).toBe(true);
+    expect(reports.every(report => !/authenticate|cleanup/.test(report.body.signalName))).toBe(true);
     expect(reports.find(report => report.entityName === "exchange-global")?.body).toMatchObject({
       signalName: "synthetic-success-percentage", healthState: "Unhealthy", value: 50, expiresInMinutes: 15,
     });
-    expect(reports.find(report => report.entityName === "exchange-authenticate" && report.body.signalName === "synthetic-mean-duration")?.body.value).toBe(200);
-    expect(reports.find(report => report.entityName === "exchange-send")?.body).toMatchObject({ healthState: "Healthy", value: 100 });
-    for (const report of reports.filter(report => report.entityName === "exchange-confirm-delivery")) {
+    expect(reports.find(report => report.body.signalName === "send-mean-duration")?.body.value).toBe(500);
+    expect(reports.find(report => report.body.signalName === "send-success-percentage")?.body).toMatchObject({ healthState: "Healthy", value: 100 });
+    for (const report of reports.filter(report => report.body.signalName.startsWith("confirm-delivery-"))) {
       expect(report.body).toMatchObject({ healthState: "Unknown" });
       expect(report.body).not.toHaveProperty("value");
     }
@@ -75,7 +77,7 @@ describe("direct health reports independent of OTEL", () => {
     await createHealthReporter(project, service, output, {}, { credential, fetch: fetcher })(cycle());
     expect(credential.getToken).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
-    expect(output.emit).toHaveBeenCalledTimes(12);
+    expect(output.emit).toHaveBeenCalledTimes(8);
     expect(output.emit.mock.calls.every(([event]) => event === "health-report-preview")).toBe(true);
   });
   it("posts every aggregate to its service model with ARM audience and the documented payload", async () => {
@@ -94,7 +96,8 @@ describe("direct health reports independent of OTEL", () => {
     await createHealthReporter({ ...project, otel: { enabled: false, destination: "console" } }, { ...service, mode: "live" }, output, {}, {
       credential, fetch: fetcher,
     })(cycle());
-    expect(requests).toHaveLength(12);
+    expect(requests).toHaveLength(8);
+    expect(new Set(requests.map(request => request.url)).size).toBe(1);
     expect(maximumActive).toBeLessThanOrEqual(3);
     expect(requests.every(request => request.url.includes("/healthmodels/m365-experience-poc-exchange/entities/exchange-") &&
       request.url.endsWith("/ingestHealthReport?api-version=2026-05-01-preview"))).toBe(true);
@@ -103,7 +106,7 @@ describe("direct health reports independent of OTEL", () => {
     expect(JSON.parse(String(requests[0]!.init.body))).toMatchObject({
       signalName: "synthetic-success-percentage", healthState: "Healthy", value: 100, expiresInMinutes: 15,
     });
-    expect(output.emit.mock.calls.filter(([event]) => event === "health-report-published")).toHaveLength(12);
+    expect(output.emit.mock.calls.filter(([event]) => event === "health-report-published")).toHaveLength(8);
   });
   it("fails explicitly on denied ingestion, tries other signals, and never logs response bodies or credentials", async () => {
     const output = { emit: vi.fn() };
@@ -111,7 +114,7 @@ describe("direct health reports independent of OTEL", () => {
     const credential = { getToken: vi.fn(async () => ({ token: "private-token", expiresOnTimestamp: Date.now() + 60000 })) };
     await expect(createHealthReporter(project, { ...service, mode: "live" }, output, {}, { credential, fetch: fetcher })(cycle()))
       .rejects.toThrow("collector-failure");
-    expect(fetcher).toHaveBeenCalledTimes(12);
+    expect(fetcher).toHaveBeenCalledTimes(8);
     expect(output.emit.mock.calls.every(([event]) => event === "health-report-failed")).toBe(true);
     expect(JSON.stringify(output.emit.mock.calls)).not.toMatch(/private-response|private-token|health-report-published/);
   });
@@ -133,7 +136,7 @@ describe("direct health reports independent of OTEL", () => {
     await createHealthReporter(project, { ...service, mode: "live" }, { emit: vi.fn() }, {}, {
       credential, fetch: fetcher, sleep: async () => undefined,
     })(cycle());
-    expect(attempts.size).toBe(12);
+    expect(attempts.size).toBe(8);
     expect([...attempts.values()].every(count => count === 2)).toBe(true);
   });
 });

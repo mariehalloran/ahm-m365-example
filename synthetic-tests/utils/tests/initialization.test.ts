@@ -49,7 +49,7 @@ describe("observed initialization failures", () => {
     }), "live");
     expect(exporter.forceFlush).toHaveBeenCalledOnce();
     expect(exporter.shutdown).toHaveBeenCalledOnce();
-    expect(fetcher).toHaveBeenCalledTimes(12);
+    expect(fetcher).toHaveBeenCalledTimes(8);
   });
 
   it.each(["teams", "sharepoint"] as const)("reports an unconfigured %s journey as Unhealthy, not invented failed actions", async type => {
@@ -87,7 +87,7 @@ describe("observed initialization failures", () => {
       project: project(), env, telemetry: output, signal: stop.signal, now: () => clock,
       sleep: async ms => { clock += ms; if (clock >= 120000) stop.abort(); },
     });
-    expect(fetcher).toHaveBeenCalledTimes(24);
+    expect(fetcher).toHaveBeenCalledTimes(16);
     expect(output.emit.mock.calls.filter(([event]) => event === "service-initialization-failed")).toHaveLength(2);
     expect(output.emit.mock.calls.some(([event]) => event === "service-cycle-summary")).toBe(false);
     expect(output.emit).toHaveBeenCalledWith("service-worker-stopped", expect.objectContaining({ cancelled: true }));

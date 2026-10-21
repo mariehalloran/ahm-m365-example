@@ -50,7 +50,7 @@ describe("provider diagnostics through actual Azure Monitor SDK exporters", () =
       const sample = {
         ...baseResult({ id: "one", type: "exchange-mail-flow", cohort: "exchange-global" }, Date.parse(collectedAt)),
         success: true, durationMs: 100,
-        steps: [{ name: "authenticate" as const, status: "succeeded" as const, observedAt: collectedAt, durationMs: 10 }],
+        steps: [{ name: "create-draft" as const, status: "succeeded" as const, observedAt: collectedAt, durationMs: 10 }],
       };
       telemetry.record(sample, "live");
       telemetry.record({ ...sample, success: false, diagnosticCategory: "read-failure", steps: [] }, "live");

@@ -11,15 +11,15 @@ export type DiagnosticCategory = (typeof categories)[number];
 
 export const probeServices = {
   "exchange-mail-flow": {
-    service: "exchange", target: "Exchange Online", journey: "send-receive-mail",
+    service: "exchange", target: "Exchange Online", journey: "send-receive-mail", entityName: "exchange-global",
     steps: ["authenticate", "create-draft", "send", "confirm-delivery", "cleanup"],
   },
   "sharepoint-file": {
-    service: "sharepoint", target: "SharePoint Online", journey: "save-reopen-file",
+    service: "sharepoint", target: "SharePoint Online", journey: "save-reopen-file", entityName: "sharepoint-global",
     steps: ["authenticate", "verify-drive", "upload-file", "read-file", "cleanup"],
   },
   "teams-channel-message": {
-    service: "teams", target: "Microsoft Teams", journey: "publish-channel-message",
+    service: "teams", target: "Microsoft Teams", journey: "publish-channel-message", entityName: "teams-global",
     steps: ["authenticate", "post-message", "confirm-publication", "cleanup"],
   },
 } as const;
@@ -30,6 +30,10 @@ export const stepNames = [
   "post-message", "confirm-publication", "verify-drive", "upload-file", "read-file",
 ] as const;
 export type StepName = (typeof stepNames)[number];
+export type ReportedStepName = Exclude<StepName, "authenticate" | "cleanup">;
+export function isReportedStep(name: StepName): name is ReportedStepName {
+  return name !== "authenticate" && name !== "cleanup";
+}
 export const stepResultSchema = z.discriminatedUnion("status", [
   z.object({
     name: z.enum(stepNames), status: z.literal("succeeded"), observedAt: isoDate,
@@ -105,6 +109,14 @@ export const resultSchema = z.object({
   }
 });
 export type SyntheticResult = z.infer<typeof resultSchema>;
+
+export function reportedResult(result: SyntheticResult): SyntheticResult {
+  const { authenticationDurationMs, cleanupSucceeded, ...diagnosticContext } = result.diagnosticContext;
+  if (diagnosticContext.testStage === "authentication" || diagnosticContext.testStage === "cleanup") {
+    diagnosticContext.testStage = "execution";
+  }
+  return { ...result, steps: result.steps.filter(step => isReportedStep(step.name)), diagnosticContext };
+}
 
 export const probeSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9-]{1,80}$/),

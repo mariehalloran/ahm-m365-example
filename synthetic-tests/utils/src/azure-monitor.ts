@@ -6,7 +6,7 @@ import type { PushMetricExporter } from "@opentelemetry/sdk-metrics";
 import { ConfigurationError } from "./config.js";
 import type { Telemetry } from "./contracts.js";
 import { consoleExporters, createResultTelemetry, TelemetryExportError, type ResultTelemetry } from "./results.js";
-import { resultSchema } from "./contracts.js";
+import { reportedResult, resultSchema } from "./contracts.js";
 import { providerLog } from "./provider-diagnostics.js";
 
 export function validateConnectionString(env: NodeJS.ProcessEnv): string {
@@ -50,7 +50,7 @@ export async function createProbeTelemetry(
 ): Promise<ResultTelemetry> {
   if (destination === "none") {
     return {
-      record: (result, mode) => output.emit("synthetic-result", { mode, result: resultSchema.parse(result) }),
+      record: (result, mode) => output.emit("synthetic-result", { mode, result: reportedResult(resultSchema.parse(result)) }),
       recordDiagnostic: record => {
         const log = providerLog(record);
         output.emit("provider-diagnostic", { body: log.body, attributes: log.attributes });

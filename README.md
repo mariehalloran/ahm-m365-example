@@ -53,11 +53,11 @@ Together, they provide a way to distinguish **provider-reported health**, **obse
 Root experience model
 |
 +-- Exchange model
-|   `-- Send/receive email journey -> action health
+|   `-- Send/receive email journey entity -> business-action signals
 +-- Teams model
-|   `-- Publish channel message journey -> action health
+|   `-- Publish channel message journey entity -> business-action signals
 `-- SharePoint model
-    `-- Save/reopen file journey -> action health
+    `-- Save/reopen file journey entity -> business-action signals
 ```
 
 Workers aggregate journey/action results and submit health reports directly. **OpenTelemetry and Log Analytics are optional**, not prerequisites for reporting health. When enabled, their signals add historical evidence on the same entities. Microsoft-reported Service Health remains separate supporting context, not a replacement for synthetic results.
@@ -117,7 +117,7 @@ These defaults make no Microsoft 365 or Azure calls. Inspect result records and 
 
 Establish the selected [health models](./health-model/README.md), obtain dedicated test resources, and authorize the service identity for both the Microsoft 365 journey and health-report ingestion. Update root targets/destination, select an approved live service file through `configFile`, and explicitly set `ENABLE_LIVE_M365=true`. Prove one live cycle before enabling recurrence or hosting independent workers.
 
-With OTEL disabled, direct health reports still update journey/action entities. To add Azure telemetry, enable root OTEL, configure workspace-based Application Insights, and supply `APPLICATIONINSIGHTS_CONNECTION_STRING` securely. Follow the [administrator setup](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) and [deployment guide](./docs/deployment.md); selecting live mode does not grant permissions or deploy resources.
+With OTEL disabled, direct health reports still update named signals on journey entities. Token acquisition and cleanup remain internal and are not published as journey steps. To add Azure telemetry, enable root OTEL, configure workspace-based Application Insights, and supply `APPLICATIONINSIGHTS_CONNECTION_STRING` securely. Follow the [administrator setup](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) and [deployment guide](./docs/deployment.md); selecting live mode does not grant permissions or deploy resources.
 
 ## Further guidance
 

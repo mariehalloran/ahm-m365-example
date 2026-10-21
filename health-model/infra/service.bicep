@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-import { ServiceDefinition } from './service-catalog.bicep'
+import { JourneyDefinition, ServiceDefinition } from './service-catalog.bicep'
 
 @minLength(3)
 @maxLength(44)
@@ -37,58 +37,74 @@ func createQuerySignal(name string, displayName string, queryText string, timeGr
   evaluationRules: evaluationRules
 }
 
-var journeyName = '${service.service}-global'
+func journeySignals(journey JourneyDefinition, applicationInsightsId string, successRules object, durationRules object) QuerySignal[] =>
+  concat(
+    [
+      createQuerySignal(
+        'live-success-percentage',
+        'Whole journey - success percentage',
+        bindQuery(journey.successQuery, applicationInsightsId, ''),
+        journey.timeGrain,
+        successRules
+      )
+      createQuerySignal(
+        'live-mean-duration',
+        journey.latencyDisplayName,
+        bindQuery(journey.latencyQuery, applicationInsightsId, ''),
+        journey.timeGrain,
+        durationRules
+      )
+    ],
+    flatten(map(journey.steps, step => [
+      createQuerySignal(
+        'live-${step.name}-success-percentage',
+        '${step.displayName} - success percentage',
+        bindQuery(journey.stepSuccessQuery, applicationInsightsId, step.name),
+        journey.timeGrain,
+        successRules
+      )
+      createQuerySignal(
+        'live-${step.name}-mean-duration',
+        '${step.displayName} - mean duration (ms)',
+        bindQuery(journey.stepDurationQuery, applicationInsightsId, step.name),
+        journey.timeGrain,
+        durationRules
+      )
+    ]))
+  )
+
 var contextName = '${service.service}-service-health'
 var nodes = concat(
   [
     {
       name: modelName
       displayName: service.displayName
-      kind: 'root'
-      step: ''
       rollup: true
       impact: 'Standard'
       x: 300
       y: 0
     }
     {
-      name: journeyName
-      displayName: 'User Journey'
-      kind: 'journey'
-      step: ''
-      rollup: true
-      impact: 'Standard'
-      x: 450
-      y: 200
-    }
-    {
       name: contextName
       displayName: 'Service Health'
-      kind: 'context'
-      step: ''
       rollup: false
       impact: 'Suppressed'
       x: 0
-      y: 200
+      y: 240
     }
   ],
-  map(service.steps, step => {
-    name: '${service.service}-${step.name}'
-    displayName: step.displayName
-    kind: 'action'
-    step: step.name
+  map(service.journeys, journey => {
+    name: journey.entityName
+    displayName: journey.displayName
     rollup: false
     impact: 'Standard'
-    x: 450
-    y: 400 + indexOf(service.steps, step) * 180
+    x: 400 + indexOf(service.journeys, journey) * 350
+    y: 240
   })
 )
 var relationships = concat(
-  [
-    { parent: modelName, child: journeyName }
-    { parent: modelName, child: contextName }
-  ],
-  map(service.steps, step => { parent: journeyName, child: '${service.service}-${step.name}' })
+  [{ parent: modelName, child: contextName }],
+  map(service.journeys, journey => { parent: modelName, child: journey.entityName })
 )
 var successRules = {
   degradedRule: { operator: 'LessThan', threshold: policy.successDegradedPercent }
@@ -98,61 +114,35 @@ var durationRules = {
   degradedRule: { operator: 'GreaterThan', threshold: policy.latencyDegradedMilliseconds }
   unhealthyRule: { operator: 'GreaterThan', threshold: policy.latencyUnhealthyMilliseconds }
 }
-var contextRules = {
-  degradedRule: { operator: 'LessThan', threshold: 100 }
-  unhealthyRule: { operator: 'LessThan', threshold: 1 }
-}
-var journeyDurationNames = {
-  exchange: 'Confirmed delivery - mean duration (ms)'
-  teams: 'Confirmed publication - mean duration (ms)'
-  sharepoint: 'Whole journey - mean duration (ms)'
-}
-var queryGroups = toObject(filter(nodes, node => node.kind != 'root'), node => node.name, node => {
+var journeyGroups = toObject(service.journeys, journey => journey.entityName, journey => {
   azureLogAnalytics: {
     authenticationSetting: 'workspace-query'
     logAnalyticsWorkspaceResourceId: workspace.id
-    signals: node.kind == 'context'
-      ? [
-          union(
-            createQuerySignal(
-              'microsoft-reported-service-status',
-              'Microsoft-reported service status - supporting context',
-              bindQuery(service.serviceHealthQuery, applicationInsightsResourceId, ''),
-              'PT15M',
-              contextRules
-            ),
-            {
-              dataUnit: 'Provider status score'
-              refreshInterval: 'PT5M'
-            }
-          )
-        ]
-      : [
-          createQuerySignal(
-            'live-success-percentage',
-            '${node.displayName} - success percentage',
-            bindQuery(
-              node.kind == 'journey' ? service.successQuery : service.stepSuccessQuery,
-              applicationInsightsResourceId,
-              node.step
-            ),
-            service.timeGrain,
-            successRules
-          )
-          createQuerySignal(
-            'live-mean-duration',
-            node.kind == 'journey' ? journeyDurationNames[service.service] : '${node.displayName} - mean duration (ms)',
-            bindQuery(
-              node.kind == 'journey' ? service.latencyQuery : service.stepDurationQuery,
-              applicationInsightsResourceId,
-              node.step
-            ),
-            service.timeGrain,
-            durationRules
-          )
-        ]
+    signals: journeySignals(journey, applicationInsightsResourceId, successRules, durationRules)
   }
 })
+var contextGroup = {
+  azureLogAnalytics: {
+    authenticationSetting: 'workspace-query'
+    logAnalyticsWorkspaceResourceId: workspace.id
+    signals: [
+      union(
+        createQuerySignal(
+          'microsoft-reported-service-status',
+          'Microsoft-reported service status - supporting context',
+          bindQuery(service.serviceHealthQuery, applicationInsightsResourceId, ''),
+          'PT15M',
+          {
+            degradedRule: { operator: 'LessThan', threshold: 100 }
+            unhealthyRule: { operator: 'LessThan', threshold: 1 }
+          }
+        ),
+        { dataUnit: 'Provider status score', refreshInterval: 'PT5M' }
+      )
+    ]
+  }
+}
+var queryGroups = union(journeyGroups, { '${contextName}': contextGroup })
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
   name: workspaceName

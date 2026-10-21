@@ -56,7 +56,7 @@ describe("project-root monitoring configuration", () => {
     const output = { emit: vi.fn() };
     await runServiceWorker(service, { project, once: true, env: {}, telemetry: output });
     const events = output.emit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event === "health-report-preview")).toHaveLength(12);
+    expect(events.filter(event => event === "health-report-preview")).toHaveLength(8);
     expect(events.filter(event => event === "synthetic-result")).toHaveLength(1);
     expect(events).not.toContain("probe-metrics");
     expect(events).not.toContain("health-report-published");
@@ -77,10 +77,10 @@ describe("project-root monitoring configuration", () => {
         steps: [{ name: "send", status: "succeeded", observedAt: new Date().toISOString(), durationMs: 1 }],
       }),
     });
-    expect(fetcher).toHaveBeenCalledTimes(12);
+    expect(fetcher).toHaveBeenCalledTimes(8);
     expect(fetcher.mock.calls.every(([url]) => String(url).startsWith("https://management.azure.com/"))).toBe(true);
     const events = output.emit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event === "health-report-published")).toHaveLength(12);
+    expect(events.filter(event => event === "health-report-published")).toHaveLength(8);
     expect(events).not.toContain("health-report-preview");
     expect(events).not.toContain("probe-metrics");
   });

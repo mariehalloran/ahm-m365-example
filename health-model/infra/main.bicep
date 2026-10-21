@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-import { serviceDefinitions } from './service-catalog.bicep'
+import { serviceDefinitions, ServiceDefinition } from './service-catalog.bicep'
 
 @description('The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
@@ -15,13 +15,23 @@ param workspaceName string = 'law-${projectConfig.healthModel.name}'
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
 var modelName = projectConfig.healthModel.name
-var enabledServices = filter(
+var selectedServices ServiceDefinition[] = map(
   serviceDefinitions,
   service =>
-    projectConfig.services[service.service].enabled && projectConfig.services[service.service].scenarios[service.journey]
+    union(service, {
+      journeys: filter(
+        service.journeys,
+        journey => projectConfig.services[service.service].scenarios[?journey.name] ?? false
+      )
+    })
+)
+var enabledServices = filter(
+  selectedServices,
+  service => projectConfig.services[service.service].enabled && !empty(service.journeys)
 )
 var useOtel = projectConfig.otel.enabled && !empty(enabledServices)
-var stepCount = length(flatten(map(enabledServices, service => service.steps)))
+var journeys = flatten(map(enabledServices, service => service.journeys))
+var stepCount = length(flatten(map(journeys, journey => journey.steps)))
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
   name: workspaceName
@@ -167,11 +177,11 @@ output serviceModelIds array = [
 ]
 output serviceNames array = [for service in enabledServices: service.service]
 output modelCount int = 1 + length(enabledServices)
-output entityCount int = 1 + length(enabledServices) * 4 + stepCount
-output relationshipCount int = length(enabledServices) * 3 + stepCount
-output journeyCount int = length(enabledServices)
+output entityCount int = 1 + length(enabledServices) * 3 + length(journeys)
+output relationshipCount int = length(enabledServices) * 2 + length(journeys)
+output journeyCount int = length(journeys)
 output stepCount int = stepCount
-output querySignalCount int = useOtel ? length(enabledServices) * 3 + stepCount * 2 : 0
+output querySignalCount int = useOtel ? length(enabledServices) + length(journeys) * 2 + stepCount * 2 : 0
 output workspaceResourceId string = useOtel ? workspace!.id : ''
 output workspaceCustomerId string = useOtel ? workspace!.properties.customerId : ''
 output applicationInsightsResourceId string = useOtel ? applicationInsights!.id : ''

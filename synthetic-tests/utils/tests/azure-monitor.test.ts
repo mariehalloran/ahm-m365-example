@@ -17,6 +17,27 @@ const sample = () => ({
 });
 
 describe("explicit Azure Monitor configuration", () => {
+  it("keeps token and cleanup details out of console-published results as well as OTEL", async () => {
+    const events = output();
+    const telemetry = await createProbeTelemetry("none", events, {});
+    const raw = {
+      ...sample(),
+      diagnosticContext: { authenticationDurationMs: 100, cleanupSucceeded: true },
+      steps: [
+        { name: "authenticate", status: "succeeded", observedAt: sample().observedAt, durationMs: 100 },
+        { name: "create-draft", status: "succeeded", observedAt: sample().observedAt, durationMs: 100 },
+        { name: "cleanup", status: "succeeded", observedAt: sample().observedAt, durationMs: 100 },
+      ] satisfies StepResult[],
+    };
+    telemetry.record(raw, "live");
+    const published = events.emit.mock.calls.find(([event]) => event === "synthetic-result")?.[1].result;
+    expect(published.steps.map((step: StepResult) => step.name)).toEqual(["create-draft"]);
+    expect(published.diagnosticContext).not.toHaveProperty("authenticationDurationMs");
+    expect(published.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+    expect(raw.steps).toHaveLength(3);
+    await telemetry.shutdown();
+  });
+
   it.each([
     undefined, "", "secret-value", "InstrumentationKey=secret-value",
     `${connectionString};IngestionEndpoint=https://duplicate.invalid`,
@@ -126,7 +147,8 @@ describe("real Azure exporters through an in-process mock transport", () => {
       expect(points.find(point => point.name === "mailflow.delivery.duration")).toMatchObject({ value: 0.7, count: 1 });
       const stepSuccess = metrics.filter(envelope =>
         envelope.data.baseData.metrics[0]?.name === "synthetic.step.success");
-      expect(stepSuccess).toHaveLength(5);
+      expect(stepSuccess).toHaveLength(3);
+      expect(stepSuccess.every(envelope => !["authenticate", "cleanup"].includes(envelope.data.baseData.properties["probe.step"]))).toBe(true);
       expect(stepSuccess.every(envelope =>
         envelope.data.baseData.properties["probe.journey"] === "send-receive-mail" &&
         envelope.data.baseData.properties["probe.service"] === "exchange" &&
@@ -140,7 +162,7 @@ describe("real Azure exporters through an in-process mock transport", () => {
         expect.objectContaining({ value: 1.5, count: 1 }),
       ]));
       expect(envelopes.filter(envelope =>
-        envelope.data.baseType === "MessageData" && envelope.data.baseData.message === "synthetic-step")).toHaveLength(5);
+        envelope.data.baseType === "MessageData" && envelope.data.baseData.message === "synthetic-step")).toHaveLength(3);
       expect(envelopes.every(envelope => ["MessageData", "MetricData"].includes(envelope.data.baseType))).toBe(true);
     } finally { await telemetry.shutdown(); }
   });

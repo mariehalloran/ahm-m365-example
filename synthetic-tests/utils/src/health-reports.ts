@@ -1,6 +1,6 @@
 import type { TokenCredential } from "@azure/identity";
 import { createServiceCredential } from "./auth.js";
-import { probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { isReportedStep, probeServices, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
@@ -18,7 +18,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: "synthetic-success-percentage" | "synthetic-mean-duration";
+    signalName: `${"synthetic" | ReportedStepName}-${"success-percentage" | "mean-duration"}`;
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -36,6 +36,7 @@ interface MeasurementSample {
 }
 interface EntitySamples {
   entityName: string;
+  signalPrefix: "synthetic" | ReportedStepName;
   samples: MeasurementSample[];
   skipped: number;
 }
@@ -59,7 +60,7 @@ function evaluateHealthState(value: number, rules: EvaluationRules): HealthState
   return "Healthy";
 }
 
-function collectActionSamples(name: StepName, results: SyntheticResult[]): MeasurementSample[] {
+function collectActionSamples(name: ReportedStepName, results: SyntheticResult[]): MeasurementSample[] {
   const samples: MeasurementSample[] = [];
   for (const result of results) {
     for (const step of result.steps) {
@@ -74,21 +75,28 @@ function collectActionSamples(name: StepName, results: SyntheticResult[]): Measu
 }
 
 function collectEntitySamples(service: ServiceConfig["type"], results: SyntheticResult[]): EntitySamples[] {
-  const journey = Object.values(probeServices).find(item => item.service === service)!;
-  return [
-    {
-      entityName: `${service}-global`,
-      samples: results.map(result => ({
-        success: result.success, durationMs: result.durationMs,
-        ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
-      })),
-      skipped: 0,
-    },
-    ...journey.steps.map(name => {
-      const samples = collectActionSamples(name, results);
-      return { entityName: `${service}-${name}`, samples, skipped: results.length - samples.length };
-    }),
-  ];
+  return Object.entries(probeServices).filter(([, journey]) => journey.service === service).flatMap(([testType, journey]) => {
+    const journeyResults = results.filter(result => result.testType === testType);
+    const groups: EntitySamples[] = [
+      {
+        entityName: journey.entityName,
+        signalPrefix: "synthetic",
+        samples: journeyResults.map(result => ({
+          success: result.success, durationMs: result.durationMs,
+          ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
+        })),
+        skipped: 0,
+      },
+      ...journey.steps.filter(isReportedStep).map(name => {
+        const samples = collectActionSamples(name, journeyResults);
+        return {
+          entityName: journey.entityName, signalPrefix: name, samples,
+          skipped: journeyResults.length - samples.length,
+        };
+      }),
+    ];
+    return groups;
+  });
 }
 
 function createMeasurementReport(
@@ -123,11 +131,11 @@ function createEntityReports(group: EntitySamples, cycleId: string, policy: Poli
   };
   const measurements: Measurement[] = [
     {
-      signalName: "synthetic-success-percentage", rules: successRules,
+      signalName: `${group.signalPrefix}-success-percentage`, rules: successRules,
       value: attempted ? 100 * succeeded / attempted : undefined,
     },
     {
-      signalName: "synthetic-mean-duration", rules: durationRules,
+      signalName: `${group.signalPrefix}-mean-duration`, rules: durationRules,
       value: attempted ? group.samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
     },
   ];

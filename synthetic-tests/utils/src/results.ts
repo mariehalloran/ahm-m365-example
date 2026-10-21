@@ -7,7 +7,7 @@ import {
 import {
   AggregationTemporality, MeterProvider, PeriodicExportingMetricReader, type PushMetricExporter,
 } from "@opentelemetry/sdk-metrics";
-import { probeServices, resultSchema, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { probeServices, reportedResult, resultSchema, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { providerLog, type ProviderDiagnostic } from "./provider-diagnostics.js";
 
 export type ExecutionMode = "simulation" | "live";
@@ -61,9 +61,6 @@ export function resultAttributes(result: SyntheticResult, mode: ExecutionMode): 
     ...(result.publicationDurationMs === undefined ? {} : { "probe.publication_duration_ms": result.publicationDurationMs }),
     ...(result.uploadDurationMs === undefined ? {} : { "probe.upload_duration_ms": result.uploadDurationMs }),
     ...(result.readDurationMs === undefined ? {} : { "probe.read_duration_ms": result.readDurationMs }),
-    ...(result.diagnosticContext.cleanupSucceeded === undefined ? {} : {
-      "probe.cleanup_succeeded": result.diagnosticContext.cleanupSucceeded,
-    }),
   };
 }
 
@@ -189,7 +186,7 @@ export function createResultTelemetry(
     },
     record(raw, mode) {
       if (closed) throw new TelemetryExportError();
-      const result = resultSchema.parse(raw);
+      const result = reportedResult(resultSchema.parse(raw));
       const attributes = resultAttributes(result, mode);
       const dimensions = {
         "probe.service": attributes["probe.service"],

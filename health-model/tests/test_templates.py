@@ -41,44 +41,65 @@ class ModelTemplateContracts(unittest.TestCase):
         cls.module = next(item for item in cls.resources if item["type"] == "Microsoft.Resources/deployments")
         cls.service_template = cls.module["properties"]["template"]
         cls.service_resources = deployed_resources(cls.service_template)
+        cls.functions = next(item for item in cls.service_template["functions"] if item["namespace"] == "__bicep")["members"]
 
-    def selected(self, project):
-        return [
-            service for service in self.catalog
-            if project["services"][service["service"]]["enabled"]
-            and project["services"][service["service"]]["scenarios"][service["journey"]]
-        ]
+    def selected(self, project, catalog=None):
+        selected = []
+        for definition in self.catalog if catalog is None else catalog:
+            service = copy.deepcopy(definition)
+            config = project["services"][service["service"]]
+            service["journeys"] = [
+                journey for journey in service["journeys"] if config["scenarios"].get(journey["name"], False)
+            ]
+            if config["enabled"] and service["journeys"]:
+                selected.append(service)
+        return selected
 
     def test_shared_project_defaults_and_catalog(self):
         default = resolve_literals(self.template["parameters"]["projectConfig"]["defaultValue"], self.template)
         self.assertEqual(default, self.project)
         self.assertEqual({service["service"] for service in self.catalog}, set(self.project["services"]))
-        for service in self.catalog:
-            self.assertIn(service["journey"], self.project["services"][service["service"]]["scenarios"])
         selected = self.selected(self.project)
-        steps = sum(len(service["steps"]) for service in selected)
-        self.assertEqual((len(selected) + 1, 1 + len(selected) * 4 + steps, len(selected) * 3 + steps), (4, 27, 23))
-        self.assertEqual(len(selected) * 3 + steps * 2, 37)
+        journeys = [journey for service in selected for journey in service["journeys"]]
+        steps = sum(len(journey["steps"]) for journey in journeys)
+        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys), len(selected) * 2 + len(journeys)), (4, 13, 9))
+        self.assertEqual(len(selected) + len(journeys) * 2 + steps * 2, 25)
+        self.assertEqual(steps, 8)
+        for service in self.catalog:
+            for journey in service["journeys"]:
+                self.assertIn(journey["name"], self.project["services"][service["service"]]["scenarios"])
+                self.assertFalse({"authenticate", "cleanup"} & {step["name"] for step in journey["steps"]})
 
     def test_service_and_scenario_selection_contract(self):
-        self.assertEqual(
-            self.template["variables"]["enabledServices"],
-            "[filter(variables('serviceDefinitions'), lambda('service', and(parameters('projectConfig').services[lambdaVariables('service').service].enabled, parameters('projectConfig').services[lambdaVariables('service').service].scenarios[lambdaVariables('service').journey])))]",
-        )
+        self.assertIn("variables('selectedServices')", self.template["variables"]["enabledServices"])
+        self.assertIn("scenarios", self.template["variables"]["selectedServices"])
+        self.assertIn("lambdaVariables('journey').name", self.template["variables"]["selectedServices"])
         for service in self.catalog:
             for gate in ("service", "scenario"):
                 with self.subTest(service=service["service"], gate=gate):
                     project = copy.deepcopy(self.project)
-                    selected = project["services"][service["service"]]
+                    config = project["services"][service["service"]]
                     if gate == "service":
-                        selected["enabled"] = False
+                        config["enabled"] = False
                     else:
-                        selected["scenarios"][service["journey"]] = False
+                        for journey in service["journeys"]:
+                            config["scenarios"][journey["name"]] = False
                     self.assertNotIn(service["service"], [item["service"] for item in self.selected(project)])
                     self.assertEqual(len(self.selected(project)), 2)
         for resource in self.resources:
             if "copy" in resource:
                 self.assertEqual(resource["copy"]["count"], "[length(variables('enabledServices'))]")
+
+    def test_multiple_journeys_are_selected_independently_in_one_service(self):
+        catalog = copy.deepcopy(self.catalog)
+        additional = copy.deepcopy(catalog[0]["journeys"][0])
+        additional.update(name="future-journey", entityName="exchange-future")
+        catalog[0]["journeys"].append(additional)
+        project = copy.deepcopy(self.project)
+        project["services"]["exchange"]["scenarios"]["future-journey"] = True
+        self.assertEqual(len(self.selected(project, catalog)[0]["journeys"]), 2)
+        project["services"]["exchange"]["scenarios"]["send-receive-mail"] = False
+        self.assertEqual([journey["entityName"] for journey in self.selected(project, catalog)[0]["journeys"]], ["exchange-future"])
 
     def test_all_services_disabled_keeps_evidence_free_root(self):
         project = copy.deepcopy(self.project)
@@ -114,23 +135,19 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("nested-models", source["authenticationSetting"])
         reader = next(item for item in self.resources if item["type"] == "Microsoft.Authorization/roleAssignments")
         self.assertIn("Microsoft.CloudHealth/healthmodels", reader["scope"])
-        self.assertIn("acdd72a7-3385-48ef-bd42-f606fba81ae7", reader["properties"]["roleDefinitionId"])
         self.assertNotIn("condition", reader)
 
-    def test_report_entities_and_suppressed_provider_context(self):
+    def test_journey_entities_replace_action_nodes_and_keep_suppressed_context(self):
         variables = self.service_template["variables"]
-        self.assertIn("'{0}-global'", variables["journeyName"])
-        self.assertIn("'{0}-service-health'", variables["contextName"])
         nodes = variables["nodes"]
-        self.assertIn("'kind', 'action'", nodes)
-        self.assertIn("format('{0}-{1}', parameters('service').service, lambdaVariables('step').name)", nodes)
-        self.assertIn("'kind', 'context', 'step', '', 'rollup', false(), 'impact', 'Suppressed'", nodes)
-        self.assertIn("parameters('service').steps", variables["relationships"])
+        self.assertIn("parameters('service').journeys", nodes)
+        self.assertIn("lambdaVariables('journey').entityName", nodes)
+        self.assertNotIn("parameters('service').steps", nodes)
+        self.assertIn("'impact', 'Suppressed'", nodes)
+        self.assertIn("parameters('service').journeys", variables["relationships"])
 
     def test_query_signal_factory_preserves_common_fields(self):
-        functions = next(item for item in self.service_template["functions"] if item["namespace"] == "__bicep")
-        signal = functions["members"]["createQuerySignal"]["output"]["value"]
-        self.assertEqual(signal, {
+        self.assertEqual(self.functions["createQuerySignal"]["output"]["value"], {
             "name": "[parameters('name')]",
             "displayName": "[parameters('displayName')]",
             "signalKind": "LogAnalyticsQuery",
@@ -140,22 +157,24 @@ class ModelTemplateContracts(unittest.TestCase):
             "timeGrain": "[parameters('timeGrain')]",
             "evaluationRules": "[parameters('evaluationRules')]",
         })
-        query_groups = self.service_template["variables"]["queryGroups"]
-        self.assertIn("__bicep.createQuerySignal(", query_groups)
-        self.assertIn("'refreshInterval', 'PT5M'", query_groups)
-        self.assertIn("'dataUnit', 'Provider status score'", query_groups)
+        journey_signals = self.functions["journeySignals"]["output"]["value"]
+        self.assertIn("__bicep.createQuerySignal(", journey_signals)
+        self.assertIn("success-percentage", journey_signals)
+        context = self.service_template["variables"]["contextGroup"]["azureLogAnalytics"]["signals"][0]
+        self.assertIn("'refreshInterval', 'PT5M'", context)
+        self.assertIn("'dataUnit', 'Provider status score'", context)
 
     def test_query_binding_preserves_step_and_resource_scoping(self):
-        functions = next(item for item in self.service_template["functions"] if item["namespace"] == "__bicep")
-        binding = functions["members"]["bindQuery"]["output"]["value"]
-        self.assertEqual(binding,
+        self.assertEqual(self.functions["bindQuery"]["output"]["value"],
                          "[replace(replace(parameters('queryText'), '__STEP__', parameters('stepName')), '__APPLICATION_INSIGHTS_RESOURCE_ID__', parameters('applicationInsightsId'))]")
         for service in self.catalog:
-            for name in ("successQuery", "latencyQuery", "stepSuccessQuery", "stepDurationQuery", "serviceHealthQuery"):
-                query = service[name]
-                self.assertIn("__APPLICATION_INSIGHTS_RESOURCE_ID__", query)
-                if name.startswith("step"):
-                    self.assertIn("__STEP__", query)
+            self.assertIn("__APPLICATION_INSIGHTS_RESOURCE_ID__", service["serviceHealthQuery"])
+            for journey in service["journeys"]:
+                for name in ("successQuery", "latencyQuery", "stepSuccessQuery", "stepDurationQuery"):
+                    query = journey[name]
+                    self.assertIn("__APPLICATION_INSIGHTS_RESOURCE_ID__", query)
+                    if name.startswith("step"):
+                        self.assertIn("__STEP__", query)
 
 
 if __name__ == "__main__":

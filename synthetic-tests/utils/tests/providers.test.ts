@@ -6,7 +6,7 @@ import { teamsProviders } from "../../teams/src/providers.js";
 import { sharepointProviders } from "../../sharepoint/src/providers.js";
 import { GraphClient } from "../src/graph.js";
 import { AuthenticatedHttp } from "../src/http.js";
-import { baseResult } from "../src/probes.js";
+import { baseResult, type ProbeHandler } from "../src/probes.js";
 import { collectProviderSources, PROVIDER_SOURCE_TIMEOUT_MS } from "../src/provider-collection.js";
 import { providerLog, type ProviderDiagnostic } from "../src/provider-diagnostics.js";
 import { createResultTelemetry } from "../src/results.js";
@@ -335,9 +335,10 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     // Freeze wall time only, leaving SDK timeout/flush machinery real.
     vi.spyOn(Date, "now").mockReturnValue(now());
     const telemetry = memory();
-    const handler = vi.fn(async probe => ({
+    const stepName = type === "exchange" ? "create-draft" : type === "teams" ? "post-message" : "verify-drive";
+    const handler = vi.fn<ProbeHandler>(async probe => ({
       ...baseResult(probe, now()), success: true, durationMs: 100,
-      steps: [{ name: "authenticate" as const, status: "succeeded" as const, observedAt: stamp, durationMs: 10 }],
+      steps: [{ name: stepName, status: "succeeded" as const, observedAt: stamp, durationMs: 10 }],
     }));
     try {
       await runServiceWorker(service, {

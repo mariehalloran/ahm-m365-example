@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { ConfigurationError, type Config } from "./config.js";
-import { consoleTelemetry, resultSchema, type Telemetry } from "./contracts.js";
+import { consoleTelemetry, reportedResult, resultSchema, type Telemetry } from "./contracts.js";
 import { categoryOf } from "./http.js";
 import { baseResult, type ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
@@ -89,7 +89,7 @@ async function reportInitializationFailure(
     diagnosticContext: { testStage: "initialization" },
   }));
   if (!exporter) {
-    for (const result of results) telemetry.emit("synthetic-result", { mode: service.mode, result });
+    for (const result of results) telemetry.emit("synthetic-result", { mode: service.mode, result: reportedResult(result) });
     await reportHealth({ cycleId, results });
     return;
   }
