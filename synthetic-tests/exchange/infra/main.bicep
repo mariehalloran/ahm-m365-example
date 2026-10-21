@@ -35,8 +35,8 @@ param workerEntrypoint string = 'dist/exchange/src/worker.js'
 @description('Optional existing Azure Container Registry hostname. Its scoped image-pull authorization must already be granted to this identity.')
 param registryServer string = ''
 
-@description('Approved same-tenant Exchange Online mailbox. An empty value produces an empty target list, valid only while the probe is disabled.')
-param mailboxAddress string = ''
+@description('Project-root settings, including approved targets, OTEL and health-model destination. Supply a reviewed private configuration for live use.')
+param projectConfig object = loadJsonContent('../../../monitoring.config.json')
 
 @description('Independent Exchange probe cadence in seconds.')
 @minValue(1)
@@ -49,25 +49,24 @@ param intervalSeconds int = 60
 param timeoutSeconds int = 45
 
 @secure()
-@description('Optional connection string for existing Application Insights. Empty selects console telemetry; a value selects the embedded Azure Monitor exporter.')
+@description('Connection string required only when root OTEL is enabled with azure-monitor destination. Does not select or enable OTEL.')
 param applicationInsightsConnectionString string = ''
 
-var useAzureMonitor = !empty(applicationInsightsConnectionString)
+var useAzureMonitor = projectConfig.otel.enabled && projectConfig.otel.destination == 'azure-monitor'
+var runtimeProjectConfig = union(projectConfig, {
+  services: union(projectConfig.services, {
+    exchange: union(projectConfig.services.exchange, {
+      enabled: enableLiveProbe && projectConfig.services.exchange.enabled
+    })
+  })
+})
 var exchangeConfig = {
   type: 'exchange'
-  enabled: enableLiveProbe
   intervalSeconds: intervalSeconds
   timeoutSeconds: timeoutSeconds
   mode: 'live'
   graphAuthentication: 'managed-identity'
   cohort: 'exchange-global'
-  telemetry: useAzureMonitor ? 'azure-monitor' : 'console'
-  targets: empty(mailboxAddress) ? [] : [
-    {
-      id: 'exchange-probe-001'
-      mailbox: mailboxAddress
-    }
-  ]
 }
 
 resource exchangeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
@@ -110,6 +109,10 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
           name: 'exchange-config'
           value: string(exchangeConfig)
         }
+        {
+          name: 'monitoring-config'
+          value: string(runtimeProjectConfig)
+        }
       ], useAzureMonitor ? [
         {
           name: 'applicationinsights-connection-string'
@@ -124,6 +127,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
       ]
     }
     template: {
+      terminationGracePeriodSeconds: 60
       containers: [
         {
           name: 'exchange-synthetic'
@@ -133,6 +137,8 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
           ]
           args: [
             workerEntrypoint
+            '--project-config'
+            '/etc/probe/monitoring.config.json'
             '--config'
             '/etc/probe/exchange.json'
           ]
@@ -179,6 +185,10 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
             {
               secretRef: 'exchange-config'
               path: 'exchange.json'
+            }
+            {
+              secretRef: 'monitoring-config'
+              path: 'monitoring.config.json'
             }
           ]
         }

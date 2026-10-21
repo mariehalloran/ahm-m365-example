@@ -1,20 +1,10 @@
 {
   "type": "sharepoint",
-  "enabled": false,
   "intervalSeconds": 300,
   "timeoutSeconds": 45,
   "mode": "live",
   "graphAuthentication": "managed-identity",
   "serviceHealth": false,
   "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
-  "cohort": "sharepoint-global",
-  "telemetry": "console",
-  "targets": [
-    {
-      "id": "sharepoint-probe-001",
-      "siteId": "replace-with-approved-site-id",
-      "driveId": "replace-with-approved-drive-id",
-      "folderId": "replace-with-approved-folder-id"
-    }
-  ]
+  "cohort": "sharepoint-global"
 }

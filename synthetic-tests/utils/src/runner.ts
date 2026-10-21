@@ -6,6 +6,7 @@ import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
 import type { ResultTelemetry } from "./results.js";
+import type { HealthReporter } from "./health-reports.js";
 
 const MAX_CONCURRENT_PROBES = 3;
 const CYCLE_TIMEOUT_MS = 170_000;
@@ -18,6 +19,7 @@ export interface RunnerDependencies {
   teamsBot?: TeamsBotClient;
   handler?: ProbeHandler;
   now?: () => number;
+  reportHealth?: HealthReporter;
 }
 
 async function runSingleProbe(
@@ -158,10 +160,16 @@ export async function runCycle(
         results.push(result);
 
         // Export errors must not be turned into a second, fabricated probe result.
-        dependencies.results.record(result, config.EXECUTION_MODE);
+        try { dependencies.results.record(result, config.EXECUTION_MODE); }
+        catch (error) {
+          if (!dependencies.reportHealth) throw error;
+          telemetryErrors.push(error);
+          telemetry.emit("result-telemetry-failed", { cycleId, category: categoryOf(error) });
+        }
       }
     };
 
+    const telemetryErrors: unknown[] = [];
     const concurrency = Math.min(MAX_CONCURRENT_PROBES, config.probes.length);
     const executions = Array.from({ length: concurrency }, async () => {
       try {
@@ -177,8 +185,18 @@ export async function runCycle(
       throw failedExecution.reason;
     }
 
-    stage = "telemetry";
-    await dependencies.results.forceFlush();
+    stage = "reporting";
+    const complete = results.length === config.probes.length && !cycleSignal.aborted;
+    if (!complete && dependencies.reportHealth) {
+      telemetry.emit("health-report-skipped-incomplete-cycle", { cycleId, probeCount: results.length });
+    }
+    const reporting = await Promise.allSettled([
+      Promise.resolve().then(() => complete ? dependencies.reportHealth?.({ cycleId, results }) : undefined),
+      Promise.resolve().then(() => dependencies.results.forceFlush()),
+    ]);
+    const failedReporting = reporting.find(report => report.status === "rejected");
+    if (failedReporting?.status === "rejected") throw failedReporting.reason;
+    if (telemetryErrors.length) throw telemetryErrors[0];
     telemetry.emit("service-execution-completed", {
       cycleId,
       probeCount: results.length,

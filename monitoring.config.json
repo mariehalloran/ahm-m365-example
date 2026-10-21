@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "otel": { "enabled": true, "destination": "console" },
+  "healthModel": {
+    "name": "m365-experience-poc",
+    "subscriptionId": "00000000-0000-0000-0000-000000000000",
+    "resourceGroup": "rg-m365-demo",
+    "reportTtlMinutes": 15,
+    "successDegradedPercent": 99,
+    "successUnhealthyPercent": 95,
+    "latencyDegradedMilliseconds": 15000,
+    "latencyUnhealthyMilliseconds": 60000
+  },
+  "services": {
+    "exchange": {
+      "enabled": true,
+      "configFile": "synthetic-tests/exchange/config.json",
+      "scenarios": { "send-receive-mail": true },
+      "targets": [
+        { "id": "exchange-probe-001", "mailbox": "dedicated-synthetic@example.invalid" }
+      ]
+    },
+    "teams": {
+      "enabled": true,
+      "configFile": "synthetic-tests/teams/config.json",
+      "scenarios": { "publish-channel-message": true },
+      "targets": [
+        { "id": "teams-probe-001" }
+      ]
+    },
+    "sharepoint": {
+      "enabled": true,
+      "configFile": "synthetic-tests/sharepoint/config.json",
+      "scenarios": { "save-reopen-file": true },
+      "targets": [
+        { "id": "sharepoint-probe-001" }
+      ]
+    }
+  }
+}

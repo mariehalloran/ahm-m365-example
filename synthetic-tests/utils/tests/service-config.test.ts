@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseServiceConfig, readServiceConfig, serviceSettings } from "../src/service-config.js";
+import { parseServiceConfig, parseServiceFileConfig, readServiceConfig, serviceSettings } from "../src/service-config.js";
 import { parseWorkerArguments } from "../src/worker.js";
 
 const raw = {
@@ -97,13 +97,22 @@ describe("strict config-first service settings", () => {
     expect(config).toMatchObject({ EXECUTION_MODE: "simulation", SYNTHETIC_SCENARIO: "slow", PROBE_TIMEOUT_MS: 45000, POLL_INTERVAL_MS: 50 });
     expect(config.probes.every(probe => probe.type === "sharepoint-file")).toBe(true);
   });
-  it("surfaces missing files and checks in a single safe simulation per enabled service", async () => {
+  it("keeps root-owned fields out of all simulation and live service files", async () => {
     await expect(readServiceConfig("utils/tests/nonexistent-config.json")).rejects.toThrow("Cannot read");
     for (const type of ["exchange", "sharepoint", "teams"] as const) {
-      expect(await readServiceConfig(`${type}/config.json`)).toMatchObject({ mode: "simulation", telemetry: "console", targets: [expect.anything()] });
-      expect((await readServiceConfig(`${type}/config.json`)).targets).toHaveLength(1);
+      for (const suffix of ["", ".live.example"]) {
+        const file = await readServiceConfig(`${type}/config${suffix}.json`);
+        expect(file).toMatchObject({ type, mode: suffix ? "live" : "simulation" });
+        for (const key of ["enabled", "telemetry", "targets"]) expect(file).not.toHaveProperty(key);
+      }
     }
-    expect(await readServiceConfig("teams/config.json")).toMatchObject({ enabled: true, telemetry: "console" });
+  });
+  it.each(["enabled", "telemetry", "targets"])("rejects redundant %s in service files rather than silently overriding it", key => {
+    const file = {
+      type: "exchange", intervalSeconds: 60, timeoutSeconds: 45, mode: "simulation", cohort: "exchange-global",
+    };
+    expect(() => parseServiceFileConfig({ ...file, [key]: raw[key as keyof typeof raw] ?? "console" }))
+      .toThrow("belong in the root project config");
   });
 });
 describe("explicit worker arguments", () => {

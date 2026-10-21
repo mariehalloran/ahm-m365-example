@@ -31,7 +31,7 @@ The deploying operator needs rights to create the approved Container Apps resour
 
 If an existing private Azure Container Registry supplies the image, the attached identity needs the registry's appropriate image-pull role, commonly **AcrPull** for a registry using classic RBAC. ABAC-enabled registries have different repository roles. This is image access, not mailbox authorization.
 
-**The worker identity does not need subscription Owner, Contributor, Exchange Administrator, Global Administrator, Blob access, or health-model write access.**
+**The worker identity does not need subscription Owner, Contributor, Exchange Administrator, Global Administrator, or Blob access.** It does need narrowly scoped health-report ingestion permission on its own service model, separate from mailbox authorization.
 
 ### Exchange mailbox authorization
 
@@ -48,9 +48,11 @@ The administrator registers the existing managed identity's service-principal re
 
 Mailbox-scoped `Mail.ReadWrite` permits access to every message in the approved mailbox, not just synthetic messages. Keep the mailbox dedicated. `Mail.Send` restricts who the app can send **as**, not which addresses it can send **to**; apply an approved narrowly targeted mail-flow policy if that boundary also needs enforcement.
 
-### Telemetry and model queries
+### Direct health reports and optional telemetry
 
-The worker exports measurements through its configured Application Insights destination. This is independent of the mailbox identity and does not require health-model ingestion or state-storage permissions.
+Live workers aggregate each complete cycle by journey/action and publish direct health reports, including when root OTEL is disabled. Authorize the selected identity for health-report ingestion on the Exchange service model; see the [model permission contract](./health-model/README.md). It obtains a separate ARM-audience token using the same explicitly selected identity, without a default-credential fallback.
+
+Optional measurements export through the root-configured Application Insights destination. That ingestion setting is independent of mailbox/report permissions and grants neither. Root account addresses belong in [monitoring.config.json](./monitoring.config.json), not credentials.
 
 The health model's own query identity has workspace query access. Do not grant those Azure roles to the Exchange managed identity merely because both are part of the same proof of concept.
 
@@ -161,7 +163,7 @@ The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, jou
 
 The journey is authenticate -> create draft -> send -> confirm Inbox delivery -> cleanup. Each executed step emits its own 1/0 success and duration. A blocked step is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 
-The health model has one Log Analytics entity displayed as **User Journey** below Exchange Experience. That entity lists separate KQL success/duration signals for the steps; the steps are not separate entities. Evaluation runs downstream, with no worker-published Healthy/Unhealthy states or mailbox inventory. One mailbox sending to itself is not employee-to-employee delivery, Outlook UI coverage, or tenant-wide availability.
+The root health model references an independent Exchange model. Its **User Journey** and action entities receive aggregated worker health reports; optional OTEL enables corresponding KQL success/duration signals on those same entities. No mailbox inventory is sent to the model or retained between cycles. One mailbox sending to itself is not employee-to-employee delivery, Outlook UI coverage, or tenant-wide availability.
 
 ## 7. Not required by this Exchange test
 

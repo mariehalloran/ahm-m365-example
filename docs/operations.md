@@ -2,9 +2,9 @@
 
 ## Simple execution boundary
 
-Each service process runs its configured test and emits raw results plus OTel measurements. It has **no Blob/file history, aggregate health policy, or health-report API client**.
+Each service process runs its configured journey and aggregates only that cycle's results by journey/action. It publishes success-percentage and mean-duration health reports directly to its service health model. OTEL measurements/history are optional; **no Blob/file history or cross-cycle health state is stored**.
 
-OpenTelemetry runs in that **same process/container**. Deploying a separate telemetry worker, Collector, or AKS cluster is not required for the selected Application Insights export path. Exchange, Teams, and SharePoint use separate configs/cadences and are intended for separate Container Apps. Container hosting is not deployed yet.
+When root `otel.enabled` is true, OpenTelemetry runs in that **same process/container**. Deploying a separate telemetry worker, Collector, or AKS cluster is not required for the selected Application Insights export path. Exchange, Teams, and SharePoint use separate configs/cadences and are intended for separate Container Apps. Container hosting is not deployed yet.
 
 Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey, config, tests and queries; shared code and Node tooling also live in that project. Checked-in configs use simulation/console mode and make no live mutations or Azure exports.
 
@@ -30,15 +30,23 @@ Do not enable live mode against real-user resources.
 
 Teams also needs an already registered/installed bot and a dedicated standard channel, plus a Graph observer with team-scoped `ChannelMessage.Read.Group`. Supply separate `BOT_TENANT_ID`, `BOT_CLIENT_ID`, `BOT_CLIENT_CERTIFICATE_PATH` and expected `AZURE_TENANT_ID`; bot/observer/target tenants must match even with Graph MI. The bot stays certificate-backed; Graph MI does not authorize bot posting automatically. Use only validated installation metadata. The worker does not request migration permissions, create a bot, or bypass user sign-in policies.
 
-Default journey-only workers need no user password, interactive mailbox sign-in, directory-wide permission, `ServiceHealth.Read.All`, health-model ingestion access, or Blob access. Optional provider collection requires its separately approved read-only application permissions; it never grants them.
+Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). They need no user password, interactive mailbox sign-in, directory-wide permission, `ServiceHealth.Read.All`, or Blob access. Optional provider collection requires its separately approved read-only application permissions; it never grants them.
 
 The mailbox identity and telemetry destination are independent. Approve cross-tenant telemetry flow and retention; hosted cross-tenant Graph credential loading is not implemented. The current Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
 
-## Export and downstream analysis
+## Direct health reporting and optional analysis
 
-`telemetry: console` keeps output local. `telemetry: azure-monitor` uses `APPLICATIONINSIGHTS_CONNECTION_STRING` for a workspace-based Application Insights resource linked to Log Analytics. This does not change simulation/live behavior: a live probe with console output still mutates its approved target.
+The [root configuration](../monitoring.config.json) is the only source for service/scenario selection, account/target metadata, OTEL, and health-report destination/policy. Service files retain independent mode/cadence/authentication/provider settings; redundant `enabled`, `targets` and `telemetry` fields are rejected, including with `--config`.
 
-Each attempt exports one OTel result log, a success sample of 1 or 0, and durations. Every executed named action also exports `synthetic.step.success` (1/0) and `synthetic.step.duration` (seconds). Failed prerequisites block later actions, reported as skipped with no fabricated metric. Cleanup still runs after mutation using an independent ten-second budget. A cleanup failure preserves earlier successful step observations but makes overall success zero. No application-side sampling is applied. The SDK uses bounded memory buffers, not a persistent outbox; offline disk storage is disabled. Failed/missing exports are not service successes. Crashes/network failures can lose telemetry, with no exactly-once guarantee.
+Live workers always submit aggregated external health reports. With root `otel.enabled: false`, they do so without an SDK/exporter or Log Analytics. With OTEL enabled, `otel.destination: console` keeps measurements local; `azure-monitor` additionally requires `APPLICATIONINSIGHTS_CONNECTION_STRING` for workspace-based Application Insights. This does not change simulation/live behavior: a live probe with console output or OTEL disabled still mutates its approved target. Simulation prints report previews only.
+
+Report success is `100 * successful executed samples / executed samples`; mean duration includes failed executed samples. Evaluate each action separately and the whole journey separately. Skipped actions have no fabricated sample and receive Unknown reports without values. Defaults are below 99%/95% success or above 15/60 seconds mean duration; these are demo thresholds, not per-action SLOs. Reports cover one complete cycle, not the optional KQL rolling window.
+
+The reporter uses the service identity and ARM audience, with bounded requests/retries and a 30-second batch budget. It never substitutes provider health for synthetic reports. Health-report and OTEL failures are explicit and independently attempted; startup configuration/credential validation can still prevent execution. Check `health-report-failed`, `result-telemetry-failed`, and `service-cycle-failed`; one-shot reporting errors return nonzero. A 204 acknowledges ingestion, not model propagation or notification delivery.
+
+Incomplete/cancelled cycles log `health-report-skipped-incomplete-cycle`; they do not publish a healthy partial aggregate. Reports have a 15-minute default TTL; expiry **removes external signals**. Other query signals may still determine entity health. Monitor last successful ingestion and actual execution independently, with targets shorter than the TTL and measured publication/propagation delays. Disabling OTEL or a service in an incremental deployment does not delete its old signals/resources; follow the [migration procedure](../health-model/README.md).
+
+With OTEL enabled, each attempt exports one OTel result log, a success sample of 1 or 0, and durations. Every executed named action also exports `synthetic.step.success` (1/0) and `synthetic.step.duration` (seconds). Failed prerequisites block later actions, reported as skipped with no fabricated metric. Cleanup still runs after mutation using an independent ten-second budget. A cleanup failure preserves earlier successful step observations but makes overall success zero. No application-side sampling is applied. The SDK uses bounded memory buffers, not a persistent outbox; offline disk storage is disabled. Failed/missing exports are not service successes. Crashes/network failures can lose telemetry, with no exactly-once guarantee.
 
 [Shared measurement semantics](../synthetic-tests/utils/README.md#measurements-and-queries) explain average success × 100, weighted mean duration and reporting gaps. Queries are service-owned: [Exchange](../synthetic-tests/exchange/queries/), [Teams](../synthetic-tests/teams/queries/), [SharePoint](../synthetic-tests/sharepoint/queries/), each with `analytics/` and `health-model/`. They never combine services, enumerate target IDs, or require raw-result joins. Filter simulation separately and keep unexecutable attempts visible.
 
@@ -81,7 +89,7 @@ Do not enable HTTP-body/token logging, disable TLS validation, or export busines
 ## Disablement and teardown
 
 1. Stop the service process and verify no new tests run; allow cleanup/export shutdown.
-2. Check service reporting gaps in Log Analytics so absent measurements are not interpreted as success.
+2. Check independent execution/report freshness (and Log Analytics reporting gaps if enabled) so absent measurements are not interpreted as success.
 3. Revoke only approved application permissions and credentials under the tenant owner's procedure.
 4. Review/remove only confirmed synthetic artifacts, respecting retention.
 5. Remove dedicated cloud resources only after owner approval. Never delete a shared resource group or unrelated workspace.
@@ -97,8 +105,9 @@ Independent monitoring must cover:
 | Failure | Required detection |
 | --- | --- |
 | Container crashes/restarts or has no available replica | Container Apps platform metrics/diagnostics, outside the process |
-| Process hangs, stops testing, loses permission, or cannot export | Service-level last-seen and unexecutable-outcome checks, plus platform diagnostics |
-| Application Insights ingestion or a Log Analytics query fails | Telemetry/query service diagnostics and an independent monitoring path |
+| Process hangs, stops testing, loses permission, or cannot report | Independent last execution/report-acceptance checks and platform diagnostics; do not rely on external-signal expiry alone |
+| Health-report ingestion/model reference authorization fails | Sanitized publication failures, independently observed external-signal freshness and service/root propagation checks |
+| Optional Application Insights ingestion or a Log Analytics query fails | Telemetry/query service diagnostics and an independent monitoring path |
 | Alert rules are disabled, lose authorization, or notification delivery breaks | Alert-configuration monitoring and periodic end-to-end notification tests |
 | Azure region or the common monitoring/identity dependency is unavailable | Separately placed observer and an agreed out-of-band notification/escalation path |
 
@@ -110,6 +119,6 @@ For higher availability, evaluate independently placed probe instances with expl
 
 Stateless, memory-buffered export intentionally cannot preserve every result through a crash/network partition. Missing-data detection and redundant observation reduce blind spots but do not reconstruct lost samples. If a future requirement demands durable lossless delivery, it conflicts with an entirely stateless no-outbox worker and needs an explicit architecture decision.
 
-Before operational sign-off, deliberately test process termination, an alive-but-stalled probe, bad credentials/certificate expiry, blocked telemetry egress, ingestion/query failures, and a disabled/broken alert path. Measure detection, notification, recovery, duplicates, and gaps. Keep a named owner, escalation, runbook, and tested manual disablement procedure.
+Before operational sign-off, deliberately test process termination, an alive-but-stalled probe, bad credentials/certificate expiry, denied health-report ingestion, stale/expired reports, broken cross-model references, OTEL-disabled operation, optional telemetry/query failures, and a disabled/broken alert path. Measure detection, notification, recovery, duplicates, and gaps. Keep a named owner, escalation, runbook, and tested manual disablement procedure.
 
 These platform alerts, external observers, redundant deployments, and notification tests are **requirements, not deployed functionality**. Budget them separately from the earlier single-replica compute estimate.

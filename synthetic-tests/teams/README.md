@@ -17,7 +17,9 @@ First-party references: [health overviews](https://learn.microsoft.com/graph/api
 
 The [journey](./src/journey.ts) composes the named [actions](./src/steps.ts) `authenticate`, `postMessage`, `confirmPublication`, and `cleanup`. Journey ID `publish-channel-message` uses ordered step IDs `authenticate`, `post-message`, `confirm-publication`, `cleanup`. Every executed action emits step success (1/0) and seconds; blocked actions are skipped, not recorded as failed operations. Cleanup failure preserves prior successes and timings but fails the overall attempt.
 
-From the `synthetic-tests/` project directory, run `npm run teams -- --once` or, after building, `node dist/teams/src/worker.js --once`. The entry defaults to `teams/config.json` and rejects other service types before initializing credentials. Optional `--config <file>` overrides only this service's configuration.
+From the `synthetic-tests/` project directory, run `npm run teams -- --once` or, after building, `node dist/teams/src/worker.js --once`. The [root config](../../monitoring.config.json) selects this journey, targets, OTEL, and its service config file. `--project-config <file>` selects a private root file; `--config <file>` overrides only the service file, not root targets/gates/OTEL. Other service types are rejected before credentials.
+
+The shared worker aggregates each complete cycle's journey/actions and publishes health reports directly to the Teams model, independently of optional OTEL. The same entities receive query signals when root OTEL is enabled. Simulation prints previews only; see [report semantics](../utils/README.md#per-cycle-health-reports).
 
 [Analytics queries](./queries/analytics/) and [model queries](./queries/health-model/) remain owned by this service; shared telemetry semantics are in [utils](../utils/README.md#measurements-and-queries).
 
@@ -50,27 +52,15 @@ The channel list endpoint supports `$top` up to 50, but not an arbitrary correla
 
 ## Configuration and credentials
 
-A separately approved live service configuration supplies these fields in its `targets` array (keep it disabled until live acceptance is arranged):
+A separately approved root configuration supplies target objects like this in `services.teams.targets`. Keep live execution gated until acceptance is arranged; the service file contains only execution settings, not a second target list:
 
 ```json
 {
-  "type": "teams",
-  "enabled": false,
-  "intervalSeconds": 120,
-  "timeoutSeconds": 45,
-  "mode": "live",
-  "graphAuthentication": "managed-identity",
-  "cohort": "teams-global",
-  "telemetry": "console",
-  "targets": [
-    {
-      "id": "teams-001",
-      "tenantId": "11111111-1111-4111-8111-111111111111",
-      "teamId": "22222222-2222-4222-8222-222222222222",
-      "channelId": "19:approved-channel@thread.tacv2",
-      "serviceUrl": "https://smba.trafficmanager.net/teams/"
-    }
-  ]
+  "id": "teams-001",
+  "tenantId": "11111111-1111-4111-8111-111111111111",
+  "teamId": "22222222-2222-4222-8222-222222222222",
+  "channelId": "19:approved-channel@thread.tacv2",
+  "serviceUrl": "https://smba.trafficmanager.net/teams/"
 }
 ```
 

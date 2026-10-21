@@ -1,91 +1,130 @@
-# Finding Microsoft 365 experience gaps with Azure Monitor Health Models
+# Monitoring M365 with Azure Monitor Health Models
 
-Microsoft 365 service health tells us what Microsoft reports about its services. It does not prove that a particular mailbox can receive mail, a bot can publish to an approved channel, or a file can be saved and read back from a particular site.
+**A service being available does not necessarily mean a user can complete their task.**
 
-This example combines **API-backed synthetic user journeys** with **Azure Monitor Health Models** to make those gaps visible. Synthetic tests exercise a small, approved workflow repeatedly; the model organizes the resulting evidence by service experience and failing action. Microsoft-reported health remains separate supporting context.
+Microsoft 365 can report that Exchange is operational while a particular mailbox cannot send or receive email. An upload request can succeed while reopening the file fails. A Teams message can be accepted without appearing where it is expected.
+
+This example combines **synthetic user journeys** with **Azure Monitor Health Models** to close that visibility gap:
+
+- **Synthetic tests provide evidence:** can a representative task actually be completed?
+- **Azure Monitor Health Models provides context:** which action, journey, and service experience does that evidence affect?
 
 ## Why synthetic tests?
 
-Different monitoring sources answer different questions:
+Provider status and infrastructure metrics are useful, but they do not exercise our approved identities, resources, permissions, and access paths together.
 
-| Evidence | What it tells us | Gap it leaves |
+Synthetic tests repeatedly perform a small, controlled workflow against dedicated test resources. They help us:
+
+- **Detect problems proactively**, including when there is little real user traffic.
+- **Verify completion, not just API acceptance.** Sending a request is different from confirming delivery, publication, or correct file readback.
+- **Identify the failing action.** Authentication, sending, confirmation, and cleanup have different failure modes.
+- **Measure the experience over time**, including success and duration, rather than relying on a single manual check.
+
+For example, an email journey creates a draft, sends it, confirms that it appears in the Inbox, and cleans up. If sending succeeds but delivery confirmation times out, the evidence should preserve that distinction instead of labeling every action as failed.
+
+A failed test is **evidence to investigate, not automatic proof of a Microsoft outage**. Identity permissions, configuration, worker connectivity, and the monitoring system itself can also fail.
+
+## Why Azure Monitor Health Models?
+
+Individual measurements tell us what happened in an attempt. A health model connects those observations to the experiences we care about.
+
+Azure Monitor Health Models lets us:
+
+- **Represent dependencies explicitly:** actions support journeys, journeys support service experiences, and service models contribute to a broader view.
+- **Roll up health without losing detail:** start at the overall experience and follow the model to the affected journey or action.
+- **Combine different evidence sources:** evaluated synthetic health reports can coexist with optional telemetry signals and separate Microsoft-reported context.
+- **Keep evidence gaps visible:** no observations are not the same as successful observations, and a skipped action is not a failed request.
+- **Compose independent models:** Exchange, Teams, and SharePoint can each have their own model while a root model brings their health together.
+
+The model complements logs, metrics, and dashboards; it does not replace detailed investigation or establish the root cause of a failure. Its value is relating evidence to dependencies and potential experience impact.
+
+## Why use them together?
+
+| Source | Question it answers | What it does not establish |
 | --- | --- | --- |
-| Microsoft 365 Service Health | Microsoft-reported status, incidents, and advisories for subscribed services | Does not confirm that our chosen mailbox, channel, or site workflow works |
-| An accepted API request | The service accepted that operation | Acceptance alone does not prove Inbox delivery, channel publication, or correct file readback |
-| A completed synthetic journey | Whether the configured workflow succeeded, how long it took, and where it failed | Covers only those targets, API paths, identities, and execution locations |
-| Missing observations | The monitoring evidence is incomplete or stale | Does not establish whether Microsoft 365 itself is healthy or unhealthy |
+| Microsoft 365 Service Health | What does Microsoft report about the subscribed service? | Whether our particular workflow works |
+| Synthetic journey | Can our configured identity complete the approved workflow, and where does it fail? | Availability for every user, target, or access path |
+| Azure Monitor Health Models | How does that evidence contribute to action, journey, service, and overall experience health? | Root cause or successful notification delivery |
+| Optional logs and metrics | What measurements and diagnostics help explain the result over time? | A meaningful dependency model by themselves |
 
-For example, a mail send can succeed while delivery confirmation times out. SharePoint can accept an upload while verified readback fails. A tenant's Service Health overview can remain operational while a particular test identity loses access. These are different findings, not one interchangeable availability check.
-
-A failed synthetic test is **evidence to investigate**, not automatic proof of a Microsoft outage. Permission/configuration mistakes, worker connectivity, cleanup, and the monitoring system itself can also fail.
-
-## What the tests exercise
-
-| Experience | Repeated journey | Useful failure detail |
-| --- | --- | --- |
-| [Exchange](./synthetic-tests/exchange/README.md) | Create a draft, send to the test mailbox itself, confirm Inbox delivery, clean up | Authentication, draft creation, submission, delivery confirmation, cleanup |
-| [Teams](./synthetic-tests/teams/README.md) | Post a bot-owned channel message, confirm its marker and author through Graph, remove it | Authentication, posting, publication confirmation, cleanup |
-| [SharePoint](./synthetic-tests/sharepoint/README.md) | Verify the approved drive, upload synthetic content, download and compare it, remove it | Authentication, library verification, upload, readback, cleanup |
-
-Each executed action has its own success and duration measurements. A failed prerequisite skips downstream actions instead of inventing failed requests that never ran. Request timing and confirmed completion are measured separately.
-
-These are **not** Outlook/Teams/browser sign-in tests, employee read receipts, Teams call/media tests, or SharePoint sharing/coauthoring tests. A successful journey is not tenant-wide availability or a guarantee of every employee's experience.
-
-## Why put the evidence in a health model?
-
-Raw metrics and logs record attempts. Azure Monitor Health Models adds a dependency-oriented view of the experiences those measurements support:
-
-- Each **Experience** has one Log Analytics **User Journey** entity.
-- The User Journey contains overall and named-step KQL signals, such as **Create email - success percentage** and **Create email - mean duration**.
-- The model evaluates those signals over time and rolls journey health into the related experience, making it easier to locate the failed action instead of reporting only "Microsoft 365 is unhealthy."
-- A separate **Service Health** entity shows stable Microsoft-reported context with **Suppressed** impact. It does not override a successful journey or turn a provider incident into a synthetic failure.
-- No samples means **Unknown**, not fabricated healthy status. All reported attempts failing means **0% success**, which is different from no evidence.
+Together, they provide a way to distinguish **provider-reported health**, **observed task completion**, and **the health of the experiences built on those tasks**.
 
 ```text
-Independent service workers: journey functions + embedded OpenTelemetry
-                                |
-                 Workspace-based Application Insights
-                                |
-                       Log Analytics / KQL
-                                |
-                   Azure Monitor Health Models
-               Experience -> User Journey -> step signals
+Root experience model
+|
++-- Exchange model
+|   `-- Send/receive email journey -> action health
++-- Teams model
+|   `-- Publish channel message journey -> action health
+`-- SharePoint model
+    `-- Save/reopen file journey -> action health
 ```
 
-The workers remain stateless: they emit one 1/0 success observation per attempt, step measurements, timings, and diagnostics. They do not publish Healthy/Unhealthy states or store aggregation history. Evaluation belongs in Log Analytics and the model. The [model guide](./health-model/README.md) explains the deployed topology, query windows, thresholds, and context isolation.
+Workers aggregate journey/action results and submit health reports directly. **OpenTelemetry and Log Analytics are optional**, not prerequisites for reporting health. When enabled, their signals add historical evidence on the same entities. Microsoft-reported Service Health remains separate supporting context, not a replacement for synthetic results.
 
-Optional beta `serviceActivity` reports are experimental **log-only diagnostics**, disabled by default and never used for journey or Experience health. Beta APIs are unsupported for production use.
+## What this example exercises
 
-## Repository layout
-
-| Component | Responsibility |
+| Service | Representative journey |
 | --- | --- |
-| [synthetic-tests/](./synthetic-tests/README.md) | Self-contained Node project: service-owned journeys/configs/tests/queries, shared utilities, npm package/lockfile, TypeScript and test configuration |
-| [health-model/](./health-model/README.md) | Independently managed model, telemetry infrastructure, and query-signal wiring |
-| [docs/deployment.md](./docs/deployment.md) | Hosting boundary, packaging, identity, and rollout |
-| [docs/operations.md](./docs/operations.md) | Scheduling, permissions, telemetry loss, notifications, and production acceptance |
-| [MAILBOX-SYNTHETIC-ACCESS.md](./MAILBOX-SYNTHETIC-ACCESS.md) | Detailed Exchange administrator permission handoff and allowed/denied access checks |
+| [Exchange](./synthetic-tests/exchange/README.md) | Create an email, send it to the dedicated mailbox itself, confirm Inbox delivery, and clean up |
+| [Teams](./synthetic-tests/teams/README.md) | Publish a bot-owned channel message, confirm its marker and author through Graph, and remove it |
+| [SharePoint](./synthetic-tests/sharepoint/README.md) | Upload synthetic content to an approved library, reopen and verify it, and remove it |
 
-Shared code lives in `synthetic-tests/utils/`. Dependencies and generated build output also belong to the synthetic-tests project, not the repository root. Azure Container Apps is the intended host, with one independent service process and embedded OpenTelemetry per app.
+These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, employee read receipts, Teams media tests, or SharePoint coauthoring tests. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
 
-## Start safely
+The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. Live resources, scoped permissions, hosting, model propagation, and end-to-end notifications still require approval and validation. The new root/service-model topology has not been deployed.
 
-From the repository root, with Node.js 22 or 24:
+## How to use this example
+
+### 1. Update the project configuration
+
+Edit [monitoring.config.json](./monitoring.config.json), or keep a private copy outside source control:
+
+| What to update | Where |
+| --- | --- |
+| Services to monitor | `services.exchange.enabled`, `services.teams.enabled`, `services.sharepoint.enabled` |
+| Journeys to run | Each service's `scenarios` switches |
+| Dedicated mailbox addresses | `services.exchange.targets[].mailbox` |
+| Approved Teams resources | `services.teams.targets[]`: tenant, team, channel, and bot conversation service URL |
+| Approved SharePoint resources | `services.sharepoint.targets[]`: site, drive, and folder IDs |
+| Health-report destination and policy | `healthModel`: replace the subscription placeholder and confirm resource group, model name, thresholds, and report TTL |
+| Optional telemetry | `otel.enabled`; use `otel.destination: "azure-monitor"` only when Azure ingestion is configured |
+
+All supported services/scenarios are selected by default. Target placeholders are not provisioned resources. Keep credentials, certificates, and connection strings out of configuration files and source control.
+
+### 2. Adjust service-specific behavior
+
+The [Exchange](./synthetic-tests/exchange/config.json), [Teams](./synthetic-tests/teams/config.json), and [SharePoint](./synthetic-tests/sharepoint/config.json) files contain **only service-specific settings**: independent cadence, timeout, simulation/live mode, authentication, cohort, and optional provider collection. Selection, targets, and OTEL are configured **only at the root**, not duplicated in these files.
+
+For older private service configs, move targets into the root file and remove the old `enabled`, `targets`, and `telemetry` keys; the loader now rejects these redundant fields.
+
+The service config's `scenario` chooses a deterministic simulation outcome; root `scenarios` chooses which user journey to monitor.
+
+### 3. Run a safe simulation
+
+With Node.js 22 or 24, run from the repository root:
 
 ```sh
-cd synthetic-tests
-npm ci
-npm run exchange -- --once
-npm run teams -- --once
-npm run sharepoint -- --once
+npm --prefix synthetic-tests ci
+npm --prefix synthetic-tests run exchange -- --once
+npm --prefix synthetic-tests run teams -- --once
+npm --prefix synthetic-tests run sharepoint -- --once
 ```
 
-The checked-in configurations use **simulation and console output**: no real emails, channel messages, files, Graph authentication, or Azure ingestion. To run from the repository root without changing directories, use `npm --prefix synthetic-tests run exchange -- --once`.
+These defaults make no Microsoft 365 or Azure calls. Inspect result records and `health-report-preview` output. Each command runs only its selected service; omit `--once` to repeat on that service's cadence. For a private root config, append `--project-config /absolute/path/monitoring.config.json`.
 
-For real tests, follow the [administrator authentication and enablement walkthrough](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests): approve dedicated resources, authorize the correct same-tenant identity with scoped permissions, supply runtime/telemetry settings, and prove a single live cycle before enabling recurrence.
+### 4. Prepare and validate live monitoring
 
-## Readiness and limits
+Establish the selected [health models](./health-model/README.md), obtain dedicated test resources, and authorize the service identity for both the Microsoft 365 journey and health-report ingestion. Update root targets/destination, select an approved live service file through `configFile`, and explicitly set `ENABLE_LIVE_M365=true`. Prove one live cycle before enabling recurrence or hosting independent workers.
 
-The journeys, step telemetry, provider callbacks, queries, and model wiring are implemented and locally tested. The sample model and telemetry resources are deployed, but **live workers, tenant grants, and end-to-end acceptance are not completed**. See the [readiness checklist](./synthetic-tests/README.md#wiring-and-readiness).
+With OTEL disabled, direct health reports still update journey/action entities. To add Azure telemetry, enable root OTEL, configure workspace-based Application Insights, and supply `APPLICATIONINSIGHTS_CONNECTION_STRING` securely. Follow the [administrator setup](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) and [deployment guide](./docs/deployment.md); selecting live mode does not grant permissions or deploy resources.
 
-Health-model evaluation is not an alert-delivery system by itself. Production use still requires independent stopped/stalled-worker and missing-telemetry detection, appropriate retention/cost controls, approved notification routes, and end-to-end notification testing. Do not rely exclusively on Exchange or Teams to report an outage affecting those services.
+## Further guidance
+
+- [Project configuration](./monitoring.config.json): select services, scenarios, accounts/targets, and optional OTEL.
+- [Synthetic test guide](./synthetic-tests/README.md): run safely, configure workers, and understand journey coverage.
+- [Health model guide](./health-model/README.md): model composition, signals, aggregation, and deployment.
+- [Deployment guide](./docs/deployment.md): hosting, identities, permission boundaries, and rollout.
+- [Operations guide](./docs/operations.md): report freshness, monitoring failures, notifications, and production acceptance.
+
+Independent monitoring is essential: a stopped worker or broken reporting path must not be mistaken for a healthy service. Neither a health report nor a model state is, by itself, an alert-delivery system.

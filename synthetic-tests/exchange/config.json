@@ -1,15 +1,10 @@
 {
   "type": "exchange",
-  "enabled": true,
   "intervalSeconds": 60,
   "timeoutSeconds": 45,
   "mode": "simulation",
   "graphAuthentication": "managed-identity",
   "serviceHealth": false,
   "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
-  "cohort": "exchange-global",
-  "telemetry": "console",
-  "targets": [
-    { "id": "exchange-probe-001" }
-  ]
+  "cohort": "exchange-global"
 }

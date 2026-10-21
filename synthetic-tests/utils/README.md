@@ -1,10 +1,10 @@
 # Shared utilities and stateless service execution
 
-**One config, one cadence, no saved state.** The worker runs the configured Exchange, Teams, or SharePoint operation, exports its result and measurements, and waits for the next scheduled slot.
+**Root selection, independent cadences, no saved history.** Each worker runs its configured journey, aggregates this cycle's attempts by journey/action, publishes direct health reports, and waits for its next scheduled slot.
 
-It does not calculate success percentages, evaluate Healthy/Unhealthy, call the health-report API, or create a checkpoint file/blob. Log Analytics queries perform the analysis.
+The [root config](../../monitoring.config.json) supplies service/journey switches, accounts/targets, OTEL options, model destination, and report policy. Each service keeps a separate cadence/config. [project-config.ts](./src/project-config.ts) validates and combines these nonoverlapping inputs; [health-reports.ts](./src/health-reports.ts) evaluates current-cycle success/mean duration and calls the Health Report Ingestion API. There is no checkpoint file/blob or aggregation history.
 
-The intended deployment is one Azure Container App per service. Its test code and OTel SDK/exporters run in the **same process/container**. There is no separate telemetry worker, collector, or Kubernetes requirement.
+The intended deployment is one Azure Container App per service. Optional OTel SDK/exporters run in the **same process/container**. Setting root `otel.enabled: false` constructs neither SDK nor exporter; local structured diagnostics and live health reports continue. There is no separate telemetry worker, collector, or Kubernetes requirement.
 
 ## Run
 
@@ -18,7 +18,7 @@ npm run sharepoint
 npm run teams -- --once
 ```
 
-Each entry defaults to its own `<service>/config.json` from that project directory; optional `--config <file>` overrides it, but another service's config is rejected before runtime initialization. `--once` limits execution to one cycle; inspect individual result outcomes rather than interpreting process completion as proof that a service works. There is no generic all-service CLI or process launcher.
+Each entry reads `../monitoring.config.json`, or `--project-config <file>`, then that project's selected service `configFile`. Its path is relative to the project config. Optional `--config <file>` overrides the service file, relative to the process working directory, **not** root selection/targets/OTEL. Another service's config is rejected before runtime initialization. `--once` limits execution to one cycle; inspect individual result outcomes rather than interpreting process completion as proof that a service works. There is no generic all-service CLI or process launcher.
 
 Production utilities do not import service implementations. Each service's `src/worker.ts` supplies its selected journey handler to [worker.ts](./src/worker.ts). [runner.ts](./src/runner.ts) only executes that handler (or deterministic simulation), validates the version 2.0 result, and exports observations.
 
@@ -33,7 +33,6 @@ Separate service processes do not block each other. Keep one authoritative insta
 | Field | Meaning |
 | --- | --- |
 | `type` | `exchange`, `sharepoint`, or `teams` |
-| `enabled` | Whether this worker runs |
 | `intervalSeconds` | Start-to-start cadence, 1-86,400 seconds |
 | `timeoutSeconds` | Probe execution timeout, up to 120 seconds; cleanup has a separate bounded budget |
 | `mode` | `simulation` or `live` |
@@ -42,12 +41,22 @@ Separate service processes do not block each other. Keep one authoritative insta
 | `serviceActivity` | Optional strict beta diagnostic settings, default disabled; see below |
 | `scenario` | Optional deterministic simulation scenario |
 | `cohort` | Low-cardinality grouping label for downstream queries; not a worker health policy |
-| `telemetry` | `console` by default; `azure-monitor` exports OTel metrics and result logs |
-| `targets` | Dedicated test resources, each with a unique opaque `id` |
 
-The parser rejects unknown fields, duplicates, invalid types/limits, and wrong-service target fields. Live mode requires complete service-specific resources. Invalid/disabled configs do not execute probes or initialize an Azure exporter.
+The service-file parser rejects unknown fields, invalid types/limits, and redundant root-owned `enabled`, `targets`, and `telemetry` keys. Root config validates target types and duplicates; live mode requires complete service-specific resources. Invalid configs and disabled root services/scenarios do not execute probes or initialize exporters.
 
-The old `reportToHealthModel` field is no longer supported. Remove it and use `telemetry`; no health-report setting replaces it.
+The obsolete per-service `reportToHealthModel` field remains rejected: live worker commands always report health. Root `healthModel` configures the destination, thresholds, and TTL; there is no dependency on the OTEL switch. Root service and supported journey-scenario switches control enablement. The resolved in-memory runtime config derives `enabled`, `targets` and `telemetry` from the root; these are not service-file inputs.
+
+## Per-cycle health reports
+
+For each complete cycle, report separately to the service model's `<service>-global` User Journey entity and `<service>-<step>` action entities. Each entity receives `synthetic-success-percentage` and `synthetic-mean-duration` (milliseconds). Success is the percentage of successful **executed** samples; mean duration includes failed executed samples. The whole journey includes every started attempt and cleanup; individual action timings retain their existing meaning.
+
+No executed samples means Unknown without a numeric value, not 100% success or zero duration. Skipped actions are excluded rather than failed. Cleanup failures affect cleanup and the whole journey, not earlier successful actions. The default policy uses below 99/95% success and above 15,000/60,000 ms mean duration; threshold equality does not breach. There is no rolling window, sample minimum, cross-cycle smoothing, or persisted state.
+
+Simulation logs previews only and acquires no report credential. Live reports use the explicitly selected service identity (or explicit local certificate mode), a separate `https://management.azure.com/.default` token, and `POST .../entities/<entity>/ingestHealthReport?api-version=2026-05-01-preview`. Only 204 acknowledges ingestion. Requests are bounded to 5 seconds, at most two attempts and three concurrent sends, with a 30-second batch budget. All signals are attempted; failures are sanitized and make a one-shot command fail. There is no durable outbox or exactly-once guarantee.
+
+Health reporting and OTEL flush run independently, so either is still attempted if the other fails. With direct reporting configured, an OTEL record failure is logged without preventing execution/aggregation of remaining targets. Incomplete/cancelled cycles explicitly skip health publication instead of presenting a healthy partial aggregate.
+
+Each report replaces the same entity/signal with a TTL (default 15 minutes). Live config requires TTL to exceed cadence plus the bounded 212-second execution/report budget. Expiry removes the signal, **not necessarily the entity's health from optional query data**. Independent execution/report-freshness monitoring is required. Model references, permissions, optional query wiring, and migration are documented in the [model guide](../../health-model/README.md).
 
 Example live target:
 
@@ -75,7 +84,7 @@ One target now produces useful measurements; there is no worker-side three-sampl
 
 ## Optional provider collectors
 
-The service entry supplies both its journey and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Exchange, Teams and SharePoint collect independently at their existing per-type cadence, once per cycle regardless of target count. Read-only provider sources run concurrently with the synthetic journey, without blocking journey startup. Both settle before the cycle summary, and diagnostics that finish after the journey's flush are flushed before that summary. No persisted watermark, last-seen cache, health report, or extra OTel process is introduced.
+The service entry supplies both its journey and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Exchange, Teams and SharePoint collect independently at their existing per-type cadence, once per cycle regardless of target count. Read-only provider sources run concurrently with the synthetic journey, without blocking journey startup. Both settle before the cycle summary, and diagnostics that finish after the journey's flush are flushed before that summary. Providers never contribute to synthetic aggregation/reports and introduce no persisted watermark, last-seen cache, or extra process. With OTEL off their diagnostics remain structured console output.
 
 All fields are optional and default to:
 
@@ -183,9 +192,9 @@ Overall and phase metric labels are only `probe.service`, `probe.journey`, `prob
 
 `SyntheticResult` retains schema version `2.0`, existing phase timings, and a `steps` array (default `[]` for older diagnostics). Each executed step has bounded name, `succeeded`/`failed`, `observedAt`, and `durationMs`; failed steps add a bounded diagnostic category. Skipped steps instead have a nonsecret reason, no duration, and no step metric. Authentication failure does not fabricate failed send/read operations. Cleanup failure fails the overall attempt while leaving earlier successes and measurements unchanged.
 
-`measureStep` executes a supplied async action, times it with the supplied clock, records a normalized observation, and rethrows the original failure. Journeys stop prerequisites, then attempt only owned-artifact cleanup with a separate ten-second cancellation budget. Per-attempt mutable IDs remain ephemeral. There is no plugin registry, durable job, outbox, health calculation, or state file.
+`measureStep` executes a supplied async action, times it with the supplied clock, records a normalized observation, and rethrows the original failure. Journeys stop prerequisites, then attempt only owned-artifact cleanup with a separate ten-second cancellation budget. Per-attempt mutable IDs remain ephemeral. There is no plugin registry, durable job, outbox, or state file.
 
-Real `MeterProvider` and `LoggerProvider` instances live inside each worker. Histograms export delta sum/count, not gauges that replace prior attempts. Every attempt emits `synthetic-result`; every step emits `synthetic-step` diagnostics, including skipped status. Logs permit opaque test/correlation IDs and retain milliseconds; messages, target IDs, tokens, raw responses and credentials are never exported. Simulation is labeled modeled, not measured real latency, and stale timestamps propagate to its step records.
+With OTEL enabled, real `MeterProvider` and `LoggerProvider` instances live inside each worker. Histograms export delta sum/count, not gauges that replace prior attempts. Every attempt emits `synthetic-result`; every step emits `synthetic-step` diagnostics, including skipped status. Logs permit opaque test/correlation IDs and retain milliseconds; messages, target IDs, tokens, raw responses and credentials are never exported. Simulation is labeled modeled, not measured real latency, and stale timestamps propagate to its step records.
 
 Each service owns separate queries:
 

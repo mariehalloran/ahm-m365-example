@@ -7,19 +7,24 @@ import { runCycle, type RunnerDependencies } from "./runner.js";
 import { serviceRuntime } from "./runtime.js";
 import { parseServiceConfig, serviceSettings, type ServiceConfig } from "./service-config.js";
 import type { ProviderCollector } from "./provider-collection.js";
+import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
+import { createHealthReporter } from "./health-reports.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
   let config: string | undefined;
   let once = false;
+  let projectConfig: string | undefined;
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (argument === "--config" && !config && args[index + 1] && !args[index + 1]!.startsWith("--")) {
       config = args[++index];
+    } else if (argument === "--project-config" && !projectConfig && args[index + 1] && !args[index + 1]!.startsWith("--")) {
+      projectConfig = args[++index];
     } else if (argument === "--once" && !once) once = true;
-    else throw new ConfigurationError("Usage: npm run <exchange|teams|sharepoint> -- [--config <service-config.json>] [--once]");
+    else throw new ConfigurationError("Usage: npm run <exchange|teams|sharepoint> -- [--project-config <monitoring.config.json>] [--config <service-config.json>] [--once]");
   }
-  if (!config && !defaultConfig) throw new ConfigurationError("An explicit --config is required");
-  return { config: config ?? defaultConfig!, once };
+  if (!config && defaultConfig === undefined) throw new ConfigurationError("An explicit --config is required");
+  return { config: config ?? defaultConfig!, once, ...(projectConfig ? { projectConfig } : {}) };
 }
 
 export interface WorkerOptions {
@@ -34,10 +39,12 @@ export interface WorkerOptions {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies | Promise<RunnerDependencies>;
   execute?: typeof runCycle;
+  project?: ProjectConfig;
 }
 
 export async function runServiceWorker(raw: ServiceConfig, options: WorkerOptions = {}): Promise<void> {
-  const service = parseServiceConfig(raw);
+  const parsed = parseServiceConfig(raw);
+  const service = options.project ? applyProjectConfig(options.project, parsed) : parsed;
   if (options.expectedService && service.type !== options.expectedService) {
     throw new ConfigurationError(`This worker only accepts ${options.expectedService} configs`);
   }
@@ -59,10 +66,13 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   }
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
+  const reportHealth = options.project ? createHealthReporter(options.project, service, telemetry, env) : undefined;
   const runtime = await (options.createDependencies
     ? options.createDependencies(service, config, telemetry)
     : serviceRuntime(service, config, telemetry, env));
-  const dependencies: RunnerDependencies = { ...runtime, ...(options.handler ? { handler: options.handler } : {}) };
+  const dependencies: RunnerDependencies = {
+    ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
+  };
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const execute = options.execute ?? runCycle;

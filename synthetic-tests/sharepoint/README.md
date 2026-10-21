@@ -61,11 +61,11 @@ A future folder/file-selected permission may narrow access further, but it canno
 
 ## Measurements
 
-**Existing:** total attempt duration through cleanup, authentication duration, success/failure, diagnostic category, and cleanup status. Each run produces a result log and OTel total-duration/outcome measurements.
+**Existing:** total attempt duration through cleanup, authentication duration, success/failure, diagnostic category, and cleanup status. Each run produces structured results; optional OTEL adds total-duration/outcome measurements alongside mandatory live health reports.
 
 **Implemented phase measurements:** `uploadDurationMs` measures upload request/response validation; `readDurationMs` measures download/readback verification. Each attempted phase reports timing even if it fails. Embedded OTel exports `sharepoint.file.upload.duration` and `sharepoint.file.read.duration` in seconds, separate from total duration.
 
-An accepted upload alone is not success: downloaded bytes must match the unique payload. Failed cleanup makes the overall test fail. Download or identity failures are reported explicitly; no local health threshold or state is evaluated.
+An accepted upload alone is not success: downloaded bytes must match the unique payload. Failed cleanup makes the overall test fail. Download or identity failures are explicit. The [root config](../../monitoring.config.json) selects this journey and site/drive/folder targets; the shared worker aggregates each complete cycle and publishes journey/action health reports directly to the SharePoint model. Optional OTEL adds query evidence on those entities, not a prerequisite for reports. See [report semantics](../utils/README.md#per-cycle-health-reports).
 
 ## Second-stage journey: writer and independent reader
 
@@ -86,7 +86,7 @@ This two-identity path is **not implemented** in the current config/handler.
 - Prove one allowed upload/read/verify/delete against the approved live site.
 - Confirm an unauthorized site/drive is rejected before mutation.
 - Test corrupted readback, download redirect rejection, timeout, ambiguous upload, and cleanup failure.
-- Validate durations and per-run telemetry in Log Analytics.
+- Validate aggregated journey/action health reports and, when OTEL is enabled for Azure, durations and per-run telemetry in Log Analytics.
 - Agree on retention and recycle-bin handling; normal deletion is not permanent purge.
 - Enable the independent cadence only after downstream missing-result notifications and ownership are established.
 
@@ -100,9 +100,9 @@ npm run sharepoint -- --once
 node dist/sharepoint/src/worker.js --once
 ```
 
-The worker defaults to `sharepoint/config.json` from that project directory, accepts optional `--config <file>`, and rejects other service types before credentials or operations. See [operations](../../docs/operations.md) for live opt-in, credential protection, telemetry, and monitoring requirements.
+The root configuration selects the service file (by default `sharepoint/config.json`), targets and OTEL. `--config <file>` overrides only service-specific settings; duplicate root-owned keys are rejected. Other service types are rejected before credentials or operations. See [operations](../../docs/operations.md) for live opt-in, credential protection, telemetry, and monitoring requirements.
 
-To prepare live access, copy the [disabled live template](./config.live.example.json) to an ignored config location such as `.azure/sharepoint.json`. Replace site/drive/folder placeholders, select the approved Graph identity, and explicitly enable only after authorization checks. The template neither creates resources nor grants permissions. Keep `telemetry: console` for the first manual validation if Azure export is not yet wanted.
+To prepare live access, copy the [live settings example](./config.live.example.json) to a private config location and select it through root `services.sharepoint.configFile`. Put approved site/drive/folder IDs only in root targets, select the approved Graph identity, and set the live environment gate only after authorization checks. The template neither creates resources nor grants permissions. Disable root OTEL or keep its destination `console` for the first manual validation if Azure export is not wanted.
 
 ## Microsoft references
 

@@ -1,30 +1,23 @@
 targetScope = 'resourceGroup'
 
-@description('Name of the isolated proof-of-concept health model.')
-@minLength(3)
-@maxLength(44)
-param modelName string = 'm365-experience-poc'
+@description('The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>.')
+param projectConfig object = loadJsonContent('../../monitoring.config.json')
 
-@description('A region supporting Microsoft.CloudHealth, normally the resource group location.')
+@description('A region supporting Microsoft.CloudHealth.')
 param location string = resourceGroup().location
 
-@description('Dedicated pay-as-you-go Log Analytics workspace for live synthetic telemetry.')
-param workspaceName string = 'law-${modelName}'
+@description('Optional telemetry workspace name; created only for enabled OTEL services.')
+param workspaceName string = 'law-${projectConfig.healthModel.name}'
 
-@description('Workspace-backed Application Insights component for the embedded OpenTelemetry exporters.')
-param applicationInsightsName string = 'appi-${modelName}'
+@description('Optional workspace-backed Application Insights name.')
+param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
-@description('Provisional PoC thresholds, not service-level objectives.')
-param successDegradedPercent int = 99
-param successUnhealthyPercent int = 95
-param latencyDegradedMilliseconds int = 15000
-param latencyUnhealthyMilliseconds int = 60000
-
-var serviceSignals = [
+var modelName = projectConfig.healthModel.name
+var serviceDefinitions = [
   {
     service: 'exchange'
+    displayName: 'Exchange Experience'
     journey: 'send-receive-mail'
-    entityName: 'exchange-global'
     timeGrain: 'PT5M'
     successQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/success-percentage.kql')
     latencyQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/mean-latency.kql')
@@ -41,8 +34,8 @@ var serviceSignals = [
   }
   {
     service: 'teams'
+    displayName: 'Teams Experience'
     journey: 'publish-channel-message'
-    entityName: 'teams-global'
     timeGrain: 'PT5M'
     successQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/success-percentage.kql')
     latencyQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/mean-latency.kql')
@@ -58,8 +51,8 @@ var serviceSignals = [
   }
   {
     service: 'sharepoint'
+    displayName: 'SharePoint Experience'
     journey: 'save-reopen-file'
-    entityName: 'sharepoint-global'
     timeGrain: 'PT15M'
     successQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/success-percentage.kql')
     latencyQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/mean-latency.kql')
@@ -75,123 +68,12 @@ var serviceSignals = [
     ]
   }
 ]
-var journeySignalGroups = toObject(serviceSignals, service => service.entityName, service => {
-  azureLogAnalytics: {
-    authenticationSetting: workspaceAuthentication.name
-    logAnalyticsWorkspaceResourceId: workspace.id
-    signals: concat([
-      {
-        name: 'live-success-percentage'
-        displayName: 'Whole journey - success percentage'
-        signalKind: 'LogAnalyticsQuery'
-        queryText: replace(service.successQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-        valueColumnName: 'Value'
-        refreshInterval: 'PT1M'
-        timeGrain: service.timeGrain
-        evaluationRules: {
-          degradedRule: { operator: 'LessThan', threshold: successDegradedPercent }
-          unhealthyRule: { operator: 'LessThan', threshold: successUnhealthyPercent }
-        }
-      }
-      {
-        name: 'live-mean-latency'
-        displayName: service.service == 'exchange' ? 'Confirmed delivery - mean duration (ms)' : service.service == 'teams' ? 'Confirmed publication - mean duration (ms)' : 'Whole journey - mean duration (ms)'
-        signalKind: 'LogAnalyticsQuery'
-        queryText: replace(service.latencyQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-        valueColumnName: 'Value'
-        refreshInterval: 'PT1M'
-        timeGrain: service.timeGrain
-        evaluationRules: {
-          degradedRule: { operator: 'GreaterThan', threshold: latencyDegradedMilliseconds }
-          unhealthyRule: { operator: 'GreaterThan', threshold: latencyUnhealthyMilliseconds }
-        }
-      }
-    ], flatten(map(service.steps, step => [
-      {
-        name: '${step.name}-success-percentage'
-        displayName: '${step.displayName} - success percentage'
-        signalKind: 'LogAnalyticsQuery'
-        queryText: replace(replace(service.stepSuccessQuery, '__STEP__', step.name), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-        valueColumnName: 'Value'
-        refreshInterval: 'PT1M'
-        timeGrain: service.timeGrain
-        evaluationRules: {
-          degradedRule: { operator: 'LessThan', threshold: successDegradedPercent }
-          unhealthyRule: { operator: 'LessThan', threshold: successUnhealthyPercent }
-        }
-      }
-      {
-        name: '${step.name}-mean-duration'
-        displayName: '${step.displayName} - mean duration (ms)'
-        signalKind: 'LogAnalyticsQuery'
-        queryText: replace(replace(service.stepDurationQuery, '__STEP__', step.name), '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-        valueColumnName: 'Value'
-        refreshInterval: 'PT1M'
-        timeGrain: service.timeGrain
-        evaluationRules: {
-          degradedRule: { operator: 'GreaterThan', threshold: latencyDegradedMilliseconds }
-          unhealthyRule: { operator: 'GreaterThan', threshold: latencyUnhealthyMilliseconds }
-        }
-      }
-    ])))
-  }
-})
+var enabledServices = filter(serviceDefinitions, service =>
+  projectConfig.services[service.service].enabled && projectConfig.services[service.service].scenarios[service.journey])
+var useOtel = projectConfig.otel.enabled && !empty(enabledServices)
+var stepCount = length(flatten(map(enabledServices, service => service.steps)))
 
-var serviceHealthSignalGroups = toObject(serviceSignals, service => '${service.service}-service-health', service => {
-  azureLogAnalytics: {
-    authenticationSetting: workspaceAuthentication.name
-    logAnalyticsWorkspaceResourceId: workspace.id
-    signals: [
-      {
-        name: 'microsoft-reported-service-status'
-        displayName: 'Microsoft-reported service status - supporting context'
-        signalKind: 'LogAnalyticsQuery'
-        queryText: replace(service.serviceHealthQuery, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationInsights.id)
-        valueColumnName: 'Value'
-        dataUnit: 'Provider status score'
-        refreshInterval: 'PT5M'
-        timeGrain: 'PT15M'
-        evaluationRules: {
-          degradedRule: { operator: 'LessThan', threshold: 100 }
-          unhealthyRule: { operator: 'LessThan', threshold: 1 }
-        }
-      }
-    ]
-  }
-})
-
-var entities = [
-  // The service creates this root automatically; manage its rollup rather than leave it disconnected.
-  { name: modelName, displayName: 'Microsoft 365 Synthetic Health Model (PoC)', x: 600, y: 0, rollup: true, impact: 'Standard' }
-  { name: 'm365-tenant', displayName: 'Microsoft 365 and Azure Experience', x: 600, y: 180, rollup: true, impact: 'Standard' }
-  { name: 'azure-resources', displayName: 'Azure Resource Health - not connected', x: 0, y: 400, rollup: false, impact: 'Standard' }
-  { name: 'exchange-experience', displayName: 'Exchange Experience', x: 300, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'exchange-global', displayName: 'User Journey', x: 300, y: 620, rollup: false, impact: 'Standard' }
-  { name: 'exchange-service-health', displayName: 'Service Health', x: 50, y: 620, rollup: false, impact: 'Suppressed' }
-  { name: 'teams-experience', displayName: 'Teams Experience', x: 600, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'teams-global', displayName: 'User Journey', x: 650, y: 620, rollup: false, impact: 'Standard' }
-  { name: 'teams-service-health', displayName: 'Service Health', x: 500, y: 820, rollup: false, impact: 'Suppressed' }
-  { name: 'sharepoint-experience', displayName: 'SharePoint Experience', x: 900, y: 400, rollup: true, impact: 'Standard' }
-  { name: 'sharepoint-global', displayName: 'User Journey', x: 1050, y: 620, rollup: false, impact: 'Standard' }
-  { name: 'sharepoint-service-health', displayName: 'Service Health', x: 1200, y: 820, rollup: false, impact: 'Suppressed' }
-]
-
-var relationships = [
-  { parent: modelName, child: 'm365-tenant' }
-  { parent: 'm365-tenant', child: 'azure-resources' }
-  { parent: 'm365-tenant', child: 'exchange-experience' }
-  { parent: 'm365-tenant', child: 'teams-experience' }
-  { parent: 'm365-tenant', child: 'sharepoint-experience' }
-  { parent: 'exchange-experience', child: 'exchange-global' }
-  { parent: 'teams-experience', child: 'teams-global' }
-  { parent: 'sharepoint-experience', child: 'sharepoint-global' }
-  { parent: 'exchange-experience', child: 'exchange-service-health' }
-  { parent: 'teams-experience', child: 'teams-service-health' }
-  { parent: 'sharepoint-experience', child: 'sharepoint-service-health' }
-]
-var stepCount = length(flatten(map(serviceSignals, service => service.steps)))
-
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
   name: workspaceName
   location: location
   properties: {
@@ -207,18 +89,15 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   }
 }
 
-resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = if (useOtel) {
   name: applicationInsightsName
   location: location
   kind: 'web'
   properties: {
-    // The workspace cap is unlimited, but the separate currentbillingfeatures API defaults
-    // this component to 100 GB/day. This component schema cannot disable that separate cap.
     Application_Type: 'web'
-    WorkspaceResourceId: workspace.id
+    WorkspaceResourceId: workspace!.id
     IngestionMode: 'LogAnalytics'
     SamplingPercentage: 100
-    // The installed OTel exporter requires connection-string ingestion; do not output its secret.
     DisableLocalAuth: false
     publicNetworkAccessForIngestion: 'Enabled'
     publicNetworkAccessForQuery: 'Enabled'
@@ -228,82 +107,106 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
 resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   name: modelName
   location: location
-  identity: {
-    type: 'SystemAssigned'
-  }
+  identity: { type: 'SystemAssigned' }
   tags: {
     purpose: 'Microsoft 365 synthetic monitoring proof of concept'
-    deploymentStage: 'user-journey-queries-service-health-stubs'
+    deploymentStage: 'federated-direct-reports-optional-otel'
     intendedRunnerHost: 'Azure Container Apps'
   }
   properties: {}
 }
 
-resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = {
-  parent: model
-  name: 'workspace-query'
+module serviceModels './service.bicep' = [for service in enabledServices: {
+  name: '${service.service}-health-model'
+  params: {
+    modelName: '${modelName}-${service.service}'
+    location: location
+    service: service
+    policy: projectConfig.healthModel
+    enableOtel: useOtel
+    workspaceName: workspaceName
+    applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
+  }
+}]
+
+resource nestedModels 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' existing = [for service in enabledServices: {
+  name: '${modelName}-${service.service}'
+}]
+
+resource nestedModelReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (service, index) in enabledServices: {
+  name: guid(nestedModels[index].id, model.id, 'nested-model-reader')
+  scope: nestedModels[index]
   properties: {
-    displayName: 'System-assigned model identity for live workspace queries'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
+    principalId: model.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [serviceModels]
+}]
+
+resource nestedAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = if (!empty(enabledServices)) {
+  parent: model
+  name: 'nested-models'
+  properties: {
+    displayName: 'Root identity reading service-model health'
     authenticationKind: 'ManagedIdentity'
     managedIdentityName: 'SystemAssigned'
   }
 }
 
-resource workspaceQueryReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(workspace.id, model.id, 'log-analytics-reader')
-  scope: workspace
+resource rootEntity 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-preview' = {
+  parent: model
+  name: modelName
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
-    principalId: model.identity.principalId
-    principalType: 'ServicePrincipal'
+    displayName: 'Microsoft 365 Experience'
+    impact: 'Standard'
+    canvasPosition: { x: 500, y: 0 }
+    signalGroups: {
+      dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false }
+    }
   }
 }
 
-resource modelEntities 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-preview' = [for entity in entities: {
+resource serviceReferences 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-preview' = [for (service, index) in enabledServices: {
   parent: model
-  name: entity.name
+  name: '${service.service}-experience'
   properties: {
-    displayName: entity.displayName
-    impact: entity.impact
-    canvasPosition: {
-      x: entity.x
-      y: entity.y
-    }
-    signalGroups: union(entity.rollup ? {
-      dependencies: {
-        aggregationType: 'WorstOf'
-        ignoreUnknown: false
+    displayName: service.displayName
+    impact: 'Standard'
+    canvasPosition: { x: index * 400, y: 250 }
+    signalGroups: {
+      azureResource: {
+        azureResourceId: nestedModels[index].id
+        authenticationSetting: nestedAuthentication!.name
+        signals: []
       }
-    } : {}, journeySignalGroups[?entity.name] ?? {}, serviceHealthSignalGroups[?entity.name] ?? {})
+    }
   }
-  dependsOn: [
-    workspaceQueryReader
-  ]
+  dependsOn: [nestedModelReaders]
 }]
 
-resource modelRelationships 'Microsoft.CloudHealth/healthmodels/relationships@2026-05-01-preview' = [for relationship in relationships: {
+resource relationships 'Microsoft.CloudHealth/healthmodels/relationships@2026-05-01-preview' = [for service in enabledServices: {
   parent: model
-  name: '${relationship.parent}-to-${relationship.child}'
+  name: '${modelName}-to-${service.service}'
   properties: {
-    parentEntityName: relationship.parent
-    childEntityName: relationship.child
+    parentEntityName: rootEntity.name
+    childEntityName: '${service.service}-experience'
   }
-  dependsOn: [
-    modelEntities
-  ]
+  dependsOn: [serviceReferences]
 }]
 
 output modelId string = model.id
 output modelName string = model.name
-output rootEntityName string = modelName
+output rootEntityName string = rootEntity.name
 output apiVersion string = '2026-05-01-preview'
-output entityNames array = [for entity in entities: entity.name]
-output entityCount int = length(entities)
-output relationshipCount int = length(relationships)
-output journeyCount int = length(serviceSignals)
+output serviceModelIds array = [for service in enabledServices: resourceId('Microsoft.CloudHealth/healthmodels', '${modelName}-${service.service}')]
+output serviceNames array = [for service in enabledServices: service.service]
+output modelCount int = 1 + length(enabledServices)
+output entityCount int = 1 + length(enabledServices) * 4 + stepCount
+output relationshipCount int = length(enabledServices) * 3 + stepCount
+output journeyCount int = length(enabledServices)
 output stepCount int = stepCount
-output querySignalCount int = length(serviceSignals) * 3 + stepCount * 2
-output workspaceResourceId string = workspace.id
-output workspaceCustomerId string = workspace.properties.customerId
-output applicationInsightsResourceId string = applicationInsights.id
-output authenticationSettingName string = workspaceAuthentication.name
+output querySignalCount int = useOtel ? length(enabledServices) * 3 + stepCount * 2 : 0
+output workspaceResourceId string = useOtel ? workspace!.id : ''
+output workspaceCustomerId string = useOtel ? workspace!.properties.customerId : ''
+output applicationInsightsResourceId string = useOtel ? applicationInsights!.id : ''

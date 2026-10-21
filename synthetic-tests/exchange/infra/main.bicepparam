@@ -10,6 +10,5 @@ param appName = 'ca-exchange-synthetic-mock'
 
 param deployWorker = false
 param enableLiveProbe = false
-param mailboxAddress = ''
 param intervalSeconds = 60
 param timeoutSeconds = 45

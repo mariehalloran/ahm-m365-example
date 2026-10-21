@@ -6,7 +6,7 @@ The [journey](./src/journey.ts) orchestrates separately exported [actions](./src
 
 The fixed journey ID is `send-receive-mail`, with ordered step IDs `authenticate`, `create-draft`, `send`, `confirm-delivery`, `cleanup`. Each executed step records 1/0 and seconds through the shared measured-step helper. A failed prerequisite skips downstream operations; cleanup still runs after an attempted mutation with its own ten-second budget. Cleanup failure makes the overall result zero without rewriting prior successful steps or delivery timing.
 
-OTel reports success as **1 or 0** and separately measures **send request time**, **confirmed delivery time**, and **total attempt time**. Request acceptance is not delivery. Failed send requests still report their elapsed time.
+When enabled, OTel reports success as **1 or 0** and separately measures **send request time**, **confirmed delivery time**, and **total attempt time**. Request acceptance is not delivery. Failed send requests still report their elapsed time.
 
 - [Config and independent cadence](./config.json)
 - [Administrator resource/permission request](../../MAILBOX-SYNTHETIC-ACCESS.md)
@@ -21,7 +21,7 @@ npm run exchange -- --once
 node dist/exchange/src/worker.js --once
 ```
 
-The checked-in config simulates results without sending email or initializing credentials. Simulation is deterministic and labeled modeled, including failures, timeout steps, and stale timestamps. Live operation requires dedicated approved resources and `ENABLE_LIVE_M365=true`; the [live example](./config.live.example.json) stays disabled until approval.
+The checked-in config simulates results without sending email or initializing credentials. Simulation is deterministic and labeled modeled, including failures, timeout steps, and stale timestamps. The [live settings example](./config.live.example.json) selects live mode, but requires approved root mailbox targets/model destination, root service/scenario selection, scoped permissions, and explicit `ENABLE_LIVE_M365=true`.
 
 ## API operations
 
@@ -43,7 +43,7 @@ Hosted Graph uses `graphAuthentication: "managed-identity"` (the default) and re
 
 For approved local live development only, explicitly choose `graphAuthentication: "certificate"` and provide `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH`. Scope `Application Mail.ReadWrite` and `Application Mail.Send` through Exchange RBAC for Applications to dedicated mailboxes only; **do not grant tenant-wide Entra Graph mail application permissions**. The approved hosted identity must be in the mailbox tenant.
 
-This proves neither employee login/MFA, Outlook rendering, external delivery, nor tenant-wide availability. Embedded OTel reports measurements; it does not evaluate or persist health.
+This proves neither employee login/MFA, Outlook rendering, external delivery, nor tenant-wide availability. The [root config](../../monitoring.config.json) selects this journey and its mailbox targets. The shared worker aggregates this cycle's journey/actions and publishes direct health reports to the Exchange model; optional embedded OTEL adds query evidence on the same entities. No history is persisted. See [reporting/configuration](../utils/README.md#per-cycle-health-reports).
 
 ## Microsoft references
 

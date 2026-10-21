@@ -1,93 +1,94 @@
-# Model, telemetry, then Container Apps
+# Root configuration, health models, then Container Apps
 
-## Current deployment
+## Deployment status and order
 
-The sample model `m365-experience-poc` is managed independently in `rg-m365-demo`, Central US, with workspace `law-m365-experience-poc`, linked Application Insights `appi-m365-experience-poc`, and workspace-scoped query access for the model identity. Each experience has **one AzureLogAnalytics entity displayed as User Journey**, containing its overall and operation-step query signals. There are no separate child step entities. See the [model template and current deployment validation](../health-model/README.md). Application validation does not deploy or connect a live worker.
+The new [model templates](../health-model/README.md) define a root Azure Monitor Health Models resource referencing independent service models. Each service contains a User Journey and individual action entities receiving aggregated external health reports. Optional OTEL query signals live on those same entities.
 
-No worker, registry, mailbox, or Microsoft 365 permission grant is deployed. The model evaluates live-only queries; workers do not push health states.
+**This federated topology has not been deployed.** Earlier single-model PoC resources in `rg-m365-demo` do not prove the new topology or report path is active. No live workers, registry/image pipeline, or tenant permission grants are established by application validation.
 
-## Local test
+1. Prepare a private copy of [monitoring.config.json](../monitoring.config.json): select services/scenarios, account/target metadata, health-model destination, and OTEL.
+2. Establish the root and enabled service models before enabling live workers. Deploy workspace/Application Insights/query permissions only if OTEL is enabled.
+3. Authorize each worker identity separately for its scoped Microsoft 365 journey and health-report ingestion on its own service model.
+4. Package and host one worker per enabled service in Azure Container Apps.
+5. Prove direct reports with OTEL disabled, then optional OTEL queries, cross-model propagation, independent monitoring and notifications.
 
-The Node package, lockfile, shared utilities, TypeScript/test configuration, installed dependencies, and build output are all contained in [synthetic-tests/](../synthetic-tests/README.md). From the repository root:
+Follow the [model deployment/migration guide](../health-model/README.md). Preview with the approved subscription/resource group and the same private root config passed as `projectConfig=@<absolute-path>`. Deployment scope must match `healthModel.subscriptionId` and `resourceGroup`; the template cannot relocate resources based on worker destination metadata. Incremental deployment does **not** remove previously enabled service models, query signals, authentication settings or telemetry resources.
 
-```sh
-cd synthetic-tests
-npm ci
-npm run exchange -- --once
-npm run teams -- --once
-npm run sharepoint -- --once
-```
+## Safe local validation
 
-The checked-in configs use simulation and console telemetry. They perform no real mail/file operations, Azure exports, or checkpoint writes. All subsequent npm/Node commands in this guide assume the `synthetic-tests/` working directory; from the repository root, npm commands can instead use `npm --prefix synthetic-tests ...`.
-
-## Connect telemetry
-
-1. Use the approved deployed workspace and linked Application Insights resource.
-2. Set a service config's `telemetry` to `azure-monitor`.
-3. Provide `APPLICATIONINSIGHTS_CONNECTION_STRING` securely.
-4. Run once and verify both `AppMetrics` and individual `AppTraces` records in the linked workspace.
-5. Validate service-owned [Exchange](../synthetic-tests/exchange/queries/), [Teams](../synthetic-tests/teams/queries/), [SharePoint](../synthetic-tests/sharepoint/queries/) analytics/model queries, including all-failure, all-unexecutable, missing-step and no-data cases. No target list is needed. [Measurement semantics](../synthetic-tests/utils/README.md#measurements-and-queries) explain weighting and skipped steps.
-
-No Blob storage or health-model ingestion role is needed. The exporter sends from the **same process that runs the tests**. It is shared code, not a separate service.
-
-Changing the telemetry destination does not enable real probes; `mode: live` additionally requires dedicated approved resources, credentials, and explicit live opt-in.
-
-## Container Apps deployment boundary
-
-Use one independently configured Container App per service:
-
-```text
-Exchange Container App:   one process = test + embedded OTel, every 60 seconds
-SharePoint Container App: one process = test + embedded OTel, every 300 seconds
-Teams Container App:      one process = bot journey + embedded OTel, every 120 seconds
-```
-
-The [synthetic-tests package](../synthetic-tests/package.json) builds three service-owned entries; utilities never import all service implementations. Use `synthetic-tests/` as the future image's application/build context and the application working directory inside the image. The same image can run an explicitly selected entry, with embedded OTel and no sidecar/Collector/AKS requirement:
+The Node package, dependencies and build output remain entirely inside [synthetic-tests/](../synthetic-tests/README.md). From the repository root:
 
 ```sh
-npm run build
-node dist/exchange/src/worker.js --config exchange/config.json
-node dist/teams/src/worker.js --config teams/config.json
-node dist/sharepoint/src/worker.js --config sharepoint/config.json
+npm --prefix synthetic-tests ci
+npm --prefix synthetic-tests run exchange -- --once
+npm --prefix synthetic-tests run teams -- --once
+npm --prefix synthetic-tests run sharepoint -- --once
 ```
 
-`--config` is optional, defaulting to `<service>/config.json` from the `synthetic-tests/` working directory, not the repository root. An explicitly mounted absolute config path is recommended for hosted workers. Wrong-service configs are rejected before runtime initialization. Hosted Graph requires the approved same-tenant UAMI's explicit `AZURE_CLIENT_ID`, with `graphAuthentication: "managed-identity"` (default). There is no Graph certificate/Key Vault/CLI fallback. Local certificate development requires explicit `certificate` mode. Teams still needs its independent bot certificate and expected `AZURE_TENANT_ID` tenant guard. See the [optional Exchange mock template](../synthetic-tests/exchange/infra/README.md); it is not a deployed worker.
+All services and supported journeys default to enabled. Checked-in service files still select **simulation**; root OTEL defaults to enabled with **console** destination. Reports are clearly labeled previews, with no Graph/ARM credentials, real messages/files, Azure ingestion, or saved state. Setting root `otel.enabled: false` additionally avoids constructing any SDK/exporter.
 
-For an always-running background loop, hosting must keep an instance running and provide CPU while idle/non-HTTP work executes; do not assume scale-to-zero/request-driven defaults keep a timer loop alive. Validate the chosen Container Apps billing/scaling configuration before deployment.
+## Root and service configuration
 
-Packaging, production hosting, scoped permission assignments, and replica ownership remain separate work. Keep one authoritative replica per target set; process restarts/revisions can cause repeated attempts. Test graceful shutdown, credential rotation, export failure, and downstream missing-data monitoring. No checkpoint volume or Graph certificate secret is required for the hosted Graph path.
+Root `services.<service>.configFile` paths are relative to the root config's directory. Keep cadences, timeouts, mode, authentication and provider opt-ins in these separate service files. Root service/scenario switches, targets and OTEL settings have a single source of truth; duplicate `enabled`, `targets` and `telemetry` service-file keys are rejected. Root service/scenario selection controls whether a worker runs.
 
-All three live templates are disabled until resources are supplied. Teams additionally needs a preinstalled bot and validated Connector service URL; the current outbound worker does not host the bot-registration callback/bootstrap service. HTTP-mocked journey tests are not live access or end-to-end tenant validation.
+Use a mounted private root config for hosted workers:
 
-## Model queries
+```sh
+# From synthetic-tests/, after building:
+node dist/exchange/src/worker.js \
+  --project-config /etc/probe/monitoring.config.json \
+  --config /etc/probe/exchange.json --once
+```
 
-The model identity has Log Analytics Reader only on the new workspace. Each service has separate `AppMetrics` queries for binary success, mean duration, reporting gaps, unexecutable attempts and individual step success/duration. No query combines services; no per-probe inventory, log join or worker state is required. Overall metrics include literal `probe.journey`; step metrics use `probe.service`, `probe.journey`, `probe.step`, `probe.mode`, `probe.outcome`.
+`--config` overrides only the service file, not root targets/gates/OTEL. It is relative to the working directory unless absolute. Without it, the root config's `configFile` is used. Adjust paths in a private config for the image layout; never assume a `synthetic-tests/`-only image includes a repository-root file.
 
-Each service's `queries/health-model/` contains `success-percentage.kql`, `mean-latency.kql`, `missing-observations.kql`, `unexecutable-attempts.kql`, `step-success.kql`, and `step-duration.kql`. The model puts human-readable signals such as “Create email - mean duration” and step success inside that service's single User Journey entity; the runtime step vocabulary and metrics are unchanged.
+Root targets must contain the approved mailbox address or site/team/channel IDs. Live settings examples select live mode but are not approved resources or permission grants; execution still requires the explicit environment gate. Replace the zero subscription placeholder, configure the exact model prefix/resource group, and ensure report TTL exceeds cadence plus the bounded 212-second cycle/report budget.
 
-Journey/step queries with no measurements return no value, not fabricated 100% success or zero latency. A separate monitoring signal indicates absent service metrics. All three journey/step signal sets are wired in the model; actual live ingestion, Azure resource/provider collection and alert delivery are not proven. Notifications still require an approved action group/recipient.
+## Identity and permissions
 
-## Optional provider collection rollout
+Hosted Graph and health reports use only the explicitly selected same-tenant UAMI's `AZURE_CLIENT_ID`. Graph uses its Graph token; reports use a separate `https://management.azure.com/.default` token. There is no CLI/default-identity/certificate fallback. Explicit local `graphAuthentication: certificate` uses the approved development service principal for both audiences; its Graph and Azure grants must both be assigned.
 
-Service-owned wrappers run inside each existing worker, once per cycle independently of mailbox/channel/site targets. All checked-in configs and disabled live templates leave `serviceHealth` and `serviceActivity.enabled` **false**; enabling telemetry does not enable either collector or grant access.
+The model must already contain each destination entity; ingestion does not create entities. The worker needs the report-ingestion action on its **service model**, not subscription Owner/Contributor or root-model administration. See the [model permission contract](../health-model/README.md). The model identity's optional query/reference permissions are separate from worker permissions.
 
-For an approved read-only context rollout, separately authorize `ServiceHealth.Read.All`, confirm exact subscribed service names, then opt into `serviceHealth`. Overviews and issue/history logs are **context-only**, and ServiceHealth entities remain impact-suppressed. The model's separate context query accepts only fresh live v1.0 `m365-service-health-overview` records; issues never supply health signals.
+Approve the [Exchange mailbox grants](../MAILBOX-SYNTHETIC-ACCESS.md), SharePoint `Sites.Selected` site-write grant, or Teams Graph observer/bot setup independently. Teams remains separately certificate-backed for Bot Connector and requires expected `AZURE_TENANT_ID`; Graph managed identity alone does not authorize bot posting.
 
-For a separate experimental Exchange/Teams beta evaluation, confirm tenant eligibility, approve the service-specific `ServiceActivity-Exchange.Read.All` or `ServiceActivity-Teams.Read.All`, and set both the config's `serviceActivity.enabled` and `ENABLE_BETA_SERVICE_ACTIVITY=true`. SharePoint beta is explicitly unsupported/rejected. Beta is unsupported for production and diagnostics only, never aggregated into synthetic measurements or Experience/journey health. No permission deployment/grant is implemented by the collectors.
+Live execution also requires `mode: live`, all selection gates, approved targets and `ENABLE_LIVE_M365=true`. Provider collection remains separately disabled by default; stable context needs `ServiceHealth.Read.All`, and experimental beta diagnostics require their service-specific permissions plus `ENABLE_BETA_SERVICE_ACTIVITY=true`. Providers never contribute to synthetic reports or rollup.
 
-Inspect explicit provider failures, source summary counts, expected flat AppTraces attributes, bounded/truncated issue history, and overlapping historical report buckets during a controlled `--once` run only after access approval. The [shared schema and limits](../synthetic-tests/utils/README.md#optional-provider-collectors) are validated before runtime creation. Simulation skips sources with no Graph credentials/network. Local mocked validation is not live Microsoft 365 access or evidence that a tenant can use a beta report.
+## Optional OTEL
+
+To add historical metrics/logs:
+
+1. Set root `otel.enabled: true` and `otel.destination: azure-monitor`.
+2. Deploy the optional workspace, linked Application Insights, query authentication/RBAC and per-entity signals.
+3. Supply `APPLICATIONINSIGHTS_CONNECTION_STRING` securely, not in JSON/source control.
+4. Verify live `AppMetrics`/`AppTraces` ingestion and service-specific query results, including all-failure, skipped-step and no-data cases.
+
+OTEL is embedded in the same worker process; no separate telemetry service, Collector, sidecar or AKS is required. Disabled OTEL needs no connection string/workspace. Root OTEL enabled with console destination is for local inspection; it does not populate Azure query signals. OTEL query windows and direct-report cycle aggregates can differ, and both active signal groups contribute to entity health.
+
+## Container Apps boundary
+
+Build from the self-contained Node project:
+
+```sh
+npm --prefix synthetic-tests run build
+```
+
+Use `synthetic-tests/` as the image's application/build context. Include its compiled service entries and runtime dependencies, then mount the project-root config separately and the selected service config at explicit paths. The same image can run an explicitly selected Exchange, Teams or SharePoint entry; separate apps retain independent 60/120/300-second default cadences.
+
+The [Exchange hosting mock](../synthetic-tests/exchange/infra/README.md) is compile-only, not an operational deployment. No equivalent Teams/SharePoint hosting template or published image is claimed. Use one authoritative replica per target set; rollouts/restarts can repeat attempts. Always-running loops require CPU outside HTTP requests and an instance that does not scale to zero; validate billing/scaling settings.
+
+Workers have no persistent volume/history/outbox. Report retries, SDK buffers and aggregation are bounded memory only. Protect certificates where explicitly required, rotate them, and verify graceful shutdown and cleanup.
 
 ## Acceptance and cleanup
 
-- Exactly identified attempts and correct seconds/milliseconds are visible in the workspace.
-- Binary success observations and weighted mean durations match known fixtures.
-- Weighted means and service reporting-gap detection behave correctly; empty results never imply 100% success.
-- Simulation is separated from live measurements.
-- Each service follows its own cadence and cleans up on cancellation.
-- Export failures are explicit; no filesystem/Blob outbox or hidden state exists.
+- With OTEL disabled: confirm entity-level direct reports, numeric aggregates, skipped Unknowns, and propagation through service/root models.
+- With OTEL enabled: additionally verify exact resource/service/journey/step scoping, weighted success/means, live-only filtering and no-data behavior.
+- Deny report ingestion and optional telemetry separately; failures must be explicit and one path must still be attempted when the other fails.
+- Stop/stall workers, observe report expiry, and verify independent detection rather than assuming expiry forces Unknown while other signals remain.
+- Test notifications end to end through a route not dependent only on Microsoft 365.
 
-For a large-company default, also satisfy the [enterprise reliability gate](./operations.md#enterprise-reliability-acceptance-gate): independent missing-result detection, platform/query/alert-path monitoring, an approved notification route not dependent only on Microsoft 365, and measured failure-injection tests. A single cheap replica is a proof of concept, not a production availability commitment.
+The [enterprise reliability gate](./operations.md#enterprise-reliability-acceptance-gate), independently observed freshness, model/reference authorization and a tested alert path remain requirements, not deployed functionality.
 
-Workspace ingestion/retention and always-running compute incur costs; agree on budgets and retention. Azure Monitor Health Models is a preview service, so confirm applicable terms.
+Reports, model evaluations, optional ingestion/retention and always-running compute incur costs. Agree on budgets, report cadence, TTL and retention. Azure Monitor Health Models is preview; confirm applicable terms.
 
-Stop producers first when decommissioning. Revoke only approved permissions, review retained artifacts, and delete only dedicated resources with owner approval. Never delete a shared resource group or unrelated workspace.
+Stop producers first when decommissioning. Reconcile stale report/query signals and model references, revoke only approved permissions, review retained synthetic artifacts, and remove dedicated resources only after owner approval. Never delete a shared resource group or unrelated workspace.

@@ -11,7 +11,7 @@ availability, tenant authorization, or live mail delivery.
 | --- | --- |
 | `deployWorker = false` (default) | Only the Exchange/environment-specific user-assigned managed identity would be created. |
 | `deployWorker = true` | Also creates one dedicated Container Apps environment and one Container App. |
-| `enableLiveProbe = false` (default) | Mounted live config is disabled, and `ENABLE_LIVE_M365` is `false`. No simulated results or fabricated health are substituted. |
+| `enableLiveProbe = false` (default) | Mounted root `services.exchange.enabled` is forced false, and `ENABLE_LIVE_M365` is `false`. No simulated results or fabricated health are substituted. |
 | `enableLiveProbe = true` | Enables live execution, but grants no authorization. Approved mailbox, image, and tenant permissions remain prerequisites. |
 
 The flags are independent. Creating the app with its probe disabled is
@@ -22,7 +22,8 @@ prerequisites are ready.
 
 The worker is stateless, has **no HTTP ingress, listening port, Blob storage,
 checkpoint store, or separate telemetry worker**. It uses one replica
-(`minReplicas = maxReplicas = 1`) and single-revision mode. The sample
+(`minReplicas = maxReplicas = 1`) and single-revision mode.
+The template gives termination 60 seconds for bounded cleanup, in-flight health reports, and telemetry shutdown; verify the host's actual termination behavior before live use. The sample
 `0.25` vCPU / `0.5Gi` sizing is not a production reliability or performance
 commitment. Stopped/stalled-worker and telemetry-loss detection, notification
 testing, capacity, and production hardening remain separate acceptance gates.
@@ -46,16 +47,16 @@ dependencies. Container Apps platform log forwarding is explicitly disabled
 | `workerImage` | Required existing approved image URI; the parameter file contains an unusable placeholder. |
 | `workerEntrypoint` | `dist/exchange/src/worker.js`, relative to the image working directory. |
 | `registryServer` | Empty; optionally an existing ACR hostname, without scheme or image path. |
-| `mailboxAddress` | Empty; later supply the explicitly approved same-tenant mailbox. |
+| `projectConfig` | Loads the repository-root configuration by default; supply a private reviewed copy with approved Exchange targets and health-model destination for live use. |
 | `intervalSeconds` | `60`, allowed `1–86400`; Exchange-only cadence. |
 | `timeoutSeconds` | `45`, allowed `1–120`; journey timeout. |
-| `applicationInsightsConnectionString` | Empty secure parameter; only a supplied value selects `azure-monitor` telemetry. |
+| `applicationInsightsConnectionString` | Empty secure parameter; required only if root OTEL is enabled with `azure-monitor` destination. It does not enable OTEL. |
 
 Identity naming is independent of the app name so app replacement does not
 require an identity change. Retain that identity deliberately; deployment mode
 and deletion/lifecycle governance are outside this mock.
 
-## Image and single-config contract
+## Image and root/service config contract
 
 An **approved image built from this repository and already published** must
 exist before the worker is usable. This mock does not add a Dockerfile, install
@@ -66,7 +67,7 @@ dependencies (including the embedded OpenTelemetry SDK/exporter), and an image
 working directory matching `workerEntrypoint`. The container command is:
 
 ```text
-node dist/exchange/src/worker.js --config /etc/probe/exchange.json
+node dist/exchange/src/worker.js --project-config /etc/probe/monitoring.config.json --config /etc/probe/exchange.json
 ```
 
 The approved image built from the `synthetic-tests/` package must contain that compiled worker path.
@@ -74,33 +75,24 @@ The approved image built from the `synthetic-tests/` package must contain that c
 directory/layout. Replace the image placeholder in `main.bicepparam` before any
 future deployment. No runtime source changes are part of this scaffold.
 
-The template renders exactly one Exchange config and mounts it read-only at
-`/etc/probe/exchange.json` using an ACA secret-backed volume. The config contains
-noncredential target metadata; the secret volume is just a convenient file
+The template mounts the project-root config at `/etc/probe/monitoring.config.json` and renders an Exchange service config at `/etc/probe/exchange.json`, both read-only through an ACA secret-backed volume. Only the root config contains noncredential target metadata; the secret volume is just a convenient file
 mount. No startup shell writes a file, and no `PROBES_JSON` environment variable
 is supplied. Its contents are equivalent to:
 
 ```json
 {
   "type": "exchange",
-  "enabled": false,
   "intervalSeconds": 60,
   "timeoutSeconds": 45,
   "mode": "live",
   "graphAuthentication": "managed-identity",
-  "cohort": "exchange-global",
-  "telemetry": "console",
-  "targets": []
+  "cohort": "exchange-global"
 }
 ```
 
-A nonempty `mailboxAddress` produces
-`targets: [{ "id": "exchange-probe-001", "mailbox": "<approved mailbox>" }]`.
-An empty target list is valid while disabled; enabling without a target must
-fail configuration validation rather than invent a target. The worker exports
+Root `services.exchange.targets` supplies the mailbox address; its checked-in value is an unusable placeholder, not approved access. Root service/scenario switches and OTEL are the only selection/target/telemetry settings; the deployment's explicit `enableLiveProbe` safety gate can additionally force the mounted root Exchange selection off. An empty target list is valid only with the root scenario/service disabled. Enabling without a target must fail validation rather than invent a target. The worker exports
 binary attempt success (`1`/`0`), request/send duration, confirmed-delivery
-duration, and total journey duration. Success rates and health are evaluated
-downstream, not stored in the worker.
+duration, and total journey duration when OTEL is enabled. Independently, it aggregates the current cycle and publishes health reports directly to journey/action entities in its service model, without storing cross-cycle history.
 
 ## Same-tenant identity and authorization handoff
 
@@ -122,8 +114,9 @@ downstream, not stored in the worker.
    conditions instead. Ensure the registry accepts managed-identity image
    pulls. Do not enable admin passwords or grant broad Contributor permissions.
    No registry or role assignment is created here.
+   Separately authorize health-report ingestion on the Exchange service model for this UAMI; see the [model permission contract](../../../health-model/README.md). Mailbox permissions do not grant Azure health-model access.
 4. **Worker stage, later and explicitly authorized:** replace the image
-   placeholder, verify the packaged entrypoint, supply the approved mailbox, complete the external
+   placeholder, verify the packaged entrypoint, supply the approved root targets/model destination, complete the external
    permission handoff, and only then consider `deployWorker = true` and
    `enableLiveProbe = true`.
 
@@ -133,19 +126,15 @@ The app explicitly attaches this UAMI and sets:
 - `AZURE_TENANT_ID` to the Azure subscription tenant ID.
 - `ENABLE_LIVE_M365` from `enableLiveProbe`.
 
-These identifiers are not credentials. The managed-identity runtime contract
-is **only** `ManagedIdentityCredential({ clientId })` with Graph scope
-`https://graph.microsoft.com/.default`; it must not guess a host identity, use
+These identifiers are not credentials. The managed-identity runtime contract is **only** `ManagedIdentityCredential({ clientId })`, using separate Graph (`https://graph.microsoft.com/.default`) and health-report ARM (`https://management.azure.com/.default`) audiences; it must not guess a host identity, use
 `DefaultAzureCredential`, or fall back to certificates/secrets. No
 `AZURE_CLIENT_CERTIFICATE_PATH` is needed or supplied for hosted Exchange.
 Explicit local certificate authentication and Teams bot certificate
 authentication are outside this mock.
 
-Optional telemetry uses the **existing** Application Insights connection string
-only when `applicationInsightsConnectionString` is supplied securely. It is
+Optional telemetry uses the **existing** Application Insights connection string only when root `otel.enabled` is true and `otel.destination` is `azure-monitor`; supply `applicationInsightsConnectionString` securely in that case. It is
 stored as an ACA secret and referenced by
-`APPLICATIONINSIGHTS_CONNECTION_STRING`, never output. Without it, the config
-selects `console`. This is a telemetry-ingestion setting, separate from mailbox
+`APPLICATIONINSIGHTS_CONNECTION_STRING`, never output. Root OTEL selects the destination; a missing required connection string fails validation, with no console fallback. This is a telemetry-ingestion setting, separate from mailbox
 authentication; no Application Insights keys are queried and no new telemetry
 resources are created. Keep real connection strings out of committed parameter
 files and command history.

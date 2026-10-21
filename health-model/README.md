@@ -1,167 +1,144 @@
-# Experience -> User Journey, with step query signals
+# A health model of service health models
 
-Each service owns its worker, journey functions, reusable action functions, metrics, tests, and query files. This component owns the model topology that evaluates those measurements.
+The [root configuration](../monitoring.config.json) selects services and supported journey scenarios for both workers and model deployment. All three services/scenarios are enabled by default. Service files contain execution settings only; selection, targets, and OTEL are not duplicated there.
 
-**Workers remain stateless.** They publish 1/0 observations and durations, not Healthy/Unhealthy states. Shared authentication, scheduling, HTTP, and embedded OTel functionality lives in [utils/](../synthetic-tests/utils/).
+**These templates have not been deployed.** The earlier single-model PoC in `rg-m365-demo` is a different topology. Building a template or running mocked tests does not establish live ingestion, cross-model propagation, or tenant access.
 
-## Deployed topology
+## Topology and naming contract
 
-The `m365-experience-poc` layout in `rg-m365-demo`, Central US, has **12 entities and 11 relationships**. Each service Experience has one Log Analytics **User Journey** entity containing its step queries and one suppressed **Service Health** supporting-context entity.
+With the default name, [main.bicep](./infra/main.bicep) creates four independent Azure Monitor Health Models resources:
 
 ```text
-Microsoft 365 and Azure Experience
+m365-experience-poc                         [root model]
 |
-+-- Exchange Experience
-|   +-- Service Health                       [stable provider context]
-|   `-- User Journey                         [Log Analytics entity]
-|       +-- Authenticate - success % / mean duration
-|       +-- Create email - success % / mean duration
-|       +-- Send email - success % / mean duration
-|       +-- Confirm delivery - success % / mean duration
-|       `-- Cleanup - success % / mean duration
-|
-+-- Teams Experience
-|   +-- Service Health                       [stable provider context]
-|   `-- User Journey                         [Log Analytics entity]
-|       +-- Authenticate - success % / mean duration
-|       +-- Post message - success % / mean duration
-|       +-- Confirm publication - success % / mean duration
-|       `-- Cleanup - success % / mean duration
-|
-+-- SharePoint Experience
-|   +-- Service Health                       [stable provider context]
-|   `-- User Journey                         [Log Analytics entity]
-|       +-- Authenticate - success % / mean duration
-|       +-- Verify library - success % / mean duration
-|       +-- Upload file - success % / mean duration
-|       +-- Read file - success % / mean duration
-|       `-- Cleanup - success % / mean duration
-|
-`-- Azure Resource Health                       [not connected]
++-- Exchange Experience                    [references m365-experience-poc-exchange]
+|   `-- User Journey                       [exchange-global, in the Exchange model]
+|       +-- Authenticate                   [exchange-authenticate]
+|       +-- Create email                   [exchange-create-draft]
+|       +-- Send email                     [exchange-send]
+|       +-- Confirm delivery               [exchange-confirm-delivery]
+|       `-- Cleanup                        [exchange-cleanup]
++-- Teams Experience                       [references m365-experience-poc-teams]
+|   `-- User Journey                       [teams-global, in the Teams model]
+|       +-- Authenticate
+|       +-- Post message
+|       +-- Confirm publication
+|       `-- Cleanup
+`-- SharePoint Experience                  [references m365-experience-poc-sharepoint]
+    `-- User Journey                       [sharepoint-global, in the SharePoint model]
+        +-- Authenticate
+        +-- Verify library
+        +-- Upload file
+        +-- Read file
+        `-- Cleanup
 ```
 
-The lines below each User Journey are **signals, not child entities**. The model retains its service-created root and existing journey IDs (`exchange-global`, `teams-global`, `sharepoint-global`). Each User Journey has one Log Analytics source and a separate named KQL query for each step's success and mean duration, plus whole-journey measurements.
+Each service model also has a **Service Health** supporting-context entity directly under its Experience root, with **Suppressed** impact. Monitoring Pipeline and unconnected Azure Resource Health branches are absent.
 
-The User Journey signal lists remain 12 for Exchange, 10 for Teams, and 12 for SharePoint: **34 journey queries**. Three independent stable-provider status queries bring the model total to **37**. Monitoring Pipeline and its former children remain absent; operational missing-result queries/reliability safeguards are retained separately.
+Each model's root entity has the same name as that model. Service model names are `<healthModel.name>-<service>`; journey entities are `<service>-global`; action entities are `<service>-<step>`. Runtime and templates share these names. The root prefix is limited to 33 characters by runtime configuration so the longest service suffix fits the model's 44-character limit.
 
-Each Service Health query reads only the latest fresh live v1.0 `healthOverviews` record for its own service. It remains Unknown until data arrives. Its impact stays **Suppressed**, as explicitly selected: a provider incident, collection error, or beta report must not change Experience health. Dependency rollup otherwise uses `WorstOf` with `ignoreUnknown: false`.
+The root model references each enabled service model through an `azureResource` source pointing to that model's resource ID, not through a copied journey or a fabricated KQL signal. Microsoft documents that [nested models contribute the health of their root entity](https://learn.microsoft.com/azure/azure-monitor/health-models/concepts#nested-health-models). The root identity has Reader only on its child models; `nested-models` authentication is required independently of OTEL.
 
-## What each step measures
+Within a service model, Experience depends on User Journey and suppressed Service Health; User Journey depends on its action entities. Dependency aggregation uses `WorstOf`, with `ignoreUnknown: false`. With all services selected there are **27 entities and 23 relationships across four models**, including three root reference entities. Disabling a service or its only supported scenario excludes that service model and reference from a fresh deployment. All services disabled leaves the root model with no evidence, not a fabricated healthy result.
 
-| Instrument | Sample | Labels |
+## Required direct health reports
+
+After each complete cycle, the worker aggregates actual samples separately for the whole journey and each action, then submits two external signals to each corresponding service-model entity:
+
+| Signal | Value and evaluation |
+| --- | --- |
+| `synthetic-success-percentage` | `100 * succeeded / executed`; default Degraded below 99%, Unhealthy below 95% |
+| `synthetic-mean-duration` | Mean milliseconds across executed samples, including failures; default Degraded above 15,000 ms, Unhealthy above 60,000 ms |
+
+Threshold equality does not breach. These are provisional demonstration thresholds, not production per-action SLOs or p95. Whole-journey direct duration includes cleanup. Send-request duration and confirmed delivery/publication remain distinct action measurements.
+
+Skipped/unobserved actions have no artificial failure or duration sample. They receive explicit **Unknown** reports without a numeric value. Authentication/permission failures still make the overall attempt unsuccessful; they do not establish a provider outage. Cleanup failure affects cleanup and the whole journey without rewriting earlier successful actions.
+
+The [Health Report Ingestion API](https://learn.microsoft.com/azure/azure-monitor/health-models/health-report-ingestion) creates external signals automatically, but **does not create destination entities**. The templates therefore establish entities first and do not declare a writable `external` signal group. Reports use the verified `2026-05-01-preview` API and require a 204 acknowledgement. Simulation emits previews only.
+
+Workers retain no aggregation history between cycles. There is no cross-cycle sample minimum, rolling window, stabilization counter, durable outbox, or exactly-once guarantee. A complete cycle replaces each signal's previous report. Incomplete/cancelled cycles explicitly skip publication rather than publishing a healthy partial aggregate.
+
+Reports default to a **15-minute TTL**. Expiry removes external signals; it does not necessarily make an entity Unknown if other signals still contribute health. Live configuration requires TTL to exceed cadence plus the bounded 212-second cycle/report budget. Independently monitor execution and accepted-report freshness; report expiry is not a stopped-worker alert.
+
+## Optional OTEL and Log Analytics
+
+With root `otel.enabled: false`, service models, journey/action entities, native nested-model references, and direct health reports still work. A fresh deployment creates **no workspace, Application Insights, workspace-query authentication, query-reader roles, or Log Analytics signals**.
+
+With OTEL enabled and at least one service selected, the templates additionally create:
+
+- A shared pay-as-you-go workspace and linked Application Insights component.
+- Workspace-only Log Analytics Reader grants and `workspace-query` authentication for each enabled service-model identity.
+- Two overall journey queries and two queries on each action entity: live success percentage and mean duration.
+- One stable-provider context query on each suppressed Service Health entity.
+
+The default full model has **37 optional query signals**: 34 journey/action signals and three provider-context signals. They live on the **same entities** that receive external reports, not a separate telemetry branch. Active query signals also contribute to entity evaluation; direct reports do not override them.
+
+Root `otel.destination: console` is for safe local inspection and does not populate Azure queries. For Azure ingestion, select `azure-monitor` and securely supply `APPLICATIONINSIGHTS_CONNECTION_STRING`. Enabling OTEL does not enable live probes or provider permissions.
+
+Queries remain service-owned:
+
+| Service / journey | Queries | Window |
 | --- | --- | --- |
-| `synthetic.step.success` | 1 when the step succeeds, 0 when an executed step fails | Service, journey, bounded step name, mode, outcome |
-| `synthetic.step.duration` | Elapsed seconds for that executed step, including failed attempts | Same low-cardinality labels |
+| Exchange / `send-receive-mail` | [Exchange queries](../synthetic-tests/exchange/queries/health-model/) | 5 minutes |
+| Teams / `publish-channel-message` | [Teams queries](../synthetic-tests/teams/queries/health-model/) | 5 minutes |
+| SharePoint / `save-reopen-file` | [SharePoint queries](../synthetic-tests/sharepoint/queries/health-model/) | 15 minutes |
 
-Whole-journey success/duration and the specific send/delivery/publication/upload/read measurements remain available. Individual request timings are not substituted for confirmed arrival/readback.
+Every query selects the exact Application Insights resource, service, journey and live mode; action queries additionally select one fixed step. No target inventory or trace join is needed. Success is weighted `100 * sum(Sum) / sum(ItemCount)`; durations are weighted means, converted from seconds to milliseconds. All-zero attempts are 0% success; no samples return no value, not healthy success or zero latency.
 
-**Skipped is not failed.** If authentication fails, later send/read actions never execute. They receive diagnostic skipped records, not artificial zero-success or zero-duration samples. Their step queries return no data/Unknown; the failed prerequisite is visible separately. Cleanup executes only when needed and uses its independent cancellation budget.
+These historical windows differ from direct single-cycle reports. The Exchange/Teams **overall query** measures confirmed delivery/publication duration, while their direct overall duration measures the whole attempt through cleanup; display names preserve that distinction. Individual action timings retain their existing definitions.
 
-Examples:
+Stable Service Health queries accept only fresh live v1.0 overview records for the exact service. Issues/history and beta reports never supply synthetic reports or journey health. With OTEL disabled, provider diagnostics remain console output and the Service Health entity is an unconnected, suppressed context stub.
 
-- Send request succeeds, Inbox confirmation times out: the send step remains successful; the delivery-confirmation step fails.
-- Upload succeeds but downloaded content is wrong: upload succeeds; verified readback fails.
-- Message publication succeeds but cleanup fails: publication remains successful with its timing; cleanup and the overall journey fail.
+## Identity and permissions
 
-No worker persists these outcomes between cycles. Log Analytics/model queries own time-window evaluation.
+There are three separate authorization responsibilities:
 
-## Service-owned query files
+1. **Workers:** the same explicitly selected Graph identity obtains a separate ARM-audience token for reports. The minimum report action is `Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action`, scoped to that worker's **service model** through an approved custom role. This action was verified against the provider operation catalog. Runtime does not require root-model administration, subscription Contributor/Owner, or workspace query access. Microsoft 365 permissions remain separate.
+2. **Root model:** its system-assigned identity receives built-in Reader on each enabled service model for native nesting. This is not a worker permission and is not conditional on OTEL.
+3. **Service models with OTEL:** their system-assigned identities receive Log Analytics Reader only on the shared workspace. No query access is required with OTEL disabled.
 
-| Service / journey label | Query source | Lookback |
-| --- | --- | --- |
-| Exchange / `send-receive-mail` | [synthetic-tests/exchange/queries/health-model/](../synthetic-tests/exchange/queries/health-model/) | 5 minutes |
-| Teams / `publish-channel-message` | [synthetic-tests/teams/queries/health-model/](../synthetic-tests/teams/queries/health-model/) | 5 minutes |
-| SharePoint / `save-reopen-file` | [synthetic-tests/sharepoint/queries/health-model/](../synthetic-tests/sharepoint/queries/health-model/) | 15 minutes |
+The deploying operator needs approved model/resource creation and scoped role-assignment rights. Templates do not create workers, worker ingestion grants/custom roles, Microsoft 365 grants, mailboxes, bots, registries, or notifications. Explicit local certificate mode needs Azure report permission for that development principal as well as its separately scoped Graph access.
 
-Every query scopes the exact Application Insights resource, one service, one journey, and **live** mode. Step queries additionally select one bounded `probe.step`. No mailbox address, target/probe inventory, trace join, or dynamic code is required.
+## Apply and migrate safely
 
-For each journey and step:
-
-- Success percentage is `100 * sum(Sum) / sum(ItemCount)` for its binary observations.
-- Duration is `sum(Sum) / sum(ItemCount)`, converted from seconds to milliseconds.
-- No samples means no value/Unknown, never 100% success or fabricated zero latency.
-- All failed samples still count as reported observations: zero sum with positive count is 0% success, not missing telemetry.
-
-Step query files use a single `__STEP__` placeholder. Bicep substitutes the fixed step name when deploying a distinct signal **inside that service's User Journey entity**. They do not combine different services or steps.
-
-The demo thresholds are below 99%/95% success for Degraded/Unhealthy and above 15/60 seconds for latency. These common defaults are **not production per-action SLOs**; calibrate latency budgets for authentication, sending, polling, and cleanup before operational use. These are means, not p95.
-
-## Deployment scope and cost
-
-The [template](./infra/main.bicep) manages:
-
-- The existing model, workspace `law-m365-experience-poc`, and linked Application Insights `appi-m365-experience-poc`.
-- Workspace-only Log Analytics Reader access for the model's system-assigned identity and its `workspace-query` authentication setting.
-- Thirty-four live journey query signals plus three stable-provider context signals.
-- The Service Health nodes keep Suppressed impact and require no worker-published state.
-
-Journey signals refresh every minute; provider context refreshes every five minutes. This is approximately **49,824 scheduled evaluations per day** before service behavior/limits. Review applicable query/model pricing, workspace ingestion/retention, and refresh requirements.
-
-This deployment does **not** create Container Apps, mailbox permissions, a registry, or the Exchange user-assigned identity. The [Exchange managed-identity Bicep](../synthetic-tests/exchange/infra/README.md) remains an independent **mock-only setup**. The workspace retains data for thirty days; Application Insights has its own daily cap and sampling configuration to review.
-
-## Apply and inspect
-
-Always specify the approved subscription explicitly:
+Use the same reviewed private project config for deployment and workers. Deployment subscription/resource group must match `healthModel.subscriptionId` and `resourceGroup`; worker destination metadata does not relocate an ARM deployment.
 
 ```sh
 SUBSCRIPTION_ID='<approved-subscription-id>'
+RESOURCE_GROUP='<approved-resource-group>'
+PROJECT_CONFIG='/absolute/path/to/approved/monitoring.config.json'
 
 az deployment group what-if \
-  --subscription "$SUBSCRIPTION_ID" \
-  --resource-group rg-m365-demo \
-  --template-file health-model/infra/main.bicep
+  --subscription "$SUBSCRIPTION_ID" --resource-group "$RESOURCE_GROUP" \
+  --template-file health-model/infra/main.bicep \
+  --parameters projectConfig=@"$PROJECT_CONFIG"
 
+# Only after reviewing the preview and obtaining deployment approval:
 az deployment group create \
-  --subscription "$SUBSCRIPTION_ID" \
-  --resource-group rg-m365-demo \
-  --name m365-model-foundation \
-  --template-file health-model/infra/main.bicep
+  --subscription "$SUBSCRIPTION_ID" --resource-group "$RESOURCE_GROUP" \
+  --name m365-model-foundation --template-file health-model/infra/main.bicep \
+  --parameters projectConfig=@"$PROJECT_CONFIG"
 ```
 
-Review the preview first. Deployment is incremental; do not use complete mode on a shared resource group. The verified Health Models API is `2026-05-01-preview`.
+**Incremental deployment does not delete omitted resources or old relationships.** It is not enough to set OTEL/service switches false and assume old entities, query groups, authentication, RBAC, or workspaces disappear.
 
-Query verification uses read-only Kusto fixtures, not telemetry injection:
+Prefer a new approved model prefix when moving from the previous single-model topology. Establish and validate the new model family, switch worker destinations, and retire only specifically approved old resources. If reusing the old prefix, inventory and explicitly remove obsolete root relationships/entities (including the old `m365-tenant` branch), signals and permissions before relying on the new rollup. Existing external/query groups may need reconciliation when updating entities. Stop or coordinate producers during this migration; subsequent complete cycles repopulate external reports.
+
+Similarly, disabling a previously deployed service requires stopping its worker and removing its obsolete root reference/relationship after approval. Disabling OTEL requires reconciling old query signal groups and query permissions; remove telemetry resources only if dedicated and approved. Never use complete deployment mode or delete a shared resource group to clean up this sample.
+
+## Validation and operational acceptance
+
+Compile and check offline contracts:
 
 ```sh
-python3 health-model/tests/verify_queries.py \
-  --subscription "$SUBSCRIPTION_ID" --fixtures
+az bicep build --file health-model/infra/main.bicep --stdout > /tmp/m365-model-template.json
+python3 -m unittest discover -s health-model/tests -p 'test_*.py'
 ```
 
-ARM success is not enough: read back the User Journey and Service Health children under each Experience and inspect actual query evaluation. Empty live data must leave journey/step signals Unknown. Separate operational reporting-gap detection must not be confused with a Microsoft 365 outage.
+The offline checks cover root configuration sharing, service/scenario selection, default topology, native references, and optional query-resource conditions. They are **not an Azure deployment simulation**. Runtime tests cover real config resolution, numeric aggregation boundaries, payloads, retries, OTEL-disabled live-worker wiring with fake HTTP, and independent failure paths.
 
-## Provider endpoints and diagnostic isolation
+The existing [read-only Kusto fixture verifier](./tests/verify_queries.py) can validate query semantics against an approved workspace when optional telemetry is used; it does not inject live telemetry or prove model ingestion.
 
-Microsoft-reported context comes from the following v1.0 endpoints. Query configuration does not grant `ServiceHealth.Read.All` or deploy a worker:
+Before operational acceptance, verify live entity reports and native root propagation with OTEL disabled, then optional live queries. Test denied ingestion, broken reference/query authorization, cancelled cycles, stale/expired reports, stopped/stalled workers, and notification delivery through an independent approved route. See the [enterprise reliability gate](../docs/operations.md#enterprise-reliability-acceptance-gate). None of these cloud acceptance checks is claimed complete.
 
-```text
-GET https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/healthOverviews
-GET https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/issues
-```
-
-Both require the separate Graph application permission `ServiceHealth.Read.All`; scoped Exchange mailbox roles do not authorize them.
-
-The requested `beta/reports/serviceActivity` integration is an approved **experimental opt-in**, disabled by default. Microsoft documents beta APIs as unsupported for production applications. Exchange and Teams have documented report functions; no SharePoint-specific function is assumed. Historical provider measurements must not be counted as our own synthetic requests.
-
-- Exchange example: `getConnectivityMetricsForExchange(...)`, requiring `ServiceActivity-Exchange.Read.All`.
-- Teams example: `getMessageVolumeMetricsForTeamsChat(...)`, requiring `ServiceActivity-Teams.Read.All`.
-- Function arguments use UTC inclusive start/exclusive end and aggregation intervals of 5, 10, 15, or 30 minutes; documented start times can be up to thirty days in the past.
-
-Beta results, issue history, and collection errors are diagnostic logs only. They never use the overview log body, contribute to synthetic/step metrics, or become query signals. Stable context queries explicitly require the overview body, `provider.api_version=v1.0`, the service, live mode, and a fresh collection timestamp.
-
-Provider status evaluation occurs in KQL, not in the worker: operational/restored/resolved statuses score 100; degradation/investigation/recovery score 50; interruption scores 0. Unknown future statuses and missing/stale records produce no value/Unknown. The latest unknown status never falls back to an older operational record. These scores describe Microsoft-reported context, not our request success percentage.
-
-No Graph permission grant, live provider collection call, beta enablement, or fake live status is performed as part of model deployment. The source integration must still be exercised against approved access.
-
-### Verified context isolation
-
-The model update was applied incrementally and read back: 12 entities, 11 relationships, 34 unchanged journey signals, and three provider-context signals. All Service Health entities retain Suppressed impact and currently report Unknown / “Log query returned no rows.”
-
-Forty-eight read-only Kusto fixture checks verified operational, degraded, interrupted, and recovering statuses; unknown/no-data cases; and rejection of beta, issue-history, simulation, wrong-service/resource, stale, and future records. A newer beta record cannot replace a stable overview, and a newer unknown stable status cannot fall back to an older healthy record. No fixture data was ingested.
-
-## Remaining live acceptance
-
-No live Microsoft 365 journey or Container App has been deployed. The worker simulations must stay excluded from live model calculations.
-
-Before production: supply approved identity/resource access, validate real OTel ingestion and step labels, test allowed/denied mailbox/site/channel access, configure independent missing-report/platform alerts, and verify an actual notification reaches its approved receiver. A model signal alone does not notify anyone.
-
-See the [permission handoff](../MAILBOX-SYNTHETIC-ACCESS.md) and [enterprise reliability gate](../docs/operations.md#enterprise-reliability-acceptance-gate). Removing the worker's durable state does not create lossless telemetry or prevent duplicate operations across replicas.
+At default cadence, direct reporting can make about **27,936 API calls/day** across the three services. Optional queries schedule approximately **49,824 evaluations/day** before service behavior/limits. Review API limits, query/model pricing, ingestion/retention, and always-running compute. Workspace retention defaults to 30 days; the Application Insights daily cap is managed separately and must be reviewed. Azure Monitor Health Models and its API are preview.
