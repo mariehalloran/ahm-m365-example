@@ -27,6 +27,20 @@ const certificate = {
 };
 
 describe("stateless service runtime", () => {
+  it("leaves supplied telemetry open when probe initialization fails so the worker can export the failure", async () => {
+    const service = parseServiceConfig({
+      ...raw, mode: "live", targets: [{ id: "ex-001", mailbox: "dedicated@example.invalid" }],
+    });
+    const results = {
+      record: vi.fn(), recordDiagnostic: vi.fn(), forceFlush: vi.fn(async () => undefined),
+      shutdown: vi.fn(async () => undefined),
+    };
+    await expect(serviceRuntime(
+      service, serviceSettings(service, { ENABLE_LIVE_M365: "true" }), output, {}, results,
+    )).rejects.toThrow("AZURE_CLIENT_ID");
+    expect(results.shutdown).not.toHaveBeenCalled();
+  });
+
   it("does not construct Azure credentials, Graph, ARM clients or state for console simulation", async () => {
     const service = parseServiceConfig(raw);
     const runtime = await serviceRuntime(service, serviceSettings(service, {}), output, {});

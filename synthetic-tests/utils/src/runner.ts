@@ -5,7 +5,7 @@ import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
-import type { ResultTelemetry } from "./results.js";
+import { publishTelemetryAndHealth, type ResultTelemetry } from "./results.js";
 import type { CycleResults, HealthReporter } from "./health-reports.js";
 
 const MAX_CONCURRENT_PROBES = 3;
@@ -164,12 +164,8 @@ async function publishCycleResults(
       cycleId: cycle.cycleId, probeCount: cycle.results.length,
     });
   }
-  const reporting = await Promise.allSettled([
-    Promise.resolve().then(() => complete ? dependencies.reportHealth?.(cycle) : undefined),
-    Promise.resolve().then(() => dependencies.results.forceFlush()),
-  ]);
-  const failedReporting = reporting.find(report => report.status === "rejected");
-  if (failedReporting?.status === "rejected") throw failedReporting.reason;
+  await publishTelemetryAndHealth(dependencies.results, () =>
+    complete ? dependencies.reportHealth?.(cycle) : undefined);
   if (telemetryErrors.length) throw telemetryErrors[0];
 }
 

@@ -1,6 +1,6 @@
 import type { TokenCredential } from "@azure/identity";
 import { createServiceCredential } from "./auth.js";
-import { probeServices, type StepName, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
@@ -32,6 +32,7 @@ export type HealthReporter = (cycle: CycleResults) => Promise<void>;
 interface MeasurementSample {
   success: boolean;
   durationMs: number;
+  diagnosticCategory?: DiagnosticCategory;
 }
 interface EntitySamples {
   entityName: string;
@@ -63,7 +64,10 @@ function collectActionSamples(name: StepName, results: SyntheticResult[]): Measu
   for (const result of results) {
     for (const step of result.steps) {
       if (step.name !== name || step.status === "skipped") continue;
-      samples.push({ success: step.status === "succeeded", durationMs: step.durationMs });
+      samples.push({
+        success: step.status === "succeeded", durationMs: step.durationMs,
+        ...(step.status === "failed" ? { diagnosticCategory: step.diagnosticCategory } : {}),
+      });
     }
   }
   return samples;
@@ -74,7 +78,10 @@ function collectEntitySamples(service: ServiceConfig["type"], results: Synthetic
   return [
     {
       entityName: `${service}-global`,
-      samples: results.map(result => ({ success: result.success, durationMs: result.durationMs })),
+      samples: results.map(result => ({
+        success: result.success, durationMs: result.durationMs,
+        ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
+      })),
       skipped: 0,
     },
     ...journey.steps.map(name => {
@@ -100,8 +107,11 @@ function createMeasurementReport(
 function createEntityReports(group: EntitySamples, cycleId: string, policy: Policy): HealthReport[] {
   const attempted = group.samples.length;
   const succeeded = group.samples.filter(sample => sample.success).length;
+  const diagnosticCategories = [...new Set(group.samples.flatMap(sample =>
+    sample.diagnosticCategory ? [sample.diagnosticCategory] : []))];
   const context = JSON.stringify({
     aggregation: "single-cycle", cycleId, attempted, succeeded, skipped: group.skipped,
+    ...(diagnosticCategories.length ? { diagnosticCategories } : {}),
   });
   const successRules: EvaluationRules = {
     degradedRule: { operator: "LessThan", threshold: policy.successDegradedPercent },

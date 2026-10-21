@@ -153,7 +153,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
             }
             {
               name: 'ENABLE_LIVE_M365'
-              value: string(enableLiveProbe)
+              value: enableLiveProbe ? 'true' : 'false'
             }
           ], useAzureMonitor ? [
             {

@@ -18,6 +18,18 @@ export interface ResultTelemetry {
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
 }
+
+export async function publishTelemetryAndHealth(
+  results: ResultTelemetry, reportHealth: () => Promise<void> | void,
+): Promise<void> {
+  const publications = await Promise.allSettled([
+    Promise.resolve().then(reportHealth),
+    Promise.resolve().then(() => results.forceFlush()),
+  ]);
+  const failure = publications.find(publication => publication.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+}
+
 export class TelemetryExportError extends Error {
   constructor() { super("Probe telemetry export failed"); this.name = "TelemetryExportError"; }
 }
@@ -25,7 +37,7 @@ export class TelemetryExportError extends Error {
 export function outcomeOf(result: SyntheticResult): Outcome {
   if (result.success) return "success";
   return [
-    "authentication-failure", "permission-failure", "collector-failure",
+    "authentication-failure", "permission-failure", "collector-failure", "configuration-failure",
     "malformed-response", "graph-throttling", "cancelled",
   ].includes(result.diagnosticCategory ?? "") ? "unexecutable" : "failure";
 }

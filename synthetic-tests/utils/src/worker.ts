@@ -1,14 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { ConfigurationError, type Config } from "./config.js";
-import { consoleTelemetry, type Telemetry } from "./contracts.js";
+import { consoleTelemetry, resultSchema, type Telemetry } from "./contracts.js";
 import { categoryOf } from "./http.js";
-import type { ProbeHandler } from "./probes.js";
+import { baseResult, type ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
 import { serviceRuntime } from "./runtime.js";
-import { parseServiceConfig, serviceSettings, type ServiceConfig } from "./service-config.js";
+import { parseServiceConfig, serviceProbes, serviceSettings, type ServiceConfig } from "./service-config.js";
 import type { ProviderCollector } from "./provider-collection.js";
 import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
-import { createHealthReporter } from "./health-reports.js";
+import { createHealthReporter, type HealthReporter } from "./health-reports.js";
+import { createProbeTelemetry } from "./azure-monitor.js";
+import { publishTelemetryAndHealth, type ResultTelemetry } from "./results.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
   let config: string | undefined;
@@ -40,6 +43,66 @@ export interface WorkerOptions {
   createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies | Promise<RunnerDependencies>;
   execute?: typeof runCycle;
   project?: ProjectConfig;
+}
+
+interface InitializedService {
+  config: Config;
+  dependencies: RunnerDependencies;
+}
+
+async function initializeService(
+  service: ServiceConfig, options: WorkerOptions, telemetry: Telemetry,
+  env: NodeJS.ProcessEnv, reportHealth: HealthReporter | undefined,
+  suppliedResults?: ResultTelemetry,
+): Promise<InitializedService> {
+  const config = serviceSettings(service, env);
+  if ((service.serviceHealth || service.serviceActivity.enabled) && !options.providers) {
+    throw new ConfigurationError("Configured provider sources require the service-owned collector");
+  }
+  const runtime = await (options.createDependencies
+    ? options.createDependencies(service, config, telemetry)
+    : serviceRuntime(service, config, telemetry, env, suppliedResults));
+  return {
+    config,
+    dependencies: {
+      ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
+    },
+  };
+}
+
+async function reportInitializationFailure(
+  service: ServiceConfig, reportHealth: HealthReporter, telemetry: Telemetry, error: unknown, startedAt: number,
+  exporter?: ResultTelemetry,
+): Promise<void> {
+  const observedAt = Date.now();
+  const category = error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error);
+  const cycleId = randomUUID();
+  telemetry.emit("service-initialization-failed", {
+    cycleId, category, probeCount: service.targets.length,
+    errorType: error instanceof Error ? error.name : "unknown",
+    ...(error instanceof ConfigurationError ? { message: error.message } : {}),
+  });
+  const results = serviceProbes(service).map(probe => resultSchema.parse({
+    ...baseResult(probe, observedAt),
+    durationMs: Math.max(0, observedAt - startedAt),
+    diagnosticCategory: category,
+    diagnosticContext: { testStage: "initialization" },
+  }));
+  if (!exporter) {
+    for (const result of results) telemetry.emit("synthetic-result", { mode: service.mode, result });
+    await reportHealth({ cycleId, results });
+    return;
+  }
+  const exportErrors: unknown[] = [];
+  for (const result of results) {
+    try { exporter.record(result, service.mode); }
+    catch (exportError) {
+      exportErrors.push(exportError);
+      telemetry.emit("result-telemetry-failed", { cycleId, category: categoryOf(exportError) });
+    }
+  }
+  await publishTelemetryAndHealth(exporter, () => reportHealth({ cycleId, results }));
+  if (exportErrors.length) throw exportErrors[0];
 }
 
 async function executeServiceCycle(
@@ -84,19 +147,13 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     return;
   }
   const env = options.env ?? process.env;
-  const config = serviceSettings(service, env);
-  if ((service.serviceHealth || service.serviceActivity.enabled) && !options.providers) {
-    throw new ConfigurationError("Configured provider sources require the service-owned collector");
-  }
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
   const reportHealth = options.project ? createHealthReporter(options.project, service, telemetry, env) : undefined;
-  const runtime = await (options.createDependencies
-    ? options.createDependencies(service, config, telemetry)
-    : serviceRuntime(service, config, telemetry, env));
-  const dependencies: RunnerDependencies = {
-    ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
-  };
+  let bootstrappedResults: ResultTelemetry | undefined;
+  let initialized = !reportHealth || service.mode !== "live"
+    ? await initializeService(service, options, telemetry, env, reportHealth)
+    : undefined;
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const interval = service.intervalSeconds * 1000;
@@ -106,14 +163,31 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     origin = now();
     telemetry.emit("service-worker-started", {
       intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, once: options.once ?? false,
-      probeCount: config.probes.length,
+      probeCount: service.targets.length,
     });
     while (!signal.aborted) {
       try {
-        await executeServiceCycle(service, config, dependencies, options, signal, telemetry);
+        if (!initialized) {
+          const startedAt = Date.now();
+          try {
+            if (!options.createDependencies && !bootstrappedResults) {
+              bootstrappedResults = await createProbeTelemetry(service.telemetry, telemetry, env);
+            }
+            initialized = await initializeService(service, options, telemetry, env, reportHealth, bootstrappedResults);
+          } catch (error) {
+            if (!signal.aborted && reportHealth) {
+              await reportInitializationFailure(service, reportHealth, telemetry, error, startedAt, bootstrappedResults);
+            }
+            throw error;
+          }
+        }
+        await executeServiceCycle(service, initialized.config, initialized.dependencies, options, signal, telemetry);
       } catch (error) {
         if (signal.aborted && !options.once) break;
-        telemetry.emit("service-cycle-failed", { category: categoryOf(error), probeCount: config.probes.length });
+        telemetry.emit("service-cycle-failed", {
+          category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
+          probeCount: service.targets.length,
+        });
         if (options.once) throw error;
       }
       if (options.once || signal.aborted) break;
@@ -129,7 +203,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   } catch (error) {
     if (options.once || !signal.aborted) throw error;
   } finally {
-    try { await dependencies.results.shutdown(); }
+    try { await (initialized?.dependencies.results ?? bootstrappedResults)?.shutdown(); }
     finally { telemetry.emit("service-worker-stopped", { cancelled: signal.aborted }); }
   }
 }

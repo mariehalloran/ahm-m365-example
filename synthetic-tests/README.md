@@ -20,7 +20,7 @@ OTel -> workspace-based Application Insights -> Log Analytics
      -> query signals on the same journey/action entities
 ```
 
-The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each journey/action has its own entity receiving two aggregated external reports: success percentage and mean duration. Optional query signals on those entities evaluate **live-only** OTEL data. This replaces the earlier single-model topology; the new topology and live workers have not been deployed.
+The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each journey/action has its own entity receiving two aggregated external reports: success percentage and mean duration. Optional query signals on those entities evaluate **live-only** OTEL data. The isolated development model family replaces neither nor modifies the earlier PoC; use the [shared worker deployment](./infra/README.md) for the cloud rollout.
 
 When enabled, OpenTelemetry runs **inside each service's existing process**, not in another worker/container. When disabled, no SDK/exporter is constructed. Each service has its own Container App and cadence; no AKS cluster, sidecar, or OTel Collector is required.
 
@@ -89,6 +89,8 @@ Executed failures count as zero success. Skipped/unobserved actions have no arti
 
 Reports default to a 15-minute TTL and are replaced each cycle. An incomplete/cancelled cycle explicitly skips reports rather than publishing a healthy partial aggregate. Expiry **removes** external signals; optional query signals may still determine entity health, so TTL is not an independent stale-worker alert.
 
+Live hosted workers do not substitute simulations when resources are unready. Real API/authorization failures make the journey unsuccessful. Valid-but-incomplete setup is reported as an actual unexecutable initialization failure: the journey gets a zero-success/Unhealthy report and unexecuted action signals remain Unknown. Recurring workers retry initialization on their service cadence; `--once` still fails after publishing. Invalid schemas and unavailable report credentials can prevent publication entirely.
+
 ## Optional Microsoft-reported context
 
 Provider collection is **off by default**, read-only, and runs once per service worker cycle in the existing process—not once per mailbox/channel/site. It never changes journey results or the 1/0 synthetic/step measurements.
@@ -135,7 +137,7 @@ These are setup instructions, **not permissions or deployments already applied**
 
 ### 2. Prepare and attach the hosted identity
 
-Use a separate user-assigned managed identity per service/environment. The [Exchange mock hosting guide](./exchange/infra/README.md) and [Bicep](./exchange/infra/main.bicep) illustrate the intended Container Apps setup. Both deployment/live gates default to false. Compiling creates nothing; a reviewed future deployment with `deployWorker: false` creates the identity only, so it can be authorized before enabling a worker.
+Use a separate user-assigned managed identity per service/environment. The [shared hosting guide](./infra/README.md) and [Bicep](./infra/main.bicep) deploy all selected services with separate identities. Its foundation stage creates no workers, and real execution requires a separate live opt-in. The older [Exchange-only mock](./exchange/infra/README.md) remains a compile-only illustration. Compiling creates nothing.
 
 Hand off these non-secret outputs to the tenant administrator:
 
@@ -262,9 +264,9 @@ Managed identity authenticates Graph with `ManagedIdentityCredential({ clientId 
 | --- | --- |
 | Exchange, Teams, SharePoint journeys and named steps | Implemented with safe simulation defaults and HTTP-mocked tests; no live tenant acceptance completed |
 | Root config, scheduling, direct aggregated reports, optional embedded OTEL, provider callbacks | Connected in code; safe simulation previews by default; provider collection remains separately disabled |
-| Root model of service models, action entities and optional query resources | Templates implemented; **not deployed**; previous single-model PoC deployment does not represent this topology |
+| Root model of service models, action entities and optional query resources | Isolated development model family provisioned with OTEL disabled; previous single-model PoC retained separately |
 | Stable provider context / beta diagnostics | Stable overview signals are impact-suppressed; issues and beta are diagnostics only, never synthetic success samples |
-| Worker hosting and packaging | Exchange mock Bicep only; no deployed Container Apps, published worker image/build pipeline, or equivalent Teams/SharePoint hosting templates |
+| Worker hosting and packaging | Non-root Docker image, private registry/shared environment template, three independent apps and root-driven parameter preparation; see the shared deployment guide |
 | Tenant authorization and runtime settings | Actual worker identities, mailbox/site/team approvals, Graph/Exchange grants, bot installation/certificates, and hosted telemetry settings still need setup |
 | Production operations | Live access, end-to-end telemetry/model updates, independent failure detection, notifications, and reliability acceptance are not yet proven/configured |
 

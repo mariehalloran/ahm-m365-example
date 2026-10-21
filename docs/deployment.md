@@ -4,7 +4,7 @@
 
 The new [model templates](../health-model/README.md) define a root Azure Monitor Health Models resource referencing independent service models. Each service contains a User Journey and individual action entities receiving aggregated external health reports. Optional OTEL query signals live on those same entities.
 
-**This federated topology has not been deployed.** Earlier single-model PoC resources in `rg-m365-demo` do not prove the new topology or report path is active. No live workers, registry/image pipeline, or tenant permission grants are established by application validation.
+The isolated `m365-experience-demo` model family is provisioned for a live failure-path trial. Earlier single-model PoC resources remain separate and unchanged. The [shared worker guide](../synthetic-tests/infra/README.md) covers the private image and three-app rollout; local validation alone does not prove cloud reports, successful Microsoft 365 journeys, tenant grants, or notifications.
 
 1. Prepare a private copy of [monitoring.config.json](../monitoring.config.json): select services/scenarios, account/target metadata, health-model destination, and OTEL.
 2. Establish the root and enabled service models before enabling live workers. Deploy workspace/Application Insights/query permissions only if OTEL is enabled.
@@ -75,7 +75,7 @@ npm --prefix synthetic-tests run build
 
 Use `synthetic-tests/` as the image's application/build context. Include its compiled service entries and runtime dependencies, then mount the project-root config separately and the selected service config at explicit paths. The same image can run an explicitly selected Exchange, Teams or SharePoint entry; separate apps retain independent 60/120/300-second default cadences.
 
-The [Exchange hosting mock](../synthetic-tests/exchange/infra/README.md) is compile-only, not an operational deployment. No equivalent Teams/SharePoint hosting template or published image is claimed. Use one authoritative replica per target set; rollouts/restarts can repeat attempts. Always-running loops require CPU outside HTTP requests and an instance that does not scale to zero; validate billing/scaling settings.
+The [shared hosting template](../synthetic-tests/infra/main.bicep) and [worker module](../synthetic-tests/infra/worker.bicep) support all three selected services using the [Dockerfile](../synthetic-tests/Dockerfile). The older Exchange-only mock remains compile-only. Use one authoritative replica per target set; rollouts/restarts can repeat attempts. Always-running loops require CPU outside HTTP requests and an instance that does not scale to zero; validate billing/scaling settings.
 
 Workers have no persistent volume/history/outbox. Report retries, SDK buffers and aggregation are bounded memory only. Protect certificates where explicitly required, rotate them, and verify graceful shutdown and cleanup.
 

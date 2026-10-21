@@ -4,12 +4,14 @@ import type { RunnerDependencies } from "./runner.js";
 import type { ServiceConfig } from "./service-config.js";
 import { createProbeTelemetry } from "./azure-monitor.js";
 import { createLiveGraphClient, createLiveTeamsBot } from "./auth.js";
+import type { ResultTelemetry } from "./results.js";
 
 export async function serviceRuntime(
   service: ServiceConfig, config: Config, telemetry: Telemetry, env: NodeJS.ProcessEnv = process.env,
+  suppliedResults?: ResultTelemetry,
 ): Promise<RunnerDependencies> {
   if (!service.enabled) throw new ConfigurationError("Service runtime requires an enabled probe type");
-  const results = await createProbeTelemetry(service.telemetry, telemetry, env);
+  const results = suppliedResults ?? await createProbeTelemetry(service.telemetry, telemetry, env);
   try {
     return {
       telemetry, results,
@@ -19,7 +21,7 @@ export async function serviceRuntime(
       } : {}),
     };
   } catch (error) {
-    await results.shutdown();
+    if (!suppliedResults) await results.shutdown();
     throw error;
   }
 }

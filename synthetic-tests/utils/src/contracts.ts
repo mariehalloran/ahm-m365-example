@@ -5,7 +5,7 @@ export type Scenario = (typeof scenarios)[number];
 export const categories = [
   "authentication-failure", "permission-failure", "send-failure", "delivery-timeout",
   "read-failure", "cleanup-failure", "graph-throttling", "graph-unavailable",
-  "collector-failure", "cancelled", "malformed-response",
+  "collector-failure", "configuration-failure", "cancelled", "malformed-response",
 ] as const;
 export type DiagnosticCategory = (typeof categories)[number];
 
@@ -64,7 +64,7 @@ export const resultSchema = z.object({
   diagnosticCategory: z.enum(categories).nullable().default(null),
   diagnosticContext: z.object({
     region: z.string().max(80).optional(),
-    testStage: z.enum(["simulated", "authentication", "send", "poll", "delivery-confirmed", "upload", "download", "cleanup", "complete", "execution"]).optional(),
+    testStage: z.enum(["simulated", "initialization", "authentication", "send", "poll", "delivery-confirmed", "upload", "download", "cleanup", "complete", "execution"]).optional(),
     cleanupSucceeded: z.boolean().optional(),
     authenticationDurationMs: z.number().finite().nonnegative().optional(),
     httpStatus: z.number().int().min(100).max(599).optional(),

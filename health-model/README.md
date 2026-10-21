@@ -6,7 +6,7 @@ Infrastructure code has three focused parts: [main.bicep](./infra/main.bicep) or
 
 Use a current Bicep CLI supporting typed exports and user-defined functions. These functions produce ARM template language version 2.0 with symbolic resource declarations; existing-resource references are not additional deployments.
 
-**These templates have not been deployed.** The earlier single-model PoC in `rg-m365-demo` is a different topology. Building a template or running mocked tests does not establish live ingestion, cross-model propagation, or tenant access.
+The isolated `m365-experience-demo` model family is provisioned in `rg-m365-demo` for a live failure-path trial, separately from the earlier single-model PoC. Provisioning or mocked tests do not establish successful Microsoft 365 journeys, tenant access, or production acceptance. The [shared worker deployment guide](../synthetic-tests/infra/README.md) describes the producer rollout and verification.
 
 ## Topology and naming contract
 
@@ -57,6 +57,8 @@ After each complete cycle, the worker aggregates actual samples separately for t
 Threshold equality does not breach. These are provisional demonstration thresholds, not production per-action SLOs or p95. Whole-journey direct duration includes cleanup. Send-request duration and confirmed delivery/publication remain distinct action measurements.
 
 Skipped/unobserved actions have no artificial failure or duration sample. They receive explicit **Unknown** reports without a numeric value. Authentication/permission failures still make the overall attempt unsuccessful; they do not establish a provider outage. Cleanup failure affects cleanup and the whole journey without rewriting earlier successful actions.
+
+Valid-but-incomplete live worker setup is also observed evidence: initialization failures produce unsuccessful/unexecutable journey results with bounded diagnostic categories, including `configuration-failure`. No action is reported as an executed failed request if it never ran. A recurring worker retries initialization on its own cadence, and `--once` remains unsuccessful after reporting the error. Usable health-report credentials are still required; failures before the publisher can be created need independent platform detection. Cleanup failure affects cleanup and the whole journey without rewriting earlier successful actions.
 
 The [Health Report Ingestion API](https://learn.microsoft.com/azure/azure-monitor/health-models/health-report-ingestion) creates external signals automatically, but **does not create destination entities**. The templates therefore establish entities first and do not declare a writable `external` signal group. Reports use the verified `2026-05-01-preview` API and require a 204 acknowledgement. Simulation emits previews only.
 

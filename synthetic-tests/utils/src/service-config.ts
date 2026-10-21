@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import { probeSchema, scenarios } from "./contracts.js";
+import { probeSchema, scenarios, type Probe } from "./contracts.js";
 import { ConfigurationError, loadConfig, type Config } from "./config.js";
 
 export const activityFunctions = {
@@ -102,6 +102,13 @@ export async function readServiceConfig(file: string): Promise<ServiceFileConfig
   return parseServiceFileConfig(raw);
 }
 
+export function serviceProbes(service: ServiceConfig): Probe[] {
+  const type = service.type === "exchange"
+    ? "exchange-mail-flow"
+    : service.type === "sharepoint" ? "sharepoint-file" : "teams-channel-message";
+  return service.targets.map(item => ({ ...item, cohort: service.cohort, type }));
+}
+
 export function serviceSettings(service: ServiceConfig, env: NodeJS.ProcessEnv = process.env): Config {
   if (!service.enabled) throw new ConfigurationError("Disabled configs do not create a runtime");
   if (service.serviceActivity.enabled && env.ENABLE_BETA_SERVICE_ACTIVITY !== "true") {
@@ -112,14 +119,6 @@ export function serviceSettings(service: ServiceConfig, env: NodeJS.ProcessEnv =
     EXECUTION_MODE: service.mode,
     SYNTHETIC_SCENARIO: service.scenario,
     PROBE_TIMEOUT_MS: String(service.timeoutSeconds * 1000),
-    PROBES_JSON: JSON.stringify(service.targets.map(item => ({
-      ...item,
-      cohort: service.cohort,
-      type: service.type === "exchange"
-        ? "exchange-mail-flow"
-        : service.type === "sharepoint"
-          ? "sharepoint-file"
-          : "teams-channel-message",
-    }))),
+    PROBES_JSON: JSON.stringify(serviceProbes(service)),
   });
 }

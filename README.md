@@ -72,7 +72,7 @@ Workers aggregate journey/action results and submit health reports directly. **O
 
 These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, employee read receipts, Teams media tests, or SharePoint coauthoring tests. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
 
-The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. Live resources, scoped permissions, hosting, model propagation, and end-to-end notifications still require approval and validation. The new root/service-model topology has not been deployed.
+The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
 
 ## How to use this example
 

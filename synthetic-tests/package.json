@@ -13,7 +13,8 @@
     "test": "vitest run",
     "exchange": "tsx exchange/src/worker.ts",
     "teams": "tsx teams/src/worker.ts",
-    "sharepoint": "tsx sharepoint/src/worker.ts"
+    "sharepoint": "tsx sharepoint/src/worker.ts",
+    "deployment:prepare": "tsx utils/src/prepare-deployment.ts"
   },
   "dependencies": {
     "@azure/identity": "^4.12.0",

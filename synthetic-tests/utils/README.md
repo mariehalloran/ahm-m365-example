@@ -44,7 +44,7 @@ Separate service processes do not block each other. Keep one authoritative insta
 | `scenario` | Optional deterministic simulation scenario |
 | `cohort` | Low-cardinality grouping label for downstream queries; not a worker health policy |
 
-The service-file parser rejects unknown fields, invalid types/limits, and redundant root-owned `enabled`, `targets`, and `telemetry` keys. Root config validates target types and duplicates; live mode requires complete service-specific resources. Invalid configs and disabled root services/scenarios do not execute probes or initialize exporters.
+The service-file parser rejects unknown fields, invalid types/limits, and redundant root-owned `enabled`, `targets`, and `telemetry` keys. Root config validates target types and duplicates. Invalid schemas and disabled selections do not execute probes or initialize exporters. Valid-but-incomplete live resources fail runtime initialization and, when the independent report publisher is usable, produce observed unexecutable journey reports rather than silently stopping monitoring.
 
 The obsolete per-service `reportToHealthModel` field remains rejected: live worker commands always report health. Root `healthModel` configures the destination, thresholds, and TTL; there is no dependency on the OTEL switch. Root service and supported journey-scenario switches control enablement. The resolved in-memory runtime config derives `enabled`, `targets` and `telemetry` from the root; these are not service-file inputs.
 
@@ -59,6 +59,12 @@ Simulation logs previews only and acquires no report credential. Live reports us
 Health reporting and OTEL flush run independently, so either is still attempted if the other fails. With direct reporting configured, an OTEL record failure is logged without preventing execution/aggregation of remaining targets. Incomplete/cancelled cycles explicitly skip health publication instead of presenting a healthy partial aggregate.
 
 Each report replaces the same entity/signal with a TTL (default 15 minutes). Live config requires TTL to exceed cadence plus the bounded 212-second execution/report budget. Expiry removes the signal, **not necessarily the entity's health from optional query data**. Independent execution/report-freshness monitoring is required. Model references, permissions, optional query wiring, and migration are documented in the [model guide](../../health-model/README.md).
+
+### Observed initialization failures
+
+Live workers with a configured report destination retry initialization on the normal service cadence. A real setup/credential/exporter initialization exception emits `service-initialization-failed` and one unsuccessful structured result per configured attempt, with stage `initialization`. Configuration errors use `configuration-failure`; other errors retain their bounded category. Direct journey reports include the observed diagnostic categories; no failed action sample is invented for actions that never executed.
+
+The original error remains a failed cycle, and `--once` exits unsuccessfully after reporting. No Microsoft 365 operation or simulation is substituted for missing resources. If initialization cannot reach exporter creation, diagnostics remain console records rather than a claim of OTEL ingestion. Invalid root/service schemas or unusable report credentials can still fail before this reporting path is available. Live config requires TTL to exceed cadence plus the bounded 212-second execution/report budget. Expiry removes the signal, **not necessarily the entity's health from optional query data**. Independent execution/report-freshness monitoring is required. Model references, permissions, optional query wiring, and migration are documented in the [model guide](../../health-model/README.md).
 
 Example live target:
 
@@ -156,7 +162,7 @@ Teams also requires `BOT_TENANT_ID`, `BOT_CLIENT_ID`, and `BOT_CLIENT_CERTIFICAT
 
 `telemetry: azure-monitor` additionally requires `APPLICATIONINSIGHTS_CONNECTION_STRING` for a workspace-based Application Insights resource. No Azure subscription Owner/Contributor, health-model ingestion role, or Blob permission is required just to export through the configured ingestion connection. Tenant policy may require additional ingestion authentication; confirm it before hosting.
 
-The Graph identity and telemetry destination are independent. Cross-tenant hosted Graph authentication is not implemented. Teams MI observation additionally requires `AZURE_TENANT_ID` for the expected bot/Graph/target tenant guard; Bot Connector stays certificate-backed and independently authorized. Simulation and disabled configs initialize no credentials. Azure Container Apps remains the intended host, not an already deployed worker.
+The Graph identity and telemetry destination are independent. Cross-tenant hosted Graph authentication is not implemented. Teams MI observation additionally requires `AZURE_TENANT_ID` for the expected bot/Graph/target tenant guard; Bot Connector stays certificate-backed and independently authorized. Simulation and disabled configs initialize no credentials. See the [shared Container Apps deployment](../infra/README.md) for cloud hosting.
 
 Advanced execution settings such as `POLL_INTERVAL_MS` remain environment variables. Worker health thresholds, report TTL, minimum samples, consecutive-failure settings, `AHM_MODEL_ID`, and `STATE_STORAGE_URL` are not part of this worker.
 
