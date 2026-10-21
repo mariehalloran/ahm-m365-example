@@ -2,6 +2,10 @@
 
 The [root configuration](../monitoring.config.json) selects services and supported journey scenarios for both workers and model deployment. All three services/scenarios are enabled by default. Service files contain execution settings only; selection, targets, and OTEL are not duplicated there.
 
+Infrastructure code has three focused parts: [main.bicep](./infra/main.bicep) orchestrates deployment and model references, [service-catalog.bicep](./infra/service-catalog.bicep) defines the typed service/action catalog and query sources, and [service.bicep](./infra/service.bicep) builds each service model using named query-binding and signal-construction functions. Query files remain owned by the synthetic service folders; there is no separate empty model source/query tree.
+
+Use a current Bicep CLI supporting typed exports and user-defined functions. These functions produce ARM template language version 2.0 with symbolic resource declarations; existing-resource references are not additional deployments.
+
 **These templates have not been deployed.** The earlier single-model PoC in `rg-m365-demo` is a different topology. Building a template or running mocked tests does not establish live ingestion, cross-model propagation, or tenant access.
 
 ## Topology and naming contract

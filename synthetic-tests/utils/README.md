@@ -24,6 +24,8 @@ Production utilities do not import service implementations. Each service's `src/
 
 Shared code also includes [auth](./src/auth.ts), [config validation](./src/service-config.ts), [Graph](./src/graph.ts), [HTTP](./src/http.ts), [Bot Connector](./src/teams.ts), [step measurement](./src/steps.ts), and [embedded OTel](./src/results.ts). Service-specific API actions remain under that service's `src/steps.ts`.
 
+The [runner](./src/runner.ts) separates cancellation deadlines, probe-batch execution, and cycle publication into named functions. [Health reporting](./src/health-reports.ts) separates sample collection and threshold evaluation from bounded HTTP publication. The [worker](./src/worker.ts) owns scheduling and shutdown, with a separate function coordinating each journey/provider cycle.
+
 First execution is immediate. The fixed-rate schedule never overlaps its own previous cycle; missed slots are skipped and logged. Configs are read only at startup. SIGINT/SIGTERM stop scheduling, cancel active work, permit bounded probe cleanup, and flush/shut down telemetry.
 
 Separate service processes do not block each other. Keep one authoritative instance per target set; statelessness is not a distributed lock, and replicas can otherwise duplicate emails.

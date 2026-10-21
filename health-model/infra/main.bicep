@@ -1,5 +1,7 @@
 targetScope = 'resourceGroup'
 
+import { serviceDefinitions } from './service-catalog.bicep'
+
 @description('The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
 
@@ -13,63 +15,11 @@ param workspaceName string = 'law-${projectConfig.healthModel.name}'
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
 var modelName = projectConfig.healthModel.name
-var serviceDefinitions = [
-  {
-    service: 'exchange'
-    displayName: 'Exchange Experience'
-    journey: 'send-receive-mail'
-    timeGrain: 'PT5M'
-    successQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/success-percentage.kql')
-    latencyQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/mean-latency.kql')
-    stepSuccessQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/step-success.kql')
-    stepDurationQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/step-duration.kql')
-    serviceHealthQuery: loadTextContent('../../synthetic-tests/exchange/queries/health-model/service-health-status.kql')
-    steps: [
-      { name: 'authenticate', displayName: 'Authenticate' }
-      { name: 'create-draft', displayName: 'Create email' }
-      { name: 'send', displayName: 'Send email' }
-      { name: 'confirm-delivery', displayName: 'Confirm delivery' }
-      { name: 'cleanup', displayName: 'Cleanup' }
-    ]
-  }
-  {
-    service: 'teams'
-    displayName: 'Teams Experience'
-    journey: 'publish-channel-message'
-    timeGrain: 'PT5M'
-    successQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/success-percentage.kql')
-    latencyQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/mean-latency.kql')
-    stepSuccessQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/step-success.kql')
-    stepDurationQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/step-duration.kql')
-    serviceHealthQuery: loadTextContent('../../synthetic-tests/teams/queries/health-model/service-health-status.kql')
-    steps: [
-      { name: 'authenticate', displayName: 'Authenticate' }
-      { name: 'post-message', displayName: 'Post message' }
-      { name: 'confirm-publication', displayName: 'Confirm publication' }
-      { name: 'cleanup', displayName: 'Cleanup' }
-    ]
-  }
-  {
-    service: 'sharepoint'
-    displayName: 'SharePoint Experience'
-    journey: 'save-reopen-file'
-    timeGrain: 'PT15M'
-    successQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/success-percentage.kql')
-    latencyQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/mean-latency.kql')
-    stepSuccessQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/step-success.kql')
-    stepDurationQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/step-duration.kql')
-    serviceHealthQuery: loadTextContent('../../synthetic-tests/sharepoint/queries/health-model/service-health-status.kql')
-    steps: [
-      { name: 'authenticate', displayName: 'Authenticate' }
-      { name: 'verify-drive', displayName: 'Verify library' }
-      { name: 'upload-file', displayName: 'Upload file' }
-      { name: 'read-file', displayName: 'Read file' }
-      { name: 'cleanup', displayName: 'Cleanup' }
-    ]
-  }
-]
-var enabledServices = filter(serviceDefinitions, service =>
-  projectConfig.services[service.service].enabled && projectConfig.services[service.service].scenarios[service.journey])
+var enabledServices = filter(
+  serviceDefinitions,
+  service =>
+    projectConfig.services[service.service].enabled && projectConfig.services[service.service].scenarios[service.journey]
+)
 var useOtel = projectConfig.otel.enabled && !empty(enabledServices)
 var stepCount = length(flatten(map(enabledServices, service => service.steps)))
 
@@ -116,33 +66,42 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   properties: {}
 }
 
-module serviceModels './service.bicep' = [for service in enabledServices: {
-  name: '${service.service}-health-model'
-  params: {
-    modelName: '${modelName}-${service.service}'
-    location: location
-    service: service
-    policy: projectConfig.healthModel
-    enableOtel: useOtel
-    workspaceName: workspaceName
-    applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
+module serviceModels './service.bicep' = [
+  for service in enabledServices: {
+    name: '${service.service}-health-model'
+    params: {
+      modelName: '${modelName}-${service.service}'
+      location: location
+      service: service
+      policy: projectConfig.healthModel
+      enableOtel: useOtel
+      workspaceName: workspaceName
+      applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
+    }
   }
-}]
+]
 
-resource nestedModels 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' existing = [for service in enabledServices: {
-  name: '${modelName}-${service.service}'
-}]
-
-resource nestedModelReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (service, index) in enabledServices: {
-  name: guid(nestedModels[index].id, model.id, 'nested-model-reader')
-  scope: nestedModels[index]
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
-    principalId: model.identity.principalId
-    principalType: 'ServicePrincipal'
+resource nestedModels 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' existing = [
+  for service in enabledServices: {
+    name: '${modelName}-${service.service}'
   }
-  dependsOn: [serviceModels]
-}]
+]
+
+resource nestedModelReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (service, index) in enabledServices: {
+    name: guid(nestedModels[index].id, model.id, 'nested-model-reader')
+    scope: nestedModels[index]
+    properties: {
+      roleDefinitionId: subscriptionResourceId(
+        'Microsoft.Authorization/roleDefinitions',
+        'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+      )
+      principalId: model.identity.principalId
+      principalType: 'ServicePrincipal'
+    }
+    dependsOn: [serviceModels]
+  }
+]
 
 resource nestedAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = if (!empty(enabledServices)) {
   parent: model
@@ -167,39 +126,45 @@ resource rootEntity 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-prev
   }
 }
 
-resource serviceReferences 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-preview' = [for (service, index) in enabledServices: {
-  parent: model
-  name: '${service.service}-experience'
-  properties: {
-    displayName: service.displayName
-    impact: 'Standard'
-    canvasPosition: { x: index * 400, y: 250 }
-    signalGroups: {
-      azureResource: {
-        azureResourceId: nestedModels[index].id
-        authenticationSetting: nestedAuthentication!.name
-        signals: []
+resource serviceReferences 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-preview' = [
+  for (service, index) in enabledServices: {
+    parent: model
+    name: '${service.service}-experience'
+    properties: {
+      displayName: service.displayName
+      impact: 'Standard'
+      canvasPosition: { x: index * 400, y: 250 }
+      signalGroups: {
+        azureResource: {
+          azureResourceId: nestedModels[index].id
+          authenticationSetting: nestedAuthentication!.name
+          signals: []
+        }
       }
     }
+    dependsOn: [nestedModelReaders]
   }
-  dependsOn: [nestedModelReaders]
-}]
+]
 
-resource relationships 'Microsoft.CloudHealth/healthmodels/relationships@2026-05-01-preview' = [for service in enabledServices: {
-  parent: model
-  name: '${modelName}-to-${service.service}'
-  properties: {
-    parentEntityName: rootEntity.name
-    childEntityName: '${service.service}-experience'
+resource relationships 'Microsoft.CloudHealth/healthmodels/relationships@2026-05-01-preview' = [
+  for service in enabledServices: {
+    parent: model
+    name: '${modelName}-to-${service.service}'
+    properties: {
+      parentEntityName: rootEntity.name
+      childEntityName: '${service.service}-experience'
+    }
+    dependsOn: [serviceReferences]
   }
-  dependsOn: [serviceReferences]
-}]
+]
 
 output modelId string = model.id
 output modelName string = model.name
 output rootEntityName string = rootEntity.name
 output apiVersion string = '2026-05-01-preview'
-output serviceModelIds array = [for service in enabledServices: resourceId('Microsoft.CloudHealth/healthmodels', '${modelName}-${service.service}')]
+output serviceModelIds array = [
+  for service in enabledServices: resourceId('Microsoft.CloudHealth/healthmodels', '${modelName}-${service.service}')
+]
 output serviceNames array = [for service in enabledServices: service.service]
 output modelCount int = 1 + length(enabledServices)
 output entityCount int = 1 + length(enabledServices) * 4 + stepCount

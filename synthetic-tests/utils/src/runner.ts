@@ -6,7 +6,7 @@ import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
 import type { ResultTelemetry } from "./results.js";
-import type { HealthReporter } from "./health-reports.js";
+import type { CycleResults, HealthReporter } from "./health-reports.js";
 
 const MAX_CONCURRENT_PROBES = 3;
 const CYCLE_TIMEOUT_MS = 170_000;
@@ -22,17 +22,49 @@ export interface RunnerDependencies {
   reportHealth?: HealthReporter;
 }
 
+interface CycleContext {
+  cycleId: string;
+  startedAt: number;
+  signal: AbortSignal;
+}
+
+function createCompletionDeadline(signal: AbortSignal, probeTimeoutMs: number, cycleStartedAt: number) {
+  let executionTimer: ReturnType<typeof setTimeout> | undefined;
+  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  let onCancellation: (() => void) | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    const probeBudgetMs = probeTimeoutMs + CLEANUP_GRACE_MS;
+    const remainingCycleMs = CYCLE_TIMEOUT_MS + CLEANUP_GRACE_MS
+      - (performance.now() - cycleStartedAt);
+    const completionBudgetMs = Math.max(0, Math.min(probeBudgetMs, remainingCycleMs));
+    executionTimer = setTimeout(() => reject(new IntegrationError("cancelled")), completionBudgetMs);
+
+    // Cancellation stops the operation but still gives its cleanup time to finish.
+    onCancellation = () => {
+      cleanupTimer = setTimeout(() => reject(new IntegrationError("cancelled")), CLEANUP_GRACE_MS);
+    };
+    signal.addEventListener("abort", onCancellation, { once: true });
+    if (signal.aborted) onCancellation();
+  });
+  return {
+    promise,
+    dispose() {
+      clearTimeout(executionTimer);
+      clearTimeout(cleanupTimer);
+      if (onCancellation) signal.removeEventListener("abort", onCancellation);
+    },
+  };
+}
+
 async function runSingleProbe(
   probe: Probe,
   config: Config,
   dependencies: RunnerDependencies,
-  cycleSignal: AbortSignal,
-  cycleStartedAt: number,
-  cycleId: string,
+  cycle: CycleContext,
 ): Promise<SyntheticResult> {
   const { telemetry, now = Date.now } = dependencies;
   const probeSignal = AbortSignal.any([
-    cycleSignal,
+    cycle.signal,
     AbortSignal.timeout(config.PROBE_TIMEOUT_MS),
   ]);
   const handler = config.EXECUTION_MODE === "simulation"
@@ -40,35 +72,12 @@ async function runSingleProbe(
     : dependencies.handler;
   const attemptStartedAt = now();
 
-  let executionTimer: ReturnType<typeof setTimeout> | undefined;
-  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
-  let onCancellation: (() => void) | undefined;
+  let deadline: ReturnType<typeof createCompletionDeadline> | undefined;
 
   try {
     if (!handler) throw new IntegrationError("collector-failure");
     probeSignal.throwIfAborted();
-    const completionDeadline = new Promise<never>((_, reject) => {
-      const probeBudgetMs = config.PROBE_TIMEOUT_MS + CLEANUP_GRACE_MS;
-      const remainingCycleMs = CYCLE_TIMEOUT_MS + CLEANUP_GRACE_MS
-        - (performance.now() - cycleStartedAt);
-      const completionBudgetMs = Math.max(0, Math.min(probeBudgetMs, remainingCycleMs));
-      executionTimer = setTimeout(
-        () => reject(new IntegrationError("cancelled")),
-        completionBudgetMs,
-      );
-
-      // Cancellation stops the operation but still gives its cleanup time to finish.
-      onCancellation = () => {
-        cleanupTimer = setTimeout(
-          () => reject(new IntegrationError("cancelled")),
-          CLEANUP_GRACE_MS,
-        );
-      };
-      probeSignal.addEventListener("abort", onCancellation, { once: true });
-      if (probeSignal.aborted) {
-        onCancellation();
-      }
-    });
+    deadline = createCompletionDeadline(probeSignal, config.PROBE_TIMEOUT_MS, cycle.startedAt);
 
     const rawResult = await Promise.race([
       handler(probe, {
@@ -79,7 +88,7 @@ async function runSingleProbe(
         ...(dependencies.graph ? { graph: dependencies.graph } : {}),
         ...(dependencies.teamsBot ? { teamsBot: dependencies.teamsBot } : {}),
       }),
-      completionDeadline,
+      deadline.promise,
     ]);
     const parsedResult = resultSchema.safeParse(rawResult);
     if (!parsedResult.success) {
@@ -99,18 +108,69 @@ async function runSingleProbe(
     result.diagnosticCategory = categoryOf(error);
     result.diagnosticContext.testStage = "execution";
     telemetry.emit("probe-execution-failed", {
-      cycleId,
+      cycleId: cycle.cycleId,
       testId: probe.id,
       category: result.diagnosticCategory,
     });
     return result;
   } finally {
-    clearTimeout(executionTimer);
-    clearTimeout(cleanupTimer);
-    if (onCancellation) {
-      probeSignal.removeEventListener("abort", onCancellation);
-    }
+    deadline?.dispose();
   }
+}
+
+async function executeProbes(
+  config: Config, dependencies: RunnerDependencies, cycle: CycleContext, stopOtherProbes: AbortController,
+) {
+  const results: SyntheticResult[] = [];
+  const telemetryErrors: unknown[] = [];
+  let nextProbeIndex = 0;
+  const runNextProbes = async () => {
+    while (nextProbeIndex < config.probes.length && !cycle.signal.aborted) {
+      const probe = config.probes[nextProbeIndex++];
+      if (!probe) break;
+      const result = await runSingleProbe(probe, config, dependencies, cycle);
+      results.push(result);
+
+      // Export errors must not be turned into a second, fabricated probe result.
+      try { dependencies.results.record(result, config.EXECUTION_MODE); }
+      catch (error) {
+        if (!dependencies.reportHealth) throw error;
+        telemetryErrors.push(error);
+        dependencies.telemetry.emit("result-telemetry-failed", { cycleId: cycle.cycleId, category: categoryOf(error) });
+      }
+    }
+  };
+  const concurrency = Math.min(MAX_CONCURRENT_PROBES, config.probes.length);
+  const executions = Array.from({ length: concurrency }, async () => {
+    try { await runNextProbes(); }
+    catch (error) {
+      stopOtherProbes.abort();
+      throw error;
+    }
+  });
+  const completedExecutions = await Promise.allSettled(executions);
+  const failedExecution = completedExecutions.find(execution => execution.status === "rejected");
+  if (failedExecution?.status === "rejected") throw failedExecution.reason;
+  return { results, telemetryErrors };
+}
+
+async function publishCycleResults(
+  config: Config, dependencies: RunnerDependencies, cycle: CycleResults,
+  signal: AbortSignal, telemetryErrors: unknown[],
+): Promise<void> {
+  const complete = cycle.results.length === config.probes.length && !signal.aborted;
+  if (!complete && dependencies.reportHealth) {
+    dependencies.telemetry.emit("health-report-skipped-incomplete-cycle", {
+      cycleId: cycle.cycleId, probeCount: cycle.results.length,
+    });
+  }
+  const reporting = await Promise.allSettled([
+    Promise.resolve().then(() => complete ? dependencies.reportHealth?.(cycle) : undefined),
+    Promise.resolve().then(() => dependencies.results.forceFlush()),
+  ]);
+  const failedReporting = reporting.find(report => report.status === "rejected");
+  if (failedReporting?.status === "rejected") throw failedReporting.reason;
+  if (telemetryErrors.length) throw telemetryErrors[0];
 }
 
 export async function runCycle(
@@ -140,63 +200,11 @@ export async function runCycle(
 
   try {
     cycleSignal.throwIfAborted();
-    const results: SyntheticResult[] = [];
-    let nextProbeIndex = 0;
-
-    const runNextProbes = async () => {
-      while (nextProbeIndex < config.probes.length && !cycleSignal.aborted) {
-        const probe = config.probes[nextProbeIndex++];
-        if (!probe) {
-          break;
-        }
-        const result = await runSingleProbe(
-          probe,
-          config,
-          dependencies,
-          cycleSignal,
-          cycleStartedAt,
-          cycleId,
-        );
-        results.push(result);
-
-        // Export errors must not be turned into a second, fabricated probe result.
-        try { dependencies.results.record(result, config.EXECUTION_MODE); }
-        catch (error) {
-          if (!dependencies.reportHealth) throw error;
-          telemetryErrors.push(error);
-          telemetry.emit("result-telemetry-failed", { cycleId, category: categoryOf(error) });
-        }
-      }
-    };
-
-    const telemetryErrors: unknown[] = [];
-    const concurrency = Math.min(MAX_CONCURRENT_PROBES, config.probes.length);
-    const executions = Array.from({ length: concurrency }, async () => {
-      try {
-        await runNextProbes();
-      } catch (error) {
-        stopOtherProbes.abort();
-        throw error;
-      }
-    });
-    const completedExecutions = await Promise.allSettled(executions);
-    const failedExecution = completedExecutions.find(execution => execution.status === "rejected");
-    if (failedExecution?.status === "rejected") {
-      throw failedExecution.reason;
-    }
+    const cycle = { cycleId, startedAt: cycleStartedAt, signal: cycleSignal };
+    const { results, telemetryErrors } = await executeProbes(config, dependencies, cycle, stopOtherProbes);
 
     stage = "reporting";
-    const complete = results.length === config.probes.length && !cycleSignal.aborted;
-    if (!complete && dependencies.reportHealth) {
-      telemetry.emit("health-report-skipped-incomplete-cycle", { cycleId, probeCount: results.length });
-    }
-    const reporting = await Promise.allSettled([
-      Promise.resolve().then(() => complete ? dependencies.reportHealth?.({ cycleId, results }) : undefined),
-      Promise.resolve().then(() => dependencies.results.forceFlush()),
-    ]);
-    const failedReporting = reporting.find(report => report.status === "rejected");
-    if (failedReporting?.status === "rejected") throw failedReporting.reason;
-    if (telemetryErrors.length) throw telemetryErrors[0];
+    await publishCycleResults(config, dependencies, { cycleId, results }, cycleSignal, telemetryErrors);
     telemetry.emit("service-execution-completed", {
       cycleId,
       probeCount: results.length,

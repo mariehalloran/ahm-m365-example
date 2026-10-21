@@ -9,6 +9,24 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def deployed_resources(template):
+    resources = template["resources"]
+    declarations = resources.values() if isinstance(resources, dict) else resources
+    return [resource for resource in declarations if not resource.get("existing", False)]
+
+
+def resolve_literals(value, template):
+    if isinstance(value, str):
+        reference = re.fullmatch(r"\[variables\('([^']+)'\)\]", value)
+        if reference:
+            return resolve_literals(template["variables"][reference.group(1)], template)
+    if isinstance(value, list):
+        return [resolve_literals(item, template) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve_literals(item, template) for key, item in value.items()}
+    return value
+
+
 class ModelTemplateContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -18,9 +36,11 @@ class ModelTemplateContracts(unittest.TestCase):
         )
         cls.template = json.loads(build.stdout)
         cls.project = json.loads((ROOT / "monitoring.config.json").read_text())
-        cls.catalog = cls.template["variables"]["serviceDefinitions"]
-        cls.module = next(item for item in cls.template["resources"] if item["type"] == "Microsoft.Resources/deployments")
+        cls.catalog = resolve_literals(cls.template["variables"]["serviceDefinitions"], cls.template)
+        cls.resources = deployed_resources(cls.template)
+        cls.module = next(item for item in cls.resources if item["type"] == "Microsoft.Resources/deployments")
         cls.service_template = cls.module["properties"]["template"]
+        cls.service_resources = deployed_resources(cls.service_template)
 
     def selected(self, project):
         return [
@@ -30,11 +50,7 @@ class ModelTemplateContracts(unittest.TestCase):
         ]
 
     def test_shared_project_defaults_and_catalog(self):
-        default = self.template["parameters"]["projectConfig"]["defaultValue"]
-        if isinstance(default, str):
-            reference = re.fullmatch(r"\[variables\('([^']+)'\)\]", default)
-            self.assertIsNotNone(reference)
-            default = self.template["variables"][reference.group(1)]
+        default = resolve_literals(self.template["parameters"]["projectConfig"]["defaultValue"], self.template)
         self.assertEqual(default, self.project)
         self.assertEqual({service["service"] for service in self.catalog}, set(self.project["services"]))
         for service in self.catalog:
@@ -60,7 +76,7 @@ class ModelTemplateContracts(unittest.TestCase):
                         selected["scenarios"][service["journey"]] = False
                     self.assertNotIn(service["service"], [item["service"] for item in self.selected(project)])
                     self.assertEqual(len(self.selected(project)), 2)
-        for resource in self.template["resources"]:
+        for resource in self.resources:
             if "copy" in resource:
                 self.assertEqual(resource["copy"]["count"], "[length(variables('enabledServices'))]")
 
@@ -69,10 +85,10 @@ class ModelTemplateContracts(unittest.TestCase):
         for service in project["services"].values():
             service["enabled"] = False
         self.assertEqual(self.selected(project), [])
-        roots = [item for item in self.template["resources"] if item["type"] == "Microsoft.CloudHealth/healthmodels"]
+        roots = [item for item in self.resources if item["type"] == "Microsoft.CloudHealth/healthmodels"]
         self.assertEqual(len(roots), 1)
         self.assertNotIn("condition", roots[0])
-        root = next(item for item in self.template["resources"] if item["type"].endswith("/entities") and "copy" not in item)
+        root = next(item for item in self.resources if item["type"].endswith("/entities") and "copy" not in item)
         self.assertEqual(root["properties"]["signalGroups"]["dependencies"], {
             "aggregationType": "WorstOf", "ignoreUnknown": False,
         })
@@ -80,23 +96,23 @@ class ModelTemplateContracts(unittest.TestCase):
     def test_otel_conditions_exclude_every_query_dependency(self):
         self.assertEqual(self.template["variables"]["useOtel"],
                          "[and(parameters('projectConfig').otel.enabled, not(empty(variables('enabledServices'))))]")
-        for resource in self.template["resources"]:
+        for resource in self.resources:
             if resource["type"] in ("Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components"):
                 self.assertEqual(resource["condition"], "[variables('useOtel')]")
         self.assertEqual(self.module["properties"]["parameters"]["enableOtel"]["value"], "[variables('useOtel')]")
-        for resource in self.service_template["resources"]:
+        for resource in self.service_resources:
             if resource["type"] in ("Microsoft.Authorization/roleAssignments", "Microsoft.CloudHealth/healthmodels/authenticationsettings"):
                 self.assertEqual(resource["condition"], "[parameters('enableOtel')]")
-        entities = next(item for item in self.service_template["resources"] if item["type"].endswith("/entities"))
+        entities = next(item for item in self.service_resources if item["type"].endswith("/entities"))
         self.assertIn("if(parameters('enableOtel')", entities["properties"]["signalGroups"])
 
     def test_native_references_and_scoped_reader(self):
-        reference = next(item for item in self.template["resources"] if item.get("copy", {}).get("name") == "serviceReferences")
+        reference = next(item for item in self.resources if item.get("copy", {}).get("name") == "serviceReferences")
         source = reference["properties"]["signalGroups"]["azureResource"]
         self.assertIn("Microsoft.CloudHealth/healthmodels", source["azureResourceId"])
         self.assertEqual(source["signals"], [])
         self.assertIn("nested-models", source["authenticationSetting"])
-        reader = next(item for item in self.template["resources"] if item["type"] == "Microsoft.Authorization/roleAssignments")
+        reader = next(item for item in self.resources if item["type"] == "Microsoft.Authorization/roleAssignments")
         self.assertIn("Microsoft.CloudHealth/healthmodels", reader["scope"])
         self.assertIn("acdd72a7-3385-48ef-bd42-f606fba81ae7", reader["properties"]["roleDefinitionId"])
         self.assertNotIn("condition", reader)
@@ -110,6 +126,36 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("format('{0}-{1}', parameters('service').service, lambdaVariables('step').name)", nodes)
         self.assertIn("'kind', 'context', 'step', '', 'rollup', false(), 'impact', 'Suppressed'", nodes)
         self.assertIn("parameters('service').steps", variables["relationships"])
+
+    def test_query_signal_factory_preserves_common_fields(self):
+        functions = next(item for item in self.service_template["functions"] if item["namespace"] == "__bicep")
+        signal = functions["members"]["createQuerySignal"]["output"]["value"]
+        self.assertEqual(signal, {
+            "name": "[parameters('name')]",
+            "displayName": "[parameters('displayName')]",
+            "signalKind": "LogAnalyticsQuery",
+            "queryText": "[parameters('queryText')]",
+            "valueColumnName": "Value",
+            "refreshInterval": "PT1M",
+            "timeGrain": "[parameters('timeGrain')]",
+            "evaluationRules": "[parameters('evaluationRules')]",
+        })
+        query_groups = self.service_template["variables"]["queryGroups"]
+        self.assertIn("__bicep.createQuerySignal(", query_groups)
+        self.assertIn("'refreshInterval', 'PT5M'", query_groups)
+        self.assertIn("'dataUnit', 'Provider status score'", query_groups)
+
+    def test_query_binding_preserves_step_and_resource_scoping(self):
+        functions = next(item for item in self.service_template["functions"] if item["namespace"] == "__bicep")
+        binding = functions["members"]["bindQuery"]["output"]["value"]
+        self.assertEqual(binding,
+                         "[replace(replace(parameters('queryText'), '__STEP__', parameters('stepName')), '__APPLICATION_INSIGHTS_RESOURCE_ID__', parameters('applicationInsightsId'))]")
+        for service in self.catalog:
+            for name in ("successQuery", "latencyQuery", "stepSuccessQuery", "stepDurationQuery", "serviceHealthQuery"):
+                query = service[name]
+                self.assertIn("__APPLICATION_INSIGHTS_RESOURCE_ID__", query)
+                if name.startswith("step"):
+                    self.assertIn("__STEP__", query)
 
 
 if __name__ == "__main__":

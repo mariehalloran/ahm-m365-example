@@ -42,6 +42,30 @@ export interface WorkerOptions {
   project?: ProjectConfig;
 }
 
+async function executeServiceCycle(
+  service: ServiceConfig, config: Config, dependencies: RunnerDependencies,
+  options: WorkerOptions, signal: AbortSignal, telemetry: Telemetry,
+): Promise<void> {
+  const providerCollection = Promise.resolve().then(() => options.providers?.({
+    service, results: dependencies.results, signal,
+    ...(dependencies.graph ? { graph: dependencies.graph } : {}),
+  }));
+  const execute = options.execute ?? runCycle;
+  const [journeyExecution, providerExecution] = await Promise.allSettled([
+    execute(config, dependencies, signal),
+    providerCollection,
+  ]);
+  if (journeyExecution.status === "rejected") throw journeyExecution.reason;
+  if (providerExecution.status === "rejected") throw providerExecution.reason;
+  const cycle = journeyExecution.value;
+  const providers = providerExecution.value;
+  if (providers && providers.configured > 0) await dependencies.results.forceFlush();
+  telemetry.emit("service-cycle-summary", {
+    cycleId: cycle.cycleId, probeCount: cycle.results.length,
+    ...(providers ? { providers } : {}),
+  });
+}
+
 export async function runServiceWorker(raw: ServiceConfig, options: WorkerOptions = {}): Promise<void> {
   const parsed = parseServiceConfig(raw);
   const service = options.project ? applyProjectConfig(options.project, parsed) : parsed;
@@ -75,7 +99,6 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   };
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
-  const execute = options.execute ?? runCycle;
   const interval = service.intervalSeconds * 1000;
   let origin = 0;
   let slot = 0;
@@ -87,25 +110,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     });
     while (!signal.aborted) {
       try {
-        const providerCollection = Promise.resolve().then(() => options.providers?.({
-          service, results: dependencies.results, signal,
-          ...(dependencies.graph ? { graph: dependencies.graph } : {}),
-        }));
-        const [journeyExecution, providerExecution] = await Promise.allSettled([
-          execute(config, dependencies, signal),
-          providerCollection,
-        ]);
-        if (journeyExecution.status === "rejected") throw journeyExecution.reason;
-        if (providerExecution.status === "rejected") throw providerExecution.reason;
-        const cycle = journeyExecution.value;
-        const providers = providerExecution.value;
-        if (providers && providers.configured > 0) {
-          await dependencies.results.forceFlush();
-        }
-        telemetry.emit("service-cycle-summary", {
-          cycleId: cycle.cycleId, probeCount: cycle.results.length,
-          ...(providers ? { providers } : {}),
-        });
+        await executeServiceCycle(service, config, dependencies, options, signal, telemetry);
       } catch (error) {
         if (signal.aborted && !options.once) break;
         telemetry.emit("service-cycle-failed", { category: categoryOf(error), probeCount: config.probes.length });
