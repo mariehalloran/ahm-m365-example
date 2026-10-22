@@ -17,7 +17,7 @@ SharePoint Container App [test + aggregation, every 300 seconds] --+
 
 ```
 
-The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of six journeys has its own entity and business-step child entities: **18 business steps, four models, 34 entities and 30 relationships** in the full family. Each journey/step has **External Reports** as its only signal group. Token acquisition and cleanup remain internal, with no entities or published step data. Use the [shared worker deployment](./infra/README.md) for rollout and the [migration procedure](../health-model/README.md#apply-and-migrate) to remove old telemetry resources while preserving the earlier PoC model entities/root.
+The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of six journeys has its own entity and business-step child entities: **18 business steps, four models, 34 entities and 30 relationships** in the full family. Each journey/step has **External Reports**, plus an optional **OpenTelemetry** group for Azure Monitor export. Token acquisition and cleanup remain internal, with no entities or published step data. Use the [shared worker deployment](./infra/README.md) for rollout and the [migration procedure](../health-model/README.md#apply-and-migrate) when changing telemetry modes while preserving model entities/root.
 
 Each service has its own Container App and cadence. Console diagnostics remain in that same process; no separate telemetry service or Kubernetes requirement is introduced.
 
@@ -52,6 +52,7 @@ All remaining npm and compiled-worker commands in this guide run from `synthetic
 | `services.<service>.targets` | Account email addresses or approved site/team/channel IDs, never credentials |
 | `services.<service>.configFile` | Service-owned file for independent cadence, timeout, mode, authentication and provider settings; relative to the root config's directory |
 | `healthModel` | Root model name, subscription/resource group, report TTL, and success/mean-duration thresholds |
+| `otel` | Optional export: `enabled: false` by default; destination `console` or `azure-monitor` |
 
 Service/scenario selection, targets, and report policy are configured **only in the root file**. The service-file parser rejects duplicate `enabled`, `targets`, and obsolete `telemetry` keys instead of silently ignoring them. Root service/scenario switches disable execution before credentials are initialized. No generic all-service scheduler is introduced: run each selected worker independently. Live execution and beta/provider permissions remain separate safety gates.
 
@@ -85,6 +86,12 @@ Executed failures count as zero success. Skipped/unobserved actions have no arti
 Reports default to a 15-minute TTL and are replaced each cycle. An incomplete/cancelled cycle explicitly skips synthetic reports rather than publishing a healthy partial aggregate. Expiry **removes** external signals; it does not guarantee Unhealthy or an alert. Independently detect stopped/stalled execution and broken publication. Reports are current-cycle aggregates, not a full metrics store, percentile history, or arbitrary logs query interface; means alone cannot reconstruct weighted historical statistics.
 
 Live hosted workers do not substitute simulations when resources are unready. Real API/authorization failures make the journey unsuccessful. Valid-but-incomplete setup is reported as an actual unexecutable initialization failure: the journey gets a zero-success/Unhealthy report and unexecuted action signals remain Unknown. Recurring workers retry initialization on their service cadence; `--once` still fails after publishing. Invalid schemas and unavailable report credentials can prevent publication entirely.
+
+### Optional OTEL
+
+Configure OTEL only in the root file; service files still reject the obsolete `telemetry` key. With `otel.enabled: true`, `destination: console` adds `otel-log` and `probe-metrics` records without Azure I/O. `destination: azure-monitor` requires `APPLICATIONINSIGHTS_CONNECTION_STRING`; the shared hosting template supplies it from the optional Application Insights component as a secret. Direct reports and existing console results always remain enabled.
+
+Logs retain service/journey/action attribution, correlation IDs and explicit live/simulation modes. Metrics record binary success and measured durations, with skipped actions excluded and internal authentication/cleanup steps omitted. Provider observations are logs only. Export failures do not fabricate failed service operations or prevent direct report attempts; one-shot commands fail explicitly. See [lifecycle, measurement and dependency details](./utils/README.md#optional-opentelemetry).
 
 ## Optional Microsoft-reported context
 
@@ -236,15 +243,15 @@ Managed identity authenticates Graph with `ManagedIdentityCredential({ clientId 
 
 | Surface | Current state |
 | --- | --- |
-| Exchange, Teams, SharePoint journeys and named steps | Implemented with safe simulation defaults and HTTP-mocked tests; no live tenant acceptance completed |
+| Exchange, Teams, SharePoint journeys and named steps | Implemented with safe simulation defaults and HTTP-mocked tests; all-service live failure-path acceptance passed, not successful-journey acceptance |
 | Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
 | Root model of service models and journey/step entities | Redeployed report-only: four models, 34 entities, 30 relationships, six journeys and 18 business steps; External Reports only; original PoC model retained without queries |
-| Stable provider context / beta diagnostics | Stable overview status reports are impact-suppressed; missing/failed/unknown overviews report Unknown; issues and beta are diagnostics only, never synthetic success samples |
+| Stable provider context / beta diagnostics | All three context signals verified Unknown with Graph 403/permission-failure diagnostics and suppressed impact; issues and beta remain diagnostics only, never synthetic success samples |
 | Worker hosting and packaging | All three apps have ready/running `--0000005` revisions on the same immutable digest; no Application Insights environment settings or ingestion secrets, only root/service config secrets; see the shared deployment guide |
 | Tenant authorization and runtime settings | Successful mailbox/site/team access, Graph/Exchange grants, stable Service Health consent, and bot installation/certificates still need acceptance |
-| Production operations | Report-only rollout and telemetry deletion verified; fresh SharePoint provider Unknown/Graph 403 reporting verified; all-service end-to-end verification still running; successful journeys, independent failure detection and notification acceptance remain unproven |
+| Production operations | Report-only rollout, telemetry deletion and all-service live failure-path reporting/rollup verified; successful journeys, independent failure detection and notification acceptance remain unproven |
 
-The earlier deployed live failure-path trial used real authentication/requests and reported actual failures. The [current report-only deployment](./infra/README.md#verified-report-only-deployment) is verified on all three apps. Both the demo and original PoC telemetry pairs and associated smart-detector rules are deleted, along with four workspace-query settings and four scoped reader roles. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. These facts do **not** establish completed all-service end-to-end verification, successful Microsoft 365 availability, or production readiness.
+The [current report-only deployment](./infra/README.md#verified-report-only-deployment) has passed all-service live failure-path acceptance with **51 fresh external signals**. All six journeys and root/native-service references are Unhealthy; skipped actions are Unknown without values. All three provider context signals are Unknown with Graph 403/permission-failure diagnostics. Both the demo and original PoC telemetry pairs and associated smart-detector rules are deleted, along with four workspace-query settings and four scoped reader roles. No telemetry resources, query bindings, workspace authentication, instrumentation-key/ingestion secrets, or configured platform log-forwarding destination remain. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. These facts verify real failure reporting and rollup, **not successful Microsoft 365 availability, production readiness, or notification delivery**.
 
 ## Components
 

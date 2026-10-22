@@ -72,15 +72,23 @@ Preview and apply the same shared template using `workers.parameters.json`. Exis
 - Each service uses its own configured cadence, one minimum/maximum replica, single-revision mode, and 0.25 CPU/0.5 GiB. No ingress is exposed. Always-running replicas and the registry incur charges; this sizing is not a reliability/performance commitment.
 - Each app mounts its root config and selected service file read-only. A nonsecret config hash in the revision template triggers a new revision when those files change. Secret-only rotations still require an explicit restart if no template input changes.
 - Managed identity selection is explicit. The same UAMI obtains separate Graph and ARM tokens; Teams bot credentials remain a separately approved prerequisite.
-- Direct health reports and structured console diagnostics are the only output paths. Parameter preparation needs no telemetry connection-string secret.
+- Direct health reports and structured console diagnostics are always active; root-selected OTEL is optional. Parameter preparation needs no telemetry connection-string secret.
 - The environment has platform log forwarding disabled. Live console streaming remains available; durable diagnostic retention, external observers and alert delivery remain separate work.
 - Shutdown has a 60-second grace period for bounded cleanup and reporting. Single-revision rollout can briefly overlap replicas; do not claim exactly-once probes. Workers retain no persistent history or outbox.
 
-Check app provisioning, active revisions and replicas, then inspect console diagnostics and fresh external signals on all six selected journey entities and their 18 business-step children. Verify **External Reports** as their only signal group, separate impact-suppressed provider reports, and propagation into each service root and the all-up root model. The full family has four models, 34 entities and 30 relationships; successful ARM deployment alone is not acceptance.
+Check app provisioning, active revisions and replicas, then inspect console diagnostics and fresh external signals on all six selected journey entities and their 18 business-step children. Verify **External Reports**, any explicitly enabled **OpenTelemetry** group, separate impact-suppressed provider reports, and propagation into each service root and the all-up root model. The full family has four models, 34 entities and 30 relationships; successful ARM deployment alone is not acceptance.
 
 Expected early-trial failures include denied Exchange operations and unconfigured Teams/SharePoint resources. Startup failures are retried on the service cadence, reported explicitly and do not fabricate executed action samples. Invalid root/service schemas, unusable report credentials, or an inaccessible health-report destination can still prevent publication and require independent monitoring.
 
 No HTTP endpoint is exposed, so there is no app URL to probe. Use Azure resource/revision health, real report timestamps, and the model graph. Production use still requires the [operations acceptance gate](../../docs/operations.md#enterprise-reliability-acceptance-gate), tenant grants, successful journeys, retention/cost review, and independent notification tests.
+
+## Optional OTEL export
+
+The root config defaults to `otel: { "enabled": false, "destination": "console" }`. Disabled or console-only deployments add no Application Insights secret/environment setting and no platform log forwarding. Console OTEL runs in the existing workers without a separate service.
+
+For enabled `destination: azure-monitor`, first deploy the [model/telemetry resources](../../health-model/README.md#optional-otel-signals). This template reads the existing `appi-<healthModel.name>` component (or matching `applicationInsightsName` override) and passes its connection string through a secure module parameter into an app secret. The runtime receives only a secret reference. Keep target metadata in root configuration and credentials out of parameter files. Rotating a secret without a template change still requires a revision restart.
+
+The legacy Exchange-only host also accepts a secure `applicationInsightsConnectionString` parameter when Azure export is selected; use the shared host for new deployments. Direct reports always remain active. Before acceptance, verify exported live `AppTraces` and metrics, query-backed journey/step signals, explicit ingestion failures, report independence, retention and costs. Local mocked tests do not prove cloud ingestion. No OTEL-enabled deployment has been performed by this source change.
 
 ## Verified failure-path trial
 
@@ -96,15 +104,24 @@ For a later configuration change, regenerate parameters and redeploy; workers re
 
 The current demo models have been redeployed report-only: **four models, 34 entities, 30 relationships, six journeys and 18 business-step entities**, with **External Reports** as the only signal group on reporting entities.
 
-All three Container Apps have ready/running revisions ending in `--0000005`, using this immutable image digest:
+On 2026-10-22, the latest optional-OTEL-capable workers were deployed with OTEL disabled using the existing private `monitoring.demo.json` live-trial profile for `m365-experience-demo` in subscription `46433637-4539-481a-b054-e2c9f83ae51d`, resource group `rg-m365-demo`. All three Container Apps have ready/running revisions ending in `--0000006`, using this immutable image digest:
 
 ```text
-sha256:a9ede669f8fdbe70e0742328d898d96c3d6b37e888a270b4a4a267b8e7c001ac
+sha256:f741daf4c5a8d716a783bc7bb009664b8d32016043ca15d39c392f5698509b0c
 ```
 
 No Application Insights environment settings or ingestion secrets remain in those apps; only root/service configuration secrets remain. The obsolete Exchange-only mock Bicep has also been stripped of telemetry and compiled.
 
-Fresh SharePoint external provider reporting is verified: `microsoft-reported-service-status` is Unknown without a fabricated value, with explicit Graph 403 diagnostics. `ServiceHealth.Read.All` admin consent remains required. **All-service end-to-end verification is still in progress**; ready/running revisions and this provider observation are not that final gate, successful tenant journeys, production acceptance, or end-to-end notification proof.
+**All-service report-only live failure-path acceptance has passed**, with **51 fresh external signals**:
+
+- All six journeys are Unhealthy.
+- Skipped business actions are Unknown without numeric values, not fabricated failed requests.
+- All three `microsoft-reported-service-status` context signals are Unknown without fabricated values, with explicit Graph 403/`permission-failure` diagnostics; `ServiceHealth.Read.All` admin consent remains required.
+- The root and native service references are Unhealthy.
+- All three apps are ready/running on the revision suffix and immutable digest above.
+- No telemetry resources, query bindings, workspace authentication, instrumentation-key/ingestion secrets, or configured platform log-forwarding destination remain.
+
+Validation also passed **588 runtime tests plus 17 infrastructure tests (605 total)**, typecheck/build, both Bicep compilations, and all six journey Docker smoke tests. Live acceptance verified all 51 external signals were reported after rollout began. The image includes optional OTEL dependencies, but the active configuration leaves export disabled and deploys no telemetry resources or query bindings. This verifies real negative-path reporting, skipped-action semantics, provider failure context and model rollup. It does **not** establish successful Microsoft 365 journeys, production reliability, OTEL-enabled ingestion, or end-to-end notification delivery.
 
 ## Report-only migration cleanup
 
@@ -112,4 +129,4 @@ Incremental model/app deployments do not delete obsolete telemetry resources. Ex
 
 For the current migration, both the demo and original PoC telemetry pairs and associated smart-detector rules have been deleted. Four workspace-query settings and four scoped reader-role assignments were removed. The original PoC model is retained, with its queries removed. Workspaces used normal deletion with a **14-day recovery window**, **not permanent purge**.
 
-For subsequent environments or changes, rebuild/publish the report-only image, regenerate parameters with the same preparation CLI and optional image/`--enable-live` arguments shown above, and redeploy. Verify actual cloud deletion, the new revision/image/configuration, direct reports, provider Unknown/failure context, and service/root propagation. The current all-service end-to-end check remains in progress. TTL expiry only removes external signals; independent stopped/stalled-worker, broken-reporting and notification tests remain acceptance gates. Reports replace current-cycle aggregates, not a full metrics store, percentile history or arbitrary log-query interface.
+For subsequent environments or changes, rebuild/publish the report-only image, regenerate parameters with the same preparation CLI and optional image/`--enable-live` arguments shown above, and redeploy. Verify actual cloud deletion, the new revision/image/configuration, direct reports, provider Unknown/failure context, and service/root propagation. The current all-service live failure-path check has passed. TTL expiry only removes external signals; independent stopped/stalled-worker, broken-reporting and notification tests remain acceptance gates. Reports replace current-cycle aggregates, not a full metrics store, percentile history or arbitrary log-query interface.

@@ -20,13 +20,23 @@ const service = parseServiceConfig({
 
 describe("project-root monitoring configuration", () => {
   it("enables every implemented service/scenario without enabling live I/O", async () => {
-    expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "schemaVersion", "services"]);
+    expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "services"]);
+    expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
     for (const type of ["exchange", "teams", "sharepoint"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
       expect(Object.values(checkedIn.services[type].scenarios)).toEqual([true, true]);
       const selected = await readProjectService(type, "../monitoring.config.json");
       expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
+  });
+  it("defaults omitted OTEL settings off and rejects unsupported destinations and service-owned settings", () => {
+    const { otel, ...previousConfig } = checkedIn;
+    expect(parseProjectConfig(previousConfig).otel).toEqual({ enabled: false, destination: "console" });
+    expect(parseProjectConfig({ ...previousConfig, otel: { enabled: true } }).otel.destination).toBe("console");
+    expect(() => parseProjectConfig({ ...checkedIn, otel: { enabled: true, destination: "private-value" } }))
+      .toThrow("otel.destination");
+    expect(() => parseProjectConfig({ ...checkedIn, otel: { ...otel, connectionString: "secret" } }))
+      .toThrow("Invalid project config fields: otel");
   });
   it("supplies targets and enablement exclusively from the root", () => {
     const project = structuredClone(checkedIn);
@@ -119,6 +129,9 @@ describe("project-root monitoring configuration", () => {
     expect(() => applyProjectConfig(project, live)).toThrow("TTL");
     project.healthModel.reportTtlMinutes = 5;
     expect(applyProjectConfig(project, live).enabled).toBe(true);
+    expect(applyProjectConfig(project, { ...live, intervalSeconds: 80 }).enabled).toBe(true);
+    project.otel.enabled = true;
+    expect(() => applyProjectConfig(project, { ...live, intervalSeconds: 80 })).toThrow("224 seconds");
   });
   it("surfaces missing root configuration and supports a separate root-config CLI argument", async () => {
     await expect(readProjectConfig("utils/tests/missing-project.json")).rejects.toThrow("Cannot read the project config");

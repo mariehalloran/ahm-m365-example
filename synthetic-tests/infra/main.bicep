@@ -14,6 +14,8 @@ param deployWorkers bool = false
 param workerImage string = ''
 @description('Separate Microsoft 365 mutation gate; simulation deployments leave this false.')
 param enableLiveProbes bool = false
+@description('The optional Application Insights component created by the health-model deployment.')
+param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
 var modelName = projectConfig.healthModel.name
 var services = filter(
@@ -27,6 +29,11 @@ var services = filter(
 var resourceToken = uniqueString(resourceGroup().id, modelName)
 var registryName = 'crm365${resourceToken}'
 var tags = { workload: modelName, purpose: 'synthetic-worker' }
+var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'
+
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (useAzureMonitor && !empty(services)) {
+  name: applicationInsightsName
+}
 
 resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   name: registryName
@@ -126,6 +133,7 @@ module workers './worker.bicep' = [
       projectConfig: projectConfig
       serviceConfig: serviceConfigs[service]
       enableLiveProbes: enableLiveProbes
+      applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
     dependsOn: [reportAssignments, imagePullAssignments]
   }

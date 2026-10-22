@@ -1,0 +1,20 @@
+AppTraces
+| where TimeGenerated > ago(15m)
+| where _ResourceId =~ '__APPLICATION_INSIGHTS_RESOURCE_ID__'
+| where Message == '__MESSAGE__'
+| where tostring(Properties['probe.schema_version']) == '2.0'
+| where tostring(Properties['probe.mode']) == 'live'
+| where tostring(Properties['probe.service']) == '__SERVICE__'
+| where tostring(Properties['probe.journey']) == '__JOURNEY__'
+| where '__STEP__' == '' or tostring(Properties['probe.step']) == '__STEP__'
+| where Message != 'synthetic-step' or tostring(Properties['probe.step_status']) in ('succeeded', 'failed')
+| where Message == 'synthetic-step' or isnotnull(tobool(Properties['probe.success']))
+| extend ObservedAt = todatetime(Properties['probe.observed_at'])
+| where ObservedAt > ago(15m) and ObservedAt <= now()
+| extend Success = iff(Message == 'synthetic-step',
+    iff(tostring(Properties['probe.step_status']) == 'succeeded', 1.0, 0.0),
+    iff(tobool(Properties['probe.success']), 1.0, 0.0)),
+    Duration = todouble(Properties['probe.duration_ms'])
+| where isnotnull(Duration) and Duration >= 0
+| summarize Value = __AGGREGATION__
+| where isnotnull(Value)

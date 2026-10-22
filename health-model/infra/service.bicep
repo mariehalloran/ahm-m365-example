@@ -7,6 +7,33 @@ import { ServiceDefinition } from './service-catalog.bicep'
 param modelName string
 param location string
 param service ServiceDefinition
+param policy object
+param enableOtel bool = false
+param workspaceName string
+param applicationInsightsResourceId string
+
+func bindTelemetryQuery(queryText string, service string, journey string, step string, applicationId string, aggregation string) string =>
+  replace(
+    replace(
+      replace(
+        replace(
+          replace(
+            replace(queryText, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationId),
+            '__MESSAGE__',
+            empty(step) ? 'synthetic-result' : 'synthetic-step'
+          ),
+          '__SERVICE__',
+          service
+        ),
+        '__JOURNEY__',
+        journey
+      ),
+      '__STEP__',
+      step
+    ),
+    '__AGGREGATION__',
+    aggregation
+  )
 
 func sourceGroup(name string, displayName string, members string[]) object => {
   name: name
@@ -17,12 +44,37 @@ func sourceGroup(name string, displayName string, members string[]) object => {
 }
 
 var contextName = '${service.service}-service-health'
+var telemetryQuery = loadTextContent('../queries/synthetic.kql')
+var telemetryMetrics = [
+  {
+    name: 'otel-success-percentage'
+    displayName: 'OTEL success percentage'
+    dataUnit: 'Percent'
+    aggregation: 'avg(100.0 * Success)'
+    evaluationRules: {
+      degradedRule: { operator: 'LessThan', threshold: policy.successDegradedPercent }
+      unhealthyRule: { operator: 'LessThan', threshold: policy.successUnhealthyPercent }
+    }
+  }
+  {
+    name: 'otel-mean-duration'
+    displayName: 'OTEL mean duration'
+    dataUnit: 'Milliseconds'
+    aggregation: 'avg(Duration)'
+    evaluationRules: {
+      degradedRule: { operator: 'GreaterThan', threshold: policy.latencyDegradedMilliseconds }
+      unhealthyRule: { operator: 'GreaterThan', threshold: policy.latencyUnhealthyMilliseconds }
+    }
+  }
+]
 var nodes = concat(
   [
     {
       name: modelName
       displayName: service.displayName
       kind: 'root'
+      journey: ''
+      step: ''
       rollup: true
       impact: 'Standard'
       x: 300
@@ -32,6 +84,8 @@ var nodes = concat(
       name: contextName
       displayName: 'Service Health'
       kind: 'context'
+      journey: ''
+      step: ''
       rollup: false
       impact: 'Suppressed'
       x: 0
@@ -42,6 +96,8 @@ var nodes = concat(
     name: journey.entityName
     displayName: journey.displayName
     kind: 'journey'
+    journey: journey.name
+    step: ''
     rollup: true
     impact: 'Standard'
     x: 400 + indexOf(service.journeys, journey) * 500
@@ -54,6 +110,8 @@ var nodes = concat(
         name: '${journey.entityName}-${step.name}'
         displayName: step.displayName
         kind: 'step'
+        journey: journey.name
+        step: step.name
         rollup: false
         impact: 'Standard'
         x: 400 + indexOf(service.journeys, journey) * 500
@@ -80,6 +138,31 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   tags: { purpose: 'Microsoft 365 synthetic monitoring', service: service.service }
   properties: {}
 }
+
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
+  name: workspaceName
+}
+resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = if (enableOtel) {
+  parent: model
+  name: 'workspace-query'
+  properties: {
+    displayName: 'Service-model identity for optional OTEL queries'
+    authenticationKind: 'ManagedIdentity'
+    managedIdentityName: 'SystemAssigned'
+  }
+}
+resource workspaceReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOtel) {
+  name: guid(workspace.id, model.id, 'log-analytics-reader')
+  scope: workspace
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '73c42c96-874c-492b-b04d-ab87d138a893'
+    )
+    principalId: model.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-preview' = [
   for node in nodes: {
     parent: model
@@ -89,22 +172,52 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
         displayName: node.displayName
         impact: node.impact
         canvasPosition: { x: node.x, y: node.y }
-        signalGroups: node.rollup ? { dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false } } : {}
+        signalGroups: union(
+          node.rollup ? { dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false } } : {},
+          enableOtel && (node.kind == 'journey' || node.kind == 'step')
+            ? {
+                azureLogAnalytics: {
+                  authenticationSetting: 'workspace-query'
+                  logAnalyticsWorkspaceResourceId: workspace.id
+                  signals: map(telemetryMetrics, metric => {
+                    name: metric.name
+                    displayName: metric.displayName
+                    signalKind: 'LogAnalyticsQuery'
+                    queryText: bindTelemetryQuery(
+                      telemetryQuery, service.service, node.journey, node.step,
+                      applicationInsightsResourceId, metric.aggregation
+                    )
+                    valueColumnName: 'Value'
+                    dataUnit: metric.dataUnit
+                    refreshInterval: 'PT1M'
+                    timeGrain: 'PT15M'
+                    evaluationRules: metric.evaluationRules
+                  })
+                }
+              }
+            : {}
+        )
       },
       node.kind == 'root'
         ? {}
         : {
-            signalAggregationGroups: [
-              sourceGroup(
-                'external-reports',
-                'External Reports',
-                node.kind == 'context'
-                  ? ['microsoft-reported-service-status']
-                  : ['synthetic-success-percentage', 'synthetic-mean-duration']
-              )
-            ]
+            signalAggregationGroups: concat(
+              [
+                sourceGroup(
+                  'external-reports',
+                  'External Reports',
+                  node.kind == 'context'
+                    ? ['microsoft-reported-service-status']
+                    : ['synthetic-success-percentage', 'synthetic-mean-duration']
+                )
+              ],
+              enableOtel && node.kind != 'context'
+                ? [sourceGroup('otel', 'OpenTelemetry', ['otel-success-percentage', 'otel-mean-duration'])]
+                : []
+            )
           }
     )
+    dependsOn: [workspaceReader, workspaceAuthentication]
   }
 ]
 resource modelRelationships 'Microsoft.CloudHealth/healthmodels/relationships@2026-05-01-preview' = [

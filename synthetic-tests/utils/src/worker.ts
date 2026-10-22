@@ -12,6 +12,7 @@ import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
 import { createHealthReporter, type HealthReporter } from "./health-reports.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
+import type { ResultTelemetry } from "./otel.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
   let config: string | undefined;
@@ -43,6 +44,7 @@ export interface WorkerOptions {
   createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies | Promise<RunnerDependencies>;
   execute?: typeof runCycle;
   project?: ProjectConfig;
+  createOtel?: (destination: ProjectConfig["otel"]["destination"], output: Telemetry, env: NodeJS.ProcessEnv) => Promise<ResultTelemetry>;
 }
 
 interface InitializedService {
@@ -214,7 +216,36 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   if (signal.aborted) return;
   validateRuntimeConsent(service, env);
   const reportHealth = options.project ? createHealthReporter(options.project, service, telemetry, env) : undefined;
-  const results = createResultOutput(telemetry);
+  const consoleResults = createResultOutput(telemetry);
+  let otel: ResultTelemetry | undefined;
+  let otelInitializationError: unknown;
+  const otelDiagnosticErrors: unknown[] = [];
+  if (options.project?.otel.enabled) {
+    try {
+      const createOtel = options.createOtel ?? (await import("./azure-monitor.js")).createProbeTelemetry;
+      otel = await createOtel(options.project.otel.destination, telemetry, env);
+    } catch (error) {
+      otelInitializationError = error;
+      telemetry.emit("telemetry-initialization-failed", {
+        category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
+        errorType: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+  const results: ResultOutput = {
+    record(result, mode) {
+      consoleResults.record(result, mode);
+      otel?.record(result, mode);
+    },
+    recordDiagnostic(record) {
+      consoleResults.recordDiagnostic(record);
+      try { otel?.recordDiagnostic(record); }
+      catch (error) {
+        otelDiagnosticErrors.push(error);
+        telemetry.emit("telemetry-output-failed", { category: "collector-failure" });
+      }
+    },
+  };
   let initialized: InitializedService | undefined;
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
@@ -246,11 +277,18 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
             initialized = value;
             return value;
           });
-        await executeServiceCycle(
-          service, initialization, options, signal, telemetry, env,
-          results, reportHealth,
-          initializationFailed,
-        );
+        const publicationErrors: unknown[] = [];
+        try {
+          await executeServiceCycle(
+            service, initialization, options, signal, telemetry, env,
+            results, reportHealth, initializationFailed,
+          );
+        } catch (error) { publicationErrors.push(error); }
+        try { await otel?.forceFlush(); }
+        catch (error) { publicationErrors.push(error); }
+        publicationErrors.push(...otelDiagnosticErrors.splice(0));
+        if (otelInitializationError) publicationErrors.push(otelInitializationError);
+        throwFailures(publicationErrors);
       } catch (error) {
         if (signal.aborted && !options.once) break;
         telemetry.emit("service-cycle-failed", {
@@ -272,6 +310,8 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   } catch (error) {
     if (options.once || !signal.aborted) workerErrors.push(error);
   } finally {
+    try { await otel?.shutdown(); }
+    catch (error) { workerErrors.push(error); }
     telemetry.emit("service-worker-stopped", { cancelled: signal.aborted });
   }
   throwFailures(workerErrors);

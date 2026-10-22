@@ -67,9 +67,18 @@ Root experience model
     `-- Rename/reopen file journey -> business-step entities
 ```
 
-Workers aggregate each cycle's journey/action results and submit health reports directly. Each journey and business-step entity has only an **External Reports** signal group. With all six journeys selected, the family has **four models, 34 entities, and 30 relationships**, including **18 business-step entities**. Microsoft-reported Service Health publishes to a separate, impact-suppressed entity under each service Experience, not as a replacement for synthetic results. Token acquisition and cleanup execute internally without their own entities or published step data.
+Workers aggregate each cycle's journey/action results and submit health reports directly. Each journey and business-step entity has an **External Reports** signal group, plus an optional **OpenTelemetry** group when Azure Monitor export is enabled. With all six journeys selected, the family has **four models, 34 entities, and 30 relationships**, including **18 business-step entities**. Microsoft-reported Service Health publishes to a separate, impact-suppressed entity under each service Experience, not as a replacement for synthetic results. Token acquisition and cleanup execute internally without their own entities or published step data.
 
 Reports replace the previous cycle's aggregates; they are not a full metrics store, percentile history, or arbitrary log-query interface. Workers retain no cross-cycle history or durable outbox. Console diagnostics remain available for investigation.
+
+## Optional OpenTelemetry
+
+OTEL is **disabled by default** in [monitoring.config.json](./monitoring.config.json). Direct health reports and console diagnostics remain active whether OTEL is on or off.
+
+- Set `otel` to `{ "enabled": true, "destination": "console" }` to inspect OTEL logs and metrics locally without Azure credentials.
+- Select `"destination": "azure-monitor"` to export to workspace-backed Application Insights. The [model templates](./health-model/README.md#optional-otel-signals) provision the optional resources and add journey/step query signals; the [worker templates](./synthetic-tests/infra/README.md#optional-otel-export) mount the connection string as a secret.
+
+OTEL export failures are explicit and do not prevent direct report attempts. Historical OTEL queries use a 15-minute window, while direct reports describe the current cycle. Enabling OTEL adds ingestion/storage/query costs and requires separate live ingestion validation; the recorded report-only deployment has not been changed. See the [export contract and limits](./synthetic-tests/utils/README.md#optional-opentelemetry).
 
 ## What this example exercises
 
@@ -86,7 +95,7 @@ These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, empl
 
 The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
 
-The demo has been redeployed report-only with four models, 34 entities, 30 relationships, six journeys and 18 business steps. All three apps have ready/running `--0000005` revisions using the same immutable image digest. Both the demo and original PoC telemetry resource pairs and associated smart-detector rules have been deleted; the original PoC model remains without queries. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. Fresh SharePoint provider reporting is verified as Unknown with explicit Graph 403 diagnostics; all-service end-to-end verification is still in progress. See [verified deployment details](./synthetic-tests/infra/README.md#verified-report-only-deployment) for the digest and remaining acceptance gates.
+The demo's report-only live failure-path acceptance has **passed**: four models, 34 entities, 30 relationships, six journeys, 18 business steps and 51 fresh external signals. All six journeys and the root/native-service references are Unhealthy; skipped actions are Unknown without values. All three Service Health context signals are Unknown with explicit Graph 403/permission-failure diagnostics. All three apps have ready/running `--0000005` revisions using the same immutable image digest. Both the demo and original PoC telemetry pairs and associated smart-detector rules have been deleted; the original PoC model remains without queries. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. This verifies real failure reporting and rollup, **not successful Microsoft 365 journeys, production readiness, or notification delivery**. See [verified deployment details](./synthetic-tests/infra/README.md#verified-report-only-deployment) for the digest, validation results and remaining acceptance gates.
 
 ## How to use this example
 
@@ -102,6 +111,7 @@ Edit [monitoring.config.json](./monitoring.config.json), or keep a private copy 
 | Approved Teams resources | `services.teams.targets[]`: tenant, team, channel, and bot conversation service URL |
 | Approved SharePoint resources | `services.sharepoint.targets[]`: site, drive, and folder IDs |
 | Health-report destination and policy | `healthModel`: replace the subscription placeholder and confirm resource group, model name, thresholds, and report TTL |
+| Optional OTEL export | `otel.enabled` and `otel.destination`; disabled by default |
 
 All supported services/scenarios are selected by default. Target placeholders are not provisioned resources. Keep credentials, certificates, and connection strings out of configuration files and source control.
 
@@ -132,7 +142,7 @@ These defaults make no Microsoft 365 or Azure calls. Inspect result records and 
 
 Establish the selected [health models](./health-model/README.md), obtain dedicated test resources, and authorize the service identity for both the Microsoft 365 journey and health-report ingestion. Update root targets/destination, select an approved live service file through `configFile`, and explicitly set `ENABLE_LIVE_M365=true`. Prove one live cycle before enabling recurrence or hosting independent workers.
 
-Direct health reports update separate journey and business-step entities using only **External Reports**. Token acquisition and cleanup remain internal and are not published as journey steps. Follow the [administrator setup](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) and [deployment guide](./docs/deployment.md); selecting live mode does not grant permissions or deploy resources.
+Direct health reports update separate journey and business-step entities through **External Reports**, independently of optional OTEL. Token acquisition and cleanup remain internal and are not published as journey steps. Follow the [administrator setup](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) and [deployment guide](./docs/deployment.md); selecting live mode does not grant permissions or deploy resources.
 
 ## Further guidance
 

@@ -12,6 +12,10 @@ const selection = {
 };
 export const projectConfigSchema = z.object({
   schemaVersion: z.literal("1.0"),
+  otel: z.object({
+    enabled: z.boolean().default(false),
+    destination: z.enum(["console", "azure-monitor"]).default("console"),
+  }).strict().default({}),
   healthModel: z.object({
     name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,31}[a-zA-Z0-9]$/),
     subscriptionId: z.string().uuid(),
@@ -92,8 +96,9 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceFileC
     if (project.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
-    if (project.healthModel.reportTtlMinutes * 60 <= service.intervalSeconds + 212) {
-      throw new ConfigurationError("Health report TTL must exceed the service cadence plus the bounded cycle/report budget (212 seconds)");
+    const cycleBudgetSeconds = project.otel.enabled ? 224 : 212;
+    if (project.healthModel.reportTtlMinutes * 60 <= service.intervalSeconds + cycleBudgetSeconds) {
+      throw new ConfigurationError(`Health report TTL must exceed the service cadence plus the bounded cycle/report budget (${cycleBudgetSeconds} seconds)`);
     }
   }
   return parseServiceConfig({

@@ -1,5 +1,6 @@
 {
   "schemaVersion": "1.0",
+  "otel": { "enabled": false, "destination": "console" },
   "healthModel": {
     "name": "m365-experience-poc",
     "subscriptionId": "00000000-0000-0000-0000-000000000000",

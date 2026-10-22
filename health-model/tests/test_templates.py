@@ -113,16 +113,29 @@ class ModelTemplateContracts(unittest.TestCase):
             "aggregationType": "WorstOf", "ignoreUnknown": False,
         })
 
-    def test_models_have_no_workspace_query_or_export_dependencies(self):
-        self.assertEqual(set(self.service_template["parameters"]), {"modelName", "location", "service"})
+    def test_workspace_dependencies_are_optional_and_only_for_azure_export(self):
+        self.assertEqual(set(self.service_template["parameters"]), {
+            "modelName", "location", "service", "policy", "enableOtel", "workspaceName", "applicationInsightsResourceId",
+        })
         self.assertEqual({resource["type"] for resource in self.service_resources}, {
             "Microsoft.CloudHealth/healthmodels",
             "Microsoft.CloudHealth/healthmodels/entities",
             "Microsoft.CloudHealth/healthmodels/relationships",
+            "Microsoft.CloudHealth/healthmodels/authenticationsettings",
+            "Microsoft.Authorization/roleAssignments",
         })
-        for name in ("azureLogAnalytics", "LogAnalyticsQuery", "workspace-query", "applicationInsights"):
-            self.assertNotIn(name, json.dumps(self.template))
-        self.assertNotIn("otel", self.project)
+        self.assertEqual(self.project["otel"], {"enabled": False, "destination": "console"})
+        enabled = self.template["variables"]["useOtel"]
+        self.assertIn("azure-monitor", enabled)
+        self.assertIn("enabledServices", enabled)
+        self.assertIn("otel", enabled)
+        for resource in self.resources:
+            if resource["type"] in {"Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components"}:
+                self.assertEqual(resource["condition"], "[variables('useOtel')]")
+        for resource in self.service_resources:
+            if resource["type"] in {"Microsoft.CloudHealth/healthmodels/authenticationsettings", "Microsoft.Authorization/roleAssignments"}:
+                self.assertEqual(resource["condition"], "[parameters('enableOtel')]")
+        self.assertFalse(self.service_template["parameters"]["enableOtel"]["defaultValue"])
 
     def test_native_references_and_scoped_reader(self):
         reference = next(item for item in self.resources if item.get("copy", {}).get("name") == "serviceReferences")
@@ -161,17 +174,32 @@ class ModelTemplateContracts(unittest.TestCase):
                 self.assertEqual(set(journey), {"name", "entityName", "displayName", "steps"})
                 self.assertTrue(all(set(step) == {"name", "displayName"} for step in journey["steps"]))
 
-    def test_journey_steps_and_provider_context_use_only_external_reports(self):
+    def test_external_reports_remain_with_optional_journey_and_step_otel(self):
         entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
         self.assertEqual(entity["apiVersion"], "2026-10-01-preview")
         groups = entity["properties"]
         self.assertIn("External Reports", groups)
-        self.assertNotIn("Log Analytics", groups)
+        self.assertIn("OpenTelemetry", groups)
+        self.assertIn("azureLogAnalytics", groups)
+        self.assertIn("parameters('enableOtel')", groups)
         self.assertIn("synthetic-success-percentage", groups)
         self.assertIn("synthetic-mean-duration", groups)
         self.assertIn("microsoft-reported-service-status", groups)
         self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'root')", groups)
         self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'context')", groups)
+
+    def test_queries_bind_service_journey_and_step_without_provider_or_simulated_evidence(self):
+        query = self.service_template["variables"]["telemetryQuery"]
+        for field in ("probe.schema_version", "probe.mode", "probe.service", "probe.journey", "probe.step", "probe.observed_at"):
+            self.assertIn(field, query)
+        for required in ("'live'", "'synthetic-step'", "'succeeded', 'failed'", "isnotnull(Value)", "_ResourceId =~"):
+            self.assertIn(required, query)
+        self.assertNotIn("m365-service-health", query)
+        self.assertNotIn("serviceActivity", query)
+        self.assertNotIn("probe.id", query)
+        metrics = self.service_template["variables"]["telemetryMetrics"]
+        self.assertEqual([metric["aggregation"] for metric in metrics], ["avg(100.0 * Success)", "avg(Duration)"])
+        self.assertEqual([metric["name"] for metric in metrics], ["otel-success-percentage", "otel-mean-duration"])
 
 
 if __name__ == "__main__":

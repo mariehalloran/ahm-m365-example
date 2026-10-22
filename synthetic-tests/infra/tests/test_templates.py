@@ -28,8 +28,7 @@ class WorkerTemplateContracts(unittest.TestCase):
 
     def test_live_gate_uses_exact_lowercase_values(self):
         environment = self.app["properties"]["template"]["containers"][0]["env"]
-        values = {item["name"]: item.get("value") for item in environment}
-        self.assertEqual(values["ENABLE_LIVE_M365"], "[if(parameters('enableLiveProbes'), 'true', 'false')]")
+        self.assertIn("'ENABLE_LIVE_M365', 'value', if(parameters('enableLiveProbes'), 'true', 'false')", environment)
         self.assertFalse(self.template["parameters"]["enableLiveProbes"]["defaultValue"])
         self.assertFalse(self.template["parameters"]["deployWorkers"]["defaultValue"])
         self.assertEqual(self.module["condition"], "[parameters('deployWorkers')]")
@@ -54,21 +53,24 @@ class WorkerTemplateContracts(unittest.TestCase):
         self.assertFalse(registry["properties"]["adminUserEnabled"])
         self.assertFalse(registry["properties"]["anonymousPullEnabled"])
 
-    def test_worker_has_only_config_secrets_and_identity_environment(self):
+    def test_worker_adds_telemetry_secret_and_environment_only_for_azure_export(self):
         secrets = self.app["properties"]["configuration"]["secrets"]
-        self.assertEqual({item["name"] for item in secrets}, {"monitoring-config", "service-config"})
+        self.assertIn("monitoring-config", secrets)
+        self.assertIn("service-config", secrets)
+        self.assertIn("if(variables('useAzureMonitor')", secrets)
+        self.assertIn("applicationinsights-connection-string", secrets)
         environment = self.app["properties"]["template"]["containers"][0]["env"]
-        self.assertEqual({item["name"] for item in environment}, {
-            "SYNTHETIC_CONFIG_REVISION", "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "ENABLE_LIVE_M365",
-        })
-        self.assertFalse(any("secretRef" in item for item in environment))
-        self.assertNotIn("applicationInsightsConnectionString", self.template["parameters"])
-        self.assertNotIn("applicationInsightsConnectionString", self.worker["parameters"])
+        for name in ("SYNTHETIC_CONFIG_REVISION", "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "ENABLE_LIVE_M365"):
+            self.assertIn(name, environment)
+        self.assertIn("if(variables('useAzureMonitor')", environment)
+        self.assertIn("'APPLICATIONINSIGHTS_CONNECTION_STRING', 'secretRef', 'applicationinsights-connection-string'", environment)
+        self.assertEqual(self.worker["parameters"]["applicationInsightsConnectionString"]["type"].lower(), "securestring")
+        self.assertIn("azure-monitor", self.worker["variables"]["useAzureMonitor"])
+        self.assertIn("otel", self.worker["variables"]["useAzureMonitor"])
 
     def test_mounted_configuration_changes_roll_the_worker_revision(self):
         environment = self.app["properties"]["template"]["containers"][0]["env"]
-        revision = next(item["value"] for item in environment if item["name"] == "SYNTHETIC_CONFIG_REVISION")
-        self.assertEqual(revision, "[uniqueString(string(parameters('projectConfig')), string(parameters('serviceConfig')))]")
+        self.assertIn("uniqueString(string(parameters('projectConfig')), string(parameters('serviceConfig')))", environment)
         self.assertEqual(self.app["properties"]["template"]["terminationGracePeriodSeconds"], 60)
 
     def test_worker_selection_checks_every_configured_journey(self):

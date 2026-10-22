@@ -2,7 +2,7 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only that cycle's results by journey/action. It publishes success-percentage and mean-duration health reports to separate journey and business-step entities, with **External Reports** as their only signal group. **No Blob/file history or cross-cycle health state is stored**. Two journeys per product use the same three Container Apps; the full family has four models, 34 entities, 30 relationships and 18 business-step entities.
+Each service process runs its selected journeys and aggregates only that cycle's results by journey/action. It publishes success-percentage and mean-duration health reports to separate journey and business-step entities through **External Reports**, independently of optional OTEL export/query signals. **No Blob/file history or cross-cycle health state is stored**. Two journeys per product use the same three Container Apps; the full family has four models, 34 entities, 30 relationships and 18 business-step entities.
 
 Exchange, Teams, and SharePoint use separate configs/cadences and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for the no-ingress, single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions.
 
@@ -51,6 +51,10 @@ Incomplete/cancelled cycles log `health-report-skipped-incomplete-cycle`; they d
 Each attempt contributes one binary success observation (1 or 0); executed business actions contribute their own success/duration observations. Failed prerequisites block later actions without invented samples. Token acquisition and cleanup remain internal and unreported as steps. Cleanup still runs after mutation using an independent ten-second budget. Cleanup failure preserves earlier successful action observations but makes overall success zero.
 
 [Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics) explain per-cycle aggregates and reporting gaps. Reports are not a full metrics store, percentile history, or arbitrary logs query interface; cross-cycle weighted statistics cannot be inferred from means alone. Crashes/network failures can lose observations, with no durable outbox or exactly-once guarantee. Alert configuration and notification delivery are separate from report acceptance.
+
+## Optional OpenTelemetry
+
+OTEL is disabled by default and configured only at root. If enabled, monitor `telemetry-initialization-failed`, `telemetry-output-failed` and `telemetry-export-failed` separately from journey and direct-report failures. Export flush/shutdown are bounded; failures still allow direct report attempts and make one-shot execution fail. An OTEL diagnostic-recording error does not rewrite an observed provider status as a Graph collection failure. No disk buffer/outbox or replay is added. Azure ingestion acceptance is not proof of query evaluation or model propagation. Verify both paths end to end, approve ingestion authentication and retention/cost, and retain independent stopped/stalled-worker and notification tests. See [optional export semantics](../synthetic-tests/utils/README.md#optional-opentelemetry).
 
 ## Optional Microsoft provider context
 

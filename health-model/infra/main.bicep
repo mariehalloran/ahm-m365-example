@@ -8,6 +8,10 @@ param projectConfig object = loadJsonContent('../../monitoring.config.json')
 @description('A region supporting Microsoft.CloudHealth.')
 param location string = resourceGroup().location
 
+@description('Created only when OTEL exports to Azure Monitor.')
+param workspaceName string = 'law-${projectConfig.healthModel.name}'
+param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
+
 var modelName = projectConfig.healthModel.name
 var selectedServices ServiceDefinition[] = map(
   serviceDefinitions,
@@ -25,6 +29,37 @@ var enabledServices = filter(
 )
 var journeys = flatten(map(enabledServices, service => service.journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
+var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(enabledServices)
+
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
+  name: workspaceName
+  location: location
+  properties: {
+    sku: { name: 'PerGB2018' }
+    retentionInDays: 30
+    features: {
+      disableLocalAuth: true
+      enableLogAccessUsingOnlyResourcePermissions: false
+    }
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+  }
+}
+
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = if (useOtel) {
+  name: applicationInsightsName
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: workspace!.id
+    IngestionMode: 'LogAnalytics'
+    SamplingPercentage: 100
+    DisableLocalAuth: false
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+  }
+}
 
 resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   name: modelName
@@ -32,7 +67,7 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   identity: { type: 'SystemAssigned' }
   tags: {
     purpose: 'Microsoft 365 synthetic monitoring proof of concept'
-    deploymentStage: 'federated-direct-reports'
+    deploymentStage: 'federated-direct-reports-optional-otel'
     intendedRunnerHost: 'Azure Container Apps'
   }
   properties: {}
@@ -45,6 +80,10 @@ module serviceModels './service.bicep' = [
       modelName: '${modelName}-${service.service}'
       location: location
       service: service
+      policy: projectConfig.healthModel
+      enableOtel: useOtel
+      workspaceName: workspaceName
+      applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
     }
   }
 ]
@@ -139,3 +178,6 @@ output entityCount int = 1 + length(enabledServices) * 3 + length(journeys) + st
 output relationshipCount int = length(enabledServices) * 2 + length(journeys) + stepCount
 output journeyCount int = length(journeys)
 output stepCount int = stepCount
+output telemetryEnabled bool = useOtel
+output workspaceId string = useOtel ? workspace!.id : ''
+output applicationInsightsId string = useOtel ? applicationInsights!.id : ''

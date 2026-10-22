@@ -18,7 +18,18 @@
   },
   "dependencies": {
     "@azure/identity": "^4.12.0",
+    "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.32",
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/core": "2.12.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-logs": "0.223.0",
+    "@opentelemetry/sdk-metrics": "2.12.0",
     "zod": "^3.25.0"
+  },
+  "overrides": {
+    "@azure/monitor-opentelemetry-exporter": {
+      "@opentelemetry/sdk-logs": "$@opentelemetry/sdk-logs"
+    }
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -2,9 +2,9 @@
 
 **Root selection, independent cadences, no saved history.** Each worker runs its configured journey, aggregates this cycle's attempts by journey/action, publishes direct health reports, and waits for its next scheduled slot.
 
-The [root config](../../monitoring.config.json) supplies service/journey switches, accounts/targets, model destination, and report policy. Each service keeps a separate cadence/config. [project-config.ts](./src/project-config.ts) validates and combines these nonoverlapping inputs; [health-reports.ts](./src/health-reports.ts) evaluates current-cycle success/mean duration and calls the Health Report Ingestion API. There is no checkpoint file/blob or aggregation history.
+The [root config](../../monitoring.config.json) supplies service/journey switches, accounts/targets, model destination, report policy, and optional OTEL. Each service keeps a separate cadence/config. [project-config.ts](./src/project-config.ts) validates and combines these nonoverlapping inputs; [health-reports.ts](./src/health-reports.ts) evaluates current-cycle success/mean duration and calls the Health Report Ingestion API. There is no checkpoint file/blob or aggregation history.
 
-The intended deployment is one Azure Container App per service. Structured console diagnostics and direct live health reports are the only output paths. There is no separate telemetry worker, collector, or Kubernetes requirement.
+The intended deployment is one Azure Container App per service. Structured console diagnostics and direct live health reports are always available; optional OTEL export runs in the same process. There is no separate telemetry worker, collector, or Kubernetes requirement.
 
 ## Run
 
@@ -50,7 +50,7 @@ The obsolete per-service `reportToHealthModel` field remains rejected: live work
 
 ## Per-cycle health reports
 
-For each complete cycle, report each selected journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, their only signal group. Success counts only executed samples and duration includes executed failures. Token acquisition and cleanup remain internal; the publication projection excludes their steps and private timing/status fields from console results and reports. Operational failures still explain unsuccessful journeys, and cleanup still executes safely. All six journeys produce 18 business-step entities within a family of four models, 34 entities and 30 relationships.
+For each complete cycle, report each selected journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of the optional OpenTelemetry group. Success counts only executed samples and duration includes executed failures. Token acquisition and cleanup remain internal; the publication projection excludes their steps and private timing/status fields from console results, reports and OTEL. Operational failures still explain unsuccessful journeys, and cleanup still executes safely. All six journeys produce 18 business-step entities within a family of four models, 34 entities and 30 relationships.
 
 No executed samples means Unknown without a numeric value, not 100% success or zero duration. Skipped actions are excluded rather than failed. Cleanup failures affect cleanup and the whole journey, not earlier successful actions. The default policy uses below 99/95% success and above 15,000/60,000 ms mean duration; threshold equality does not breach. There is no rolling window, sample minimum, cross-cycle smoothing, or persisted state.
 
@@ -58,7 +58,7 @@ Simulation logs previews only and acquires no report credential. Live reports us
 
 Console diagnostics accompany execution and publication failures. Incomplete/cancelled cycles explicitly skip synthetic health publication instead of presenting a healthy partial aggregate. Stable provider reporting remains a separate, impact-suppressed branch.
 
-Each report replaces the same entity/signal with a TTL (default 15 minutes). Live config requires TTL to exceed cadence plus the bounded 212-second execution/report budget. Expiry removes the signal, **not a guaranteed Unhealthy state or alert**. Independent execution/report-freshness monitoring is required. Model references, permissions and migration are documented in the [model guide](../../health-model/README.md).
+Each report replaces the same entity/signal with a TTL (default 15 minutes). Live config requires TTL to exceed cadence plus the bounded execution/report budget: 212 seconds with OTEL off, or 224 seconds including optional export lifecycle work. Expiry removes the signal, **not a guaranteed Unhealthy state or alert**. Independent execution/report-freshness monitoring is required. Model references, permissions and migration are documented in the [model guide](../../health-model/README.md).
 
 ### Observed initialization failures
 
@@ -89,6 +89,27 @@ Example live target:
 The Teams `serviceUrl` must come from approved bot-installation metadata; the example is not proof of a valid conversation route. Only the supported public-cloud Connector origin/path is accepted. Bot installation and its validated metadata are administrator setup inputs, not created by a periodic test.
 
 One target now produces useful measurements; there is no worker-side three-sample minimum or stabilization counter.
+
+## Optional OpenTelemetry
+
+Root `otel` defaults to `{ "enabled": false, "destination": "console" }`, including when omitted from an older private config. Disabled workers never construct OTEL providers/exporters or require an ingestion connection string. This is not a separate enablement gate for direct health reports.
+
+Set `enabled: true` with:
+
+- `destination: console`: emit OTEL `otel-log` and `probe-metrics` records in addition to existing console diagnostics and direct reports/previews. No Azure exporter or credential is initialized.
+- `destination: azure-monitor`: use explicit `APPLICATIONINSIGHTS_CONNECTION_STRING` to send OTEL logs/metrics to workspace-backed Application Insights. No credential or console-export fallback is attempted. The [shared hosting template](../infra/README.md#optional-otel-export) supplies this as a Container Apps secret, not a root/service config value.
+
+[otel.ts](./src/otel.ts) uses explicit providers, not global auto-instrumentation. `synthetic-result` logs contain schema version 2.0, service, journey, opaque probe/cohort/correlation IDs, mode, success/outcome, observation time and durations. `synthetic-step` logs contain only business actions and retain explicit skipped status without fabricated duration. Histograms `synthetic.probe.success`/`synthetic.step.success` contain binary 1/0 executed samples; corresponding `.duration` histograms use seconds. Phase duration instruments remain separate. Metric dimensions are bounded to service/journey/action/mode/outcome, not individual targets or correlation IDs.
+
+Provider diagnostics are exported only as allowlisted logs; they never add synthetic metrics or OTEL journey/step health evidence. Simulation is labeled `probe.mode=simulation`, and model queries accept only live observations. Selecting Azure export explicitly can export simulated diagnostics, but never turns them into live model health.
+
+[azure-monitor.ts](./src/azure-monitor.ts) validates the connection string without echoing it, disables offline disk storage, retries and Statsbeat, bounds HTTP requests to five seconds, and accepts only HTTP 200 ingestion (not partial acceptance or throttling). Both streams flush after every cycle, even after journey/report errors, and shut down on exit. Flush/shutdown each have a bounded 5.5-second lifecycle budget. Export callbacks, timeouts and initialization errors remain explicit; direct reports are attempted before export failures fail a cycle. Export initialization failures require correcting settings and restarting the worker.
+
+The exporter uses Application Insights connection-string ingestion, independently of the explicit Graph/ARM identity. The optional sample infrastructure enables Application Insights local ingestion authentication; review authentication/network policy, tenant-sensitive provider metadata, retention and cost before enabling it. It does not add Microsoft 365 permissions or platform console-log forwarding.
+
+OTEL stable SDK packages are pinned to a compatible patched release family. A scoped package override aligns the Azure beta exporter's log-SDK type dependency with that release, avoiding its obsolete vulnerable transitive SDK. In-memory and real-exporter/mock-transport tests cover compatibility; they do not establish live ingestion.
+
+See the [model query contract](../../health-model/README.md#optional-otel-signals). Its rolling 15-minute queries may differ from current-cycle reports; no worker history or durable outbox is added.
 
 ## Optional provider collectors
 

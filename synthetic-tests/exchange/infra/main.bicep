@@ -37,6 +37,9 @@ param registryServer string = ''
 
 @description('Project-root settings, including approved targets and health-model destination. Supply a reviewed private configuration for live use.')
 param projectConfig object = loadJsonContent('../../../monitoring.config.json')
+@secure()
+@description('Required for this legacy host only when root OTEL destination is azure-monitor.')
+param applicationInsightsConnectionString string = ''
 
 @description('Independent Exchange probe cadence in seconds.')
 @minValue(1)
@@ -63,6 +66,7 @@ var exchangeConfig = {
   graphAuthentication: 'managed-identity'
   cohort: 'exchange-global'
 }
+var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'
 
 resource exchangeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: identityName
@@ -96,7 +100,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
-      secrets: [
+      secrets: concat([
         {
           name: 'exchange-config'
           value: string(exchangeConfig)
@@ -105,7 +109,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
           name: 'monitoring-config'
           value: string(runtimeProjectConfig)
         }
-      ]
+      ], useAzureMonitor ? [{ name: 'applicationinsights-connection-string', value: applicationInsightsConnectionString }] : [])
       registries: empty(registryServer) ? [] : [
         {
           server: registryServer
@@ -129,7 +133,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
             '--config'
             '/etc/probe/exchange.json'
           ]
-          env: [
+          env: concat([
             {
               name: 'AZURE_CLIENT_ID'
               value: exchangeIdentity.properties.clientId
@@ -142,7 +146,7 @@ resource exchangeWorker 'Microsoft.App/containerApps@2025-07-01' = if (deployWor
               name: 'ENABLE_LIVE_M365'
               value: enableLiveProbe ? 'true' : 'false'
             }
-          ]
+          ], useAzureMonitor ? [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', secretRef: 'applicationinsights-connection-string' }] : [])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
