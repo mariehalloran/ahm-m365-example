@@ -64,6 +64,7 @@ var exchangeConfig = {
   timeoutSeconds: timeoutSeconds
   mode: 'live'
   graphAuthentication: 'managed-identity'
+  healthReportAuthentication: 'managed-identity'
   cohort: 'exchange-global'
 }
 var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'

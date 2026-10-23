@@ -37,6 +37,7 @@ export class AuthenticatedHttp {
       return token.token;
     } catch (error) {
       if (signal.aborted) throw error;
+      if (error instanceof IntegrationError) throw error;
       throw new IntegrationError("authentication-failure");
     }
   }

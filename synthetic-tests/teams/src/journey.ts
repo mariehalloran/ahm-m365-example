@@ -60,7 +60,8 @@ const channelProbe = (replyJourney: boolean): ProbeHandler => async (probe, cont
     journeyFailure(result, error, telemetry);
   } finally {
     await cleanupStep(result, attempt.mutationAttempted,
-      cleanupSignal => (replyJourney ? cleanupReply : cleanup)(context.teamsBot!, attempt, cleanupSignal), telemetry, now);
+      cleanupSignal => (replyJourney ? cleanupReply : cleanup)(context.teamsBot!, attempt, cleanupSignal), telemetry, now,
+      config.TEAMS_CLEANUP_ENABLED !== "false");
   }
   return finishJourney(result, startedAt, now);
 };

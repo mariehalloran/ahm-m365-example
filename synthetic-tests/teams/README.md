@@ -1,143 +1,413 @@
-# Teams bot-backed publication journey
+# Teams bot API journeys
 
-**Status: implemented and validated with fake HTTP; successful live publication is not yet accepted.** The [config](./config.json) runs in simulation. The separate cloud failure-path trial makes real authentication/setup attempts and reports actual failures, not simulated health. Tenant approval, installed bot resources, credentials, and successful live acceptance are still required.
+**Default: `teamsAuthentication: "bot"`, `botAuthentication: "managed-identity"`.**
+The worker publishes and replies as an installed bot using its explicitly selected
+same-tenant user-assigned managed identity. No user sign-in, MFA, delegated token cache
+or refresh-token maintenance is required. This is **bot API coverage**, not employee
+sign-in, browser/UI testing, a read receipt or human-to-human delivery.
+Calling covers individual call placement, a configured wait and verified hang-up,
+**not whether each recipient rang or received the call**, and not audio/video,
+speaker/microphone, participant experience or meeting quality.
+Simulation remains credential-free. Source tests use fake HTTP; each deployment must
+verify real posting, authorship, readback, cleanup and report ingestion. See the
+[recorded live baseline](../../docs/deployment.md#deployment-status-and-order) separately
+from these reusable setup instructions.
 
-## Optional provider context and diagnostics
+## Primary setup: unattended bot
 
-[teamsProviders](./src/providers.ts) runs once per cycle in this same worker, not per channel or journey. Simulation keeps providers off; the live example enables stable Service Health. Missing bot credentials do not prevent its independent Graph collection attempt:
+1. Deploy the foundation and identify the Teams worker UAMI. Register an approved
+   same-tenant Azure Bot with **UserAssignedMSI** and that UAMI; enable Teams.
+2. Register a separate same-tenant Entra application for Graph readback. Set the Teams
+   manifest's `webApplicationInfo.id` to that application's client ID, **not the
+   managed identity's ID**; keep `bots[].botId` as the Azure Bot's managed identity
+   client ID. Request only installed-team `ChannelMessage.Read.Group` RSC.
+   Add a federated identity credential to the readback application with issuer
+   `https://login.microsoftonline.com/<tenant-id>/v2.0`, subject equal to the Teams
+   worker UAMI's **principal/object ID**, and audience `api://AzureADTokenExchange`.
+   Set service `teamsReadbackClientId` to the readback application's client ID.
+   This uses the selected worker identity to obtain application Graph tokens without
+   passwords, certificates or user tokens. Do not grant tenant-wide channel read.
+   Publish the corrected Teams package and install it in the dedicated test team,
+   approving its team-scoped RSC permission.
+3. Configure one root target with `tenantId`, `teamId`, `channelId` and approved
+   `serviceUrl` (public cloud: `https://smba.trafficmanager.net/teams/`). Bot targets
+   represent channels, not three impersonated employee accounts.
+4. Keep service-owned `teamsAuthentication: "bot"` and
+   `botAuthentication: "managed-identity"`. Hosting supplies `BOT_TENANT_ID` and
+   `BOT_CLIENT_ID` from the attached UAMI; no Teams serviceAccess credentials or
+   user-cache storage are required. Set live opt-in only after approval and verify
+   actual posting, Graph author/readback, cleanup and report ingestion.
 
-- `serviceHealth: true` reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues` for exact `Microsoft Teams`; separate `ServiceHealth.Read.All` admin consent is required. Overview status reports directly to `teams-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption, with `impactSuppressed`. Failed/missing/unknown overview status reports Unknown without a value and with failure context. The existing trial receives Graph 403 pending consent. Issues/history do not populate health signals.
-- `serviceActivity.enabled: true` requires **`ENABLE_BETA_SERVICE_ACTIVITY=true`** and separately approved `ServiceActivity-Teams.Read.All`. The only/default beta function is `getMessageVolumeMetricsForTeamsChat`. This tenant report is **not** the bot channel-publication journey or a message receipt. Beta is experimental/unsupported for production, diagnostic-only and never bubbles into Experience/journey health.
+`BOT_CLIENT_ID` explicitly selects `ManagedIdentityCredential` for
+`https://api.botframework.com/.default`; it never falls back to `AZURE_CLIENT_ID`,
+certificates, CLI, secrets or a user. Application Graph (`graphAuthentication`) and
+ARM (`healthReportAuthentication`) remain independently selected.
+With `teamsReadbackClientId`, only the bot journey's Graph observer uses the
+federated application; Bot Connector, calling, health publication and optional
+Service Health collection keep their existing identities. The option requires
+Teams bot mode, managed-identity Graph authentication and matching Azure/bot tenants.
+Failure to obtain the assertion or application token fails the journey; there is no
+credential fallback.
+The service file owns cadence, time budget and authentication; root selection owns
+all target resources. Messaging alone needs no inbound server; selected live calling
+adds only the authenticated Teams callback below. Other workers stay private.
 
-See [strict config, UTC windows and console diagnostics](../utils/README.md#optional-provider-collectors) and [collector tests](../utils/tests/providers.test.ts). Defaults use 15-minute aggregation/30-minute lookback; only 5/10/15/30 and aligned lookbacks up to 1,440 minutes are accepted. Overlapping historical counts are not new requests and never enter synthetic/step aggregates. Simulation skips all provider I/O; source failures are explicit and cannot change a successful journey's 1/0. No provider permissions are granted automatically; tenant eligibility remains unverified.
+### Reusable app identity mapping
 
-First-party references: [health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [Teams chat volume beta report](https://learn.microsoft.com/graph/api/serviceactivity-getmessagevolumemetricsforteamschat?view=graph-rest-beta).
-
-## Implemented journeys
-
-The [journeys](./src/journey.ts) compose reusable [operations](./src/steps.ts), keeping token acquisition and cleanup internal. `publish-channel-message` has `post-message` and `confirm-publication` child entities beneath `teams-global`. The second journey, `reply-channel-message`, has `post-message`, `post-reply`, and `confirm-reply` beneath separate entity `teams-reply`. Step IDs are journey-scoped. Every journey/step always receives direct success/duration reports in **External Reports**, independently of optional Azure OTEL query signals. Token/cleanup steps have no entities, published step observations, or standalone health signals. Blocked actions are skipped, not failed requests; cleanup failure remains an overall diagnostic without rewriting prior business-action successes.
-
-The reply journey creates its own uniquely marked parent thread, replies as the bot, independently locates that parent through Graph and confirms the exact reply marker and expected author. It deletes the known owned reply before the parent. Both root scenarios default enabled and share the same worker, installed bot, observer permissions and cadence. See [reply HTTP tests](./tests/reply.test.ts).
-
-From the `synthetic-tests/` project directory, run `npm run teams -- --once` or, after building, `node dist/teams/src/worker.js --once`. The [root config](../../monitoring.config.json) selects these journeys, targets, report policy, and its service config file. `--project-config <file>` selects a private root file; `--config <file>` overrides only the service file, not root targets/gates/report policy. Other service types are rejected before credentials.
-
-The shared worker aggregates each complete cycle's journey/actions and publishes health reports directly to the Teams model's separate journey/business-step entities. Simulation prints local previews only; see [report semantics](../utils/README.md#per-cycle-health-reports) and [measurement semantics](../utils/README.md#measurement-semantics). Reports are not a full metrics store or percentile history.
-
-**Goal:** publish a uniquely identified test message to an approved Teams channel, observe the same message through a separate read request, measure the elapsed time, then remove the test message.
-
-**Unattended path:** a tenant-approved Teams bot/agent posts a message; a team-scoped Graph read confirms channel visibility; the bot deletes its own activity. The outbound REST client does not install a bot, register resources, or start an inbound callback server.
-
-This is a **bot-to-channel publication/readback journey**. It is not human-to-human messaging, a recipient read receipt, a Teams UI test, or a call/meeting test. A separate observer application can strengthen access-path independence, but even that is not proof a person saw the message.
-
-Use a dedicated standard channel in a dedicated test team with no business conversation. Start with one manual run. Do not enable recurring live runs until the tenant owner approves test volume, retention, and permitted service use; Microsoft warns against using Teams messaging as a log sink. Diagnostics stay in the worker's console, not in Teams messages.
-
-## API sequence
-
-Two different API bases and token audiences are involved:
-
-- **Bot Connector:** `{serviceUrl}`, supplied from administrator-approved installation/conversation metadata. The shared validator accepts only `https://smba.trafficmanager.net/teams/`, `/amer/`, `/emea/`, or `/apac/` (with an optional trailing slash). Credentials, explicit ports, queries, fragments, encoded paths, dot segments, other hosts, and sovereign-cloud URLs are rejected before authentication.
-- **Microsoft Graph:** `https://graph.microsoft.com/v1.0`.
-
-| Step | Method and endpoint | Request / required check |
-| --- | --- | --- |
-| 1. Publish a new channel thread | `POST {serviceUrl}/v3/conversations` | Use the approved tenant/channel and a correlated initial `activity`. Capture the returned conversation `id` and `activityId`. Sending an initial activity creates the test message as part of this operation. |
-| 2. Confirm channel visibility | `GET https://graph.microsoft.com/v1.0/teams/{teamId}/channels/{channelId}/messages?$top=50` | Poll within the test timeout. Find the exact run correlation marker and expected bot author; capture the Graph message ID. Do not assume a Bot activity ID equals a Graph message ID. |
-| Reply to this run's thread | `POST {serviceUrl}/v3/conversations/{conversationId}/activities/{activityId}` | Use only the created parent activity and a distinct correlated reply; do not retry an ambiguous mutation |
-| Confirm reply visibility | `GET https://graph.microsoft.com/v1.0/teams/{teamId}/channels/{channelId}/messages/{messageId}/replies?$top=50` | Resolve the owned parent through Graph first, then find the expected reply marker and bot author; acceptance of the Connector POST is not confirmation |
-| 3. Delete this run's bot message | `DELETE {serviceUrl}/v3/conversations/{conversationId}/activities/{activityId}` | Delete only the known activity created by this bot in this run. An already-absent activity (`404`) is accepted. Do not delete the channel, whole thread history, or other participants' messages. |
-
-The create body supplies `isGroup: true`, `bot.id: "28:{BOT_CLIENT_ID}"`, `channelData.tenant/team/channel.id`, and an initial plain-text message containing only `AHM synthetic {unique UUID}`. No migration or employee-style send path is used.
-
-Readback requires the exact marker and `from.application.id` equal to `BOT_CLIENT_ID`, ignoring deleted messages. Simple attribute-free HTML paragraph/div/line-break wrappers are normalized without evaluating HTML; other content does not match. A Graph message ID need not equal the Bot activity ID. If the installed bot's Graph author ID differs from its application ID, the probe fails confirmation: verify that mapping during tenant acceptance rather than weakening author matching. A separately configurable observer author mapping is not implemented.
-
-The channel list endpoint supports `$top` up to 50, but not an arbitrary correlation `$filter`. Each poll inspects at most five pages in the exact collection; continuation URLs must remain on the expected Graph channel-message/reply path and contain only `$skiptoken` and optional `$top` (1–50). Unsafe links, cycles, incomplete pagination, malformed responses, and reads exceeding the deadline fail explicitly. No employee thread is reused, and no eventual Graph deletion confirmation is performed.
-
-## Configuration and credentials
-
-A separately approved root configuration supplies target objects like this in `services.teams.targets`. Keep live execution gated until acceptance is arranged; the service file contains only execution settings, not a second target list:
+Use these fields in a complete, schema-valid Teams app manifest, replacing all
+placeholders. Add the required app metadata, version, developer URLs and icons
+using the [Teams app package format](https://learn.microsoft.com/microsoftteams/platform/concepts/build-and-test/apps-package).
+The bot's managed identity and the readback application's client ID are different:
 
 ```json
 {
-  "id": "teams-001",
-  "tenantId": "11111111-1111-4111-8111-111111111111",
-  "teamId": "22222222-2222-4222-8222-222222222222",
-  "channelId": "19:approved-channel@thread.tacv2",
-  "serviceUrl": "https://smba.trafficmanager.net/teams/"
+  "bots": [{
+    "botId": "<bot-UAMI-client-ID>",
+    "scopes": ["team"],
+    "supportsCalling": true,
+    "supportsVideo": false
+  }],
+  "webApplicationInfo": {
+    "id": "<readback-Entra-application-client-ID>",
+    "resource": "api://<readback-Entra-application-client-ID>"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [{
+        "name": "ChannelMessage.Read.Group",
+        "type": "Application"
+      }]
+    }
+  }
 }
 ```
 
-These are illustrative values, not provisioned resources. `tenantId` and `teamId` must be UUIDs; `channelId` is the exact administrator-provided channel ID. The service loader maps `type: "teams"` to the result/probe type `teams-channel-message` and applies the service-level cohort and independent interval. Live execution also requires `ENABLE_LIVE_M365=true`. The runner uses:
+Keep a one-to-one mapping between the Teams app and its readback Entra application.
+The federated credential's `subject` is the worker UAMI's **principal/object ID**,
+not either client ID. The service profile's `teamsReadbackClientId` matches
+`webApplicationInfo.id`; hosted `BOT_CLIENT_ID` matches `bots[].botId`.
+For a messaging-only app, omit calling capability and disable the root calling scenario.
 
-| Transport | Environment | Token audience |
-| --- | --- | --- |
-| Bot Connector | `BOT_TENANT_ID`, `BOT_CLIENT_ID`, `BOT_CLIENT_CERTIFICATE_PATH` | `https://api.botframework.com/.default` |
-| Microsoft Graph observer (hosted default) | Explicit UAMI `AZURE_CLIENT_ID`, and expected `AZURE_TENANT_ID` for the bot/target tenant guard | `https://graph.microsoft.com/.default` |
-| Microsoft Graph observer (opt-in local certificate) | `graphAuthentication: "certificate"` with `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH` | `https://graph.microsoft.com/.default` |
+Publish/install through approved operator tooling, not runtime administrator grants.
+In Teams, select **Apps -> Built for your org -> your bot -> Add to a team**, choose
+the root-configured team/channel and approve the RSC permission. Do not use **Add
+member**: the bot is an app and needs no email address. Installation is a one-time
+setup step, not an interactive dependency of scheduled workers.
 
-Graph defaults to `ManagedIdentityCredential({ clientId: AZURE_CLIENT_ID })` only; no certificate, CLI or guessed host-identity fallback is attempted. Bot Connector **still uses its separate certificate credential**; Graph managed identity does not automatically solve bot sending. The target `tenantId`, bot tenant, and expected Graph `AZURE_TENANT_ID` must match. The applications may be separately registered; bot access does not confer Graph permission. Both clients authenticate before any mutation. Bot requests reject redirects, never receive the Graph token, and never trust a response-supplied service URL.
+### Installation errors
 
-## Identity, resources, and hosting prerequisites
+Add the bot as an **app to the team**, not as a member by email. Calls can succeed
+without this installation; channel posting cannot. A Connector
+`403 BotNotInConversationRoster` means the bot is not recognized in that
+conversation's roster.
 
-Ask the Teams/identity administrators for:
+An installation error containing
+`IsUserAuthorizedToGrantGroupResourceSpecificPermissionsRequest` can result from
+putting a managed identity ID in `webApplicationInfo.id`: RSC requires an Entra
+application registration. Correct the mapping before retrying installation; adding
+more installation permissions does not fix a missing registration. See Microsoft's
+[RSC registration requirements](https://learn.microsoft.com/microsoftteams/platform/graph-api/rsc/grant-resource-specific-consent)
+and [managed-identity installation report](https://github.com/MicrosoftDocs/msteams-docs/issues/14285).
 
-1. A dedicated test team and standard channel, their tenant/team/channel IDs, an owner, retention requirements, and approved cadence.
-2. A registered tenant-approved bot/agent application with the Teams channel enabled, installed in that team.
-3. An approved same-tenant Graph UAMI and an independent app-only bot certificate, plus secure certificate mounting/rotation; local Graph certificates require explicit opt-in. This implementation uses REST and existing HTTP abstractions, not a retired Bot Framework SDK.
-4. **Application RSC `ChannelMessage.Read.Group`** for the observer, declared in the Teams app manifest and consented through installation in the dedicated team. This scopes reading to the team, not just one channel, so keep the whole team dedicated to testing.
-5. The validated conversation metadata/service URL needed for proactive posting, plus an approved way to bootstrap/re-establish it after app installation or changes.
+## Journey and measurement contracts
 
-Bot sending is authorized through the registered bot's installed-team access; it is not the same as Graph `ChannelMessage.Send`. Bot Connector and Graph require their respective tokens; do not reuse a Graph bearer token at the Connector endpoint.
+All three root scenarios are enabled by default:
 
-Installation/bootstrap callbacks and any bot messaging endpoint are administrator-managed prerequisites. The current worker remains outbound-only and does not implement incoming Bot Service authentication or stateful registration. Azure Container Apps is the intended runner host; no deployment is performed by this component.
+- `publish-channel-message` / `teams-global`: `post-message`, `confirm-publication`.
+- `reply-channel-message` / `teams-reply`: `post-message`, `post-reply`, `confirm-reply`.
+- `call-test-user` / `teams-call`: `place-call`, `wait-before-hangup`, `end-call`.
 
-Conversation metadata can be approved configuration/setup input. Each test's returned message/activity IDs remain only in memory for cleanup; no worker health history or Blob checkpoint is required.
+## Individual test-user calls
 
-## Why not use ordinary app-only Graph send/delete?
+Root `services.teams.scenarios["call-test-user"]` selects recurring calls at the
+existing service cadence (120 seconds by default), alongside messaging. There is
+no manual approval state or incoming HTTP trigger. Disable this scenario for a
+messaging-only rollout. The checked-in root selects **one channel messaging target
+and three independent call targets**, with safe simulation; live I/O still requires
+`mode: "live"` and `ENABLE_LIVE_M365=true`.
 
-An employee-style delegated Graph journey would use:
+1. Add each dedicated test account under **root**
+   `services.teams.callTargets[]` as `{ "id": "teams-call-user-001",
+   "tenantId": "<approved-tenant-UUID>", "callUserId": "<user-object-UUID>" }`.
+   These are individual user object IDs, not UPNs, meetings or group IDs. Channel
+   metadata stays only in `services.teams.targets[]`; do not copy it per user.
+2. An administrator approves **application `Calls.Initiate.All` on the bot identity**.
+   This is tenant-wide permission, not an RSC/user-scoped grant: the runtime root
+   allowlist limits outgoing targets, but does not narrow the underlying grant.
+   Do not grant runtime provisioning/admin permissions.
+3. No delegated sign-in/cache/MFA, meeting creation, OnlineMeetings permissions or
+   `Calls.JoinGroupCalls.Chat` permission is needed for these individual calls.
+   The channel-messaging team's app/RSC installation is a separate prerequisite
+   for messaging, not a runtime gate on individual call creation. No personal-app
+   installation or `CsApplicationAccessPolicy` scoping claim is made here.
+   No `Calls.AccessMedia.All`, media SDK, audio playback/capture or AV assertions
+   are used. This service-hosted flow requests the official `audio` modality
+   for signaling, not an audio-quality test.
+4. Set service `teamsCallingCallbackUrl: "https://<teams-worker-fqdn>/api/calls"`
+   and `teamsCallingPort: 8080` (default). Selected live calls open HTTPS ingress
+   **only on Teams**, `allowInsecure: false`, one replica. `/healthz` is static
+   readiness; `/about` is a brief internal-lab data-handling description suitable
+   for this lab's app metadata, not production legal terms.
+5. Enable Azure Bot calling with that callback only after the authenticated server
+   is deployed. Deploy the updated health model before the worker and prove actual
+   MI call creation, configured wait, DELETE and GET
+   `terminated`/404. Source tests do not establish those live permissions.
 
-```http
-POST /teams/{teamId}/channels/{channelId}/messages
-GET  /teams/{teamId}/channels/{channelId}/messages/{messageId}
-POST /teams/{teamId}/channels/{channelId}/messages/{messageId}/softDelete
+Calls use `BOT_CLIENT_ID`/`BOT_TENANT_ID` with the independently selected
+`botAuthentication` for a **Graph-audience** token. They never use observer or
+delegated user tokens—even if optional delegated messaging is selected.
+The fixed calling scope is **`00000003-0000-0000-c000-000000000000/.default`**,
+Microsoft Graph's canonical application-resource ID. This is the same Graph resource,
+not another identity or a retry fallback. The observer still uses
+`https://graph.microsoft.com/.default`; Connector still uses
+`https://api.botframework.com/.default`. Managed-identity infrastructure can cache a
+resource's role-less token for about 24 hours after a new grant; redeploying does not
+necessarily refresh it. Verify actual token roles and Graph acceptance after grants.
+The canonical-resource audience was accepted by Graph in the hosted lab (GET of a
+nonexistent call returned 404, not 401); that alone does not prove outbound calling.
+POST `/communications/calls` is attempted once **per configured account per cycle**:
+
+```json
+{
+  "@odata.type": "#microsoft.graph.call",
+  "callbackUri": "https://<teams-worker-fqdn>/api/calls",
+  "targets": [{ "identity": { "user": { "id": "<root-callUserId>" } } }],
+  "tenantId": "<root-tenantId>",
+  "requestedModalities": ["audio"],
+  "mediaConfig": { "@odata.type": "#microsoft.graph.serviceHostedMediaConfig" }
+}
 ```
 
-However:
+The approved coverage is **placement and hang-up**, not ringing confirmation.
+`place-call` requires successful creation with an owned call ID; 201/accepted does
+not prove recipient receipt. `wait-before-hangup` polls that exact call while waiting
+the configured duration. `establishing`, `ringing`, `established` and other nonterminal
+states do not prove recipient notification, answer identity or media quality.
+Early `terminating`/`terminated`, a missing call, HTTP/schema failures or a numeric
+Graph failure result fail the wait honestly; cancellation also fails the attempt.
+No user is automatically answered. Microsoft's P2P example does not guarantee an
+outgoing `ringing` event, so the worker does not use it as a required success signal.
+Authenticated callbacks are acknowledged only; there is no callback business-state
+cache, control plane or persisted call state.
 
-- The normal channel-send endpoint documents delegated `ChannelMessage.Send` and application `Teamwork.Migrate.All` for migration, not a general unattended live-send permission.
-- The RSC catalog separately lists application `ChannelMessage.Send.Group`, with a warning that not all cataloged features are generally available. That listing alone does not validate the full send/read/delete sequence for this worker and tenant.
-- The Graph channel `softDelete` action documents delegated `ChannelMessage.ReadWrite`, with application permission not supported.
+`teams-call-state-observed` logs allowlisted GET state transitions and numeric
+`resultCode`/`resultSubcode` when Graph supplies `resultInfo`, with the test alias,
+correlation and elapsed time. Repeated identical samples are suppressed, with at
+most 12 events per attempt. Result messages, call IDs, response bodies, target
+identities and tokens are never logged. `teams-calling-callback-rejected` reports
+only HTTP status and stage (`headers`, `verification`, `body`, `timeout`, `handler`),
+plus allowlisted `authErrorCode`, `authClaim` and `authReason` for verification
+failures. Messages, tokens, payloads and claim values are never included.
+Rejections and accepted-callback diagnostics are each capped at ten per minute.
+Accepted events report only `authentication: "verified"` and `tenantMatched: true`.
+Terminal-state failure without an HTTP status is a signaling outcome, not proof
+of Graph HTTP failure. Offline/unreachable clients, rejection and voicemail are
+possible causes; inspect numeric results and human client observations rather
+than inferring one from elapsed time alone.
 
-Therefore, do not grant migration permissions, bypass MFA, or claim the existing app-only certificate is sufficient. If true employee-to-employee messaging is required, approve a supported delegated/interactive test-identity design first. The bot journey must not be relabeled as a test of employee login or receipt.
+`teamsCallingWaitSeconds` (service execution setting, default **10**, range 1–30)
+sets the brief dwell after placement; the live timeout must allow this wait plus
+execution time. The environment/runtime field is `TEAMS_CALLING_WAIT_SECONDS`;
+service files remain authoritative. The old `teamsCallingRingSeconds` field is
+rejected, not silently interpreted. A user may answer during this period; the
+worker neither requires nor claims an answer. `end-call` DELETEs only the
+returned call ID and polls GET for `terminated`/404, not just DELETE acceptance.
+Three users produce three attempts aggregated into **one `teams-call` journey** and
+three shared business-step entities, never per-user signals. Console diagnostics use
+the configured test alias/correlation ID, not account IDs, tokens or notification bodies.
 
-## Measurements and failure behavior
+Run one bounded cycle of the **same active root and service files**:
+`node dist/teams/src/worker.js --once --project-config /etc/probe/monitoring.config.json --config /etc/probe/service.json`.
+This is the ordinary worker entrypoint; do not launch a second copy beside a running
+calling worker because both would bind the callback port and could duplicate calls.
+Recurring mode uses the same command without `--once`. Root targets are never replaced
+by an alternate trial profile.
 
-Per-run observations:
+**Call departure is never disabled by `teamsCleanupEnabled: false`.** Once creation
+returns a known ID, `end-call` is attempted and measured even when waiting failed or
+the execution signal was cancelled. Successful teardown never repairs a failed wait.
+End-call failure remains a failed business action even if fallback cleanup succeeds.
+Independent teardown has a shared ten-second bound: a four-second business attempt
+(3.5-second state-poll deadline), then fallback cleanup using the remaining budget.
+`teams-call-disconnected` distinguishes `phase: "business"` and `"cleanup"` after
+GET termination/404 proof. Unknown POST outcomes cannot safely be
+reconciled: diagnostics expose `teams-call-unknown-creation-outcome`; an orphaned
+leg may need approved operator intervention. State is not persisted between cycles.
 
-- `sendDurationMs`: the create request phase, including failed/ambiguous attempts.
-- `publicationDurationMs`: send start through the first correlated Graph observation; absent if unconfirmed.
-- `durationMs`: the whole attempt, including authentication and cleanup.
-- A bounded failure category; authentication timing and cleanup status remain internal, not published business steps or private result fields.
+POST `/api/calls` requires Microsoft-signed JWTs using the canonical
+`https://api.aps.skype.com/v1/.well-known/OpenIdConfiguration` and its validated
+`https://api.aps.skype.com/v1/keys` JWKS—not Entra discovery. Only RS256,
+`iss` exactly `https://graph.microsoft.com` or `https://api.botframework.com`,
+`aud` exactly the bot client-ID string, required valid `exp`, and valid `nbf` when
+present (never later than `exp`) are accepted. A signed tenant claim is mandatory:
+raw `tid` or `http://schemas.microsoft.com/identity/claims/tenantid` must be a UUID
+matching `BOT_TENANT_ID`. If both are supplied, **both must match**; missing,
+malformed or conflicting aliases fail closed. This mirrors the canonical .NET
+sample's inbound `tid`→URI claim mapping; `jose` does not perform that mapping
+automatically. Normalization occurs only after signature, issuer, audience and
+lifetime validation. There is no unsigned-claim trust or tenant fallback.
+Discovery refreshes hourly, keys cache ten minutes with a 30-second refresh
+cooldown; metadata requests have two-second deadlines and a 128-KiB cap.
+Callbacks have bounded headers/body/time, authenticate before JSON acknowledgement
+and never log payloads, identities or tokens. A static
+`teams-calling-callback-accepted` diagnostic proves callback receipt separately.
+Notifications never affect journey success, select outgoing users or initiate calls.
+Invalid tokens fail closed.
 
-Connector acceptance alone is not success. Require correlated Graph observation; retain measured publication latency even if later cleanup fails, but mark the overall test as failed. Authentication/authorization/observer failures are monitoring execution problems, not a claim that users cannot message.
+**Limits and live acceptance:** Graph signaling is not proof of a visible device/UI
+notification, employee sign-in or real-user experience. Human observation of incoming
+calls is separate evidence, never inferred from a Healthy placement-and-hang-up report.
+Real managed-identity API execution/report ingestion remains a separate cloud
+acceptance check, not a claim made by source tests. No answer/media is required.
+Continuously verifying employee client state/UI is not implemented.
 
-The handler returns the shared result contract for per-run console diagnostics and cycle aggregation. Published results exclude internal token/cleanup observations and do not include target IDs, message bodies/IDs, service URLs, or credentials.
+References: [official individual call creation](https://learn.microsoft.com/graph/api/application-post-calls?view=graph-rest-1.0),
+[get call](https://learn.microsoft.com/graph/api/call-get?view=graph-rest-1.0),
+[delete call](https://learn.microsoft.com/graph/api/call-delete?view=graph-rest-1.0),
+[canonical notification authentication sample](https://github.com/microsoftgraph/microsoft-graph-comms-samples/blob/master/Samples/Common/Sample.Common/Authentication/AuthenticationProvider.cs),
+[Microsoft inbound claim mapping](https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/dev/src/Microsoft.IdentityModel.JsonWebTokens/ClaimTypeMapping.cs),
+[Microsoft lifetime validation](https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/dev/src/Microsoft.IdentityModel.Tokens/ValidatorUtilities.cs).
 
-An ambiguous create response can leave an activity without a returned cleanup ID. POST is never automatically retried. Missing/malformed returned IDs produce an explicit cleanup failure, with no broad purge, Graph-ID substitution, or broad Graph search. Private cleanup status remains internal, not a published step or result field. Once IDs are known, DELETE is idempotently retryable and uses an independent ten-second cleanup budget even when the main attempt is cancelled. Cleanup failure cannot turn a preceding failure into success; after confirmed publication it changes the overall outcome to `cleanup-failure` while retaining measured timings.
+## Message measurement contracts
 
-## Validation and live acceptance
+The reply journey creates its own correlated parent and reply. Bot readback requires
+the exact marker, expected application author and nondeleted state; Connector
+activity IDs are not assumed to be Graph IDs. Opt-in delegated readback also requires
+the exact created Graph ID and authenticated user object ID. Every POST is attempted once: uncertain creation
+is never retried or reconciled into permission to delete some other message.
 
-`npm test -- teams/tests/probe.test.ts` exercises the real Graph/Bot/HTTP clients with fake credentials, HTTP, and clock: payloads, token audience isolation, delayed readback, phase and step timing, timeout/cancellation, permission/throttling/unavailability, malformed/ambiguous sends, author/marker checks, unsafe URLs, bounded pagination, and cleanup outcomes. Named actions are also tested directly without the journey orchestrator. No live Microsoft 365 calls or permission grants are part of these tests.
+Internal authentication/cleanup remain unreported as business steps. Skipped actions
+are not failed requests. Each complete attempt contributes binary success (1/0),
+total duration and separate executed-action timings; send/publication contracts and
+entity IDs are unchanged. Cleanup failure makes the journey unhealthy without
+rewriting successful business-action results. Only auth state persists across cycles.
+Each root target contributes one independent attempt per scenario, not an extra
+signal inventory. The default placeholder represents one bot channel.
 
-Before switching from simulation to live mode, approve this coverage/resources and prove one authorized create/readback/delete sequence in the target tenant, including Graph author-ID mapping, certificate authentication, observed publication latency, and retention behavior. Then establish cleanup/reconciliation ownership, permitted volume/cadence, independent stopped/stalled-worker and broken-reporting detection, and end-to-end notification tests. There is currently **no successful live journey acceptance evidence**.
+## Optional delegated Graph contract
 
-## Microsoft references
+Explicitly select `teamsAuthentication: "user-delegated"` and follow the
+[public-client, protected cache and human bootstrap guide](../../docs/teams-user-bootstrap.md).
+Both journeys run for every configured user with isolated clients/cache partitions.
+This optional mode can require human MFA/reauthentication; choose bot mode for
+unattended operation without user refresh tokens. Providers never borrow user tokens.
 
-- [Proactive Teams messaging and installed-team requirement](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
-- [Bot Connector REST create/send/delete operations](https://learn.microsoft.com/en-us/azure/bot-service/rest-api/bot-framework-rest-connector-api-reference)
-- [List channel messages: RSC read permission, supported queries, pagination](https://learn.microsoft.com/en-us/graph/api/channel-list-messages?view=graph-rest-1.0)
-- [Get one channel message](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0)
-- [Graph application identities](https://learn.microsoft.com/en-us/graph/api/resources/teamworkapplicationidentity?view=graph-rest-1.0)
-- [Normal Graph channel-send permissions and service-use notes](https://learn.microsoft.com/en-us/graph/api/channel-post-messages?view=graph-rest-1.0)
-- [Graph soft-delete permissions](https://learn.microsoft.com/en-us/graph/api/chatmessage-softdelete?view=graph-rest-1.0)
-- [Teams resource-specific consent catalog](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
+Base: `https://graph.microsoft.com/v1.0`. Use a dedicated standard channel in a
+dedicated test team with the approved licensed test user as member/owner.
+
+| Action | Endpoint | Delegated scope |
+| --- | --- | --- |
+| Publish | `POST /teams/{team}/channels/{channel}/messages` | `ChannelMessage.Send` |
+| Reply | `POST /teams/{team}/channels/{channel}/messages/{parent}/replies` | `ChannelMessage.Send` |
+| Readback | `GET /teams/{team}/channels/{channel}/messages/{parent}` and `/{parent}/replies/{reply}` | `ChannelMessage.Read.All` |
+| Cleanup | `POST /teams/{team}/channels/{channel}/messages/{parent}/replies/{reply}/softDelete`, then `/{parent}/softDelete` | `ChannelMessage.ReadWrite` |
+
+Each body is `{ "body": { "contentType": "text", "content": "<unique synthetic marker>" } }`.
+The create response's `from.user.id` must match the authenticated account; subsequent
+readback verifies the same author independently. Delegated readback polls only the
+exact POST-returned IDs, validating parent and reply independently; it never scans
+unrelated channel content or follows collection next links. A not-yet-visible ID
+(404) can be polled again within the journey deadline; other HTTP/schema failures
+are not hidden by a collection fallback. Bot mode retains bounded collection scans
+(five validated pages per scan), accepting Graph's literal `:`/`@` channel-ID encoding
+without allowing cross-origin, cross-channel or path-boundary changes.
+Cleanup uses only verified owned IDs,
+expects HTTP 204, and checks GET for `deletedDateTime` or 404 (up to three reads).
+Soft deletion is **not permanent deletion**; retention/eDiscovery still applies.
+Unknown POST outcomes can leave orphaned test content requiring operator cleanup.
+
+First-party API contracts: [send](https://learn.microsoft.com/graph/api/channel-post-messages?view=graph-rest-1.0),
+[reply](https://learn.microsoft.com/graph/api/chatmessage-post-replies?view=graph-rest-1.0),
+[get message/reply](https://learn.microsoft.com/graph/api/chatmessage-get?view=graph-rest-1.0),
+[list messages (bot)](https://learn.microsoft.com/graph/api/channel-list-messages?view=graph-rest-1.0),
+[list replies](https://learn.microsoft.com/graph/api/chatmessage-list-replies?view=graph-rest-1.0),
+[softDelete](https://learn.microsoft.com/graph/api/chatmessage-softdelete?view=graph-rest-1.0).
+Runtime receives no team-creation or administrative provisioning permissions.
+
+## Delegated authentication and failure semantics
+
+The worker never signs in interactively, uses a password, or falls back to a bot.
+It reloads the target account's encrypted-at-rest Blob MSAL cache and calls `acquireTokenSilent`.
+Missing/empty cache, wrong account/tenant, invalid refresh grant, interaction/MFA/
+consent requirements yield `reauthentication-required`. Storage/lease/concurrency
+failures and Graph claims/401 challenges are monitoring `authentication-failure`;
+permission errors remain distinct. None establish a Teams outage.
+Bootstrap or re-bootstrap can recover on a later cycle without restarting the worker.
+Bootstrap each account separately; `--user-principal-name` is required when the root
+selects multiple accounts. Account partitions keep one user's bootstrap/refresh from
+overwriting another's cache. Existing valid User1 legacy cache remains compatible.
+The cache has no local-disk copy; neither tokens nor cache contents enter logs,
+health reports, ordinary configs, image layers or deployment parameters.
+
+## Temporarily retain messages for inspection
+
+Set **`"teamsCleanupEnabled": false` in the active Teams service config file**,
+not in root targets or the access/identity file. It defaults to `true`; both checked-in
+Teams profiles retain that default. Restart/redeploy the worker to load the change;
+hosted service-config changes roll a new revision through the existing config hash.
+The same setting covers both scenarios, every selected target, default bot mode and
+optional delegated mode.
+
+When false, the worker makes **no cleanup/delete or cleanup-reconciliation requests**,
+including after failed or ambiguous business operations. Correct-author correlated
+readback remains mandatory; retention never turns a failed action into success.
+Internal cleanup is `skipped` with reason `cleanup-disabled`, not executed success,
+and `cleanupSucceeded` is absent. The explicit console event `teams-cleanup-disabled`
+includes `mutationAttempted` and execution mode; `mutationAttempted: false` means no post was attempted,
+not that content was retained. Cleanup remains excluded from business-step entities
+and published step observations. Simulation emits the same intention with
+`mutationAttempted: false` and never creates real messages.
+
+**Use only for a short approved inspection window in the dedicated test channel.**
+With one bot channel and both successful journeys, each cycle retains **two root posts
+and one reply**—90 messages/hour at the default 120-second cadence. Opt-in three-user
+coverage retains six root posts and three replies per cycle (270/hour). Failed or
+uncertain operations may also leave content. Respect channel growth, tenant
+retention/eDiscovery and Microsoft's restrictions on using Teams as a log sink.
+Success in this mode proves publication/readback, **not deletion**.
+
+Restore **`"teamsCleanupEnabled": true`** and restart/redeploy when inspection is
+finished. This restores normal owned reply-before-parent cleanup **for new attempts
+only**; there is no retroactive sweep, retained-ID inventory or automatic deletion
+of earlier messages. Handle earlier retained content separately through an approved
+manual process. Normal Graph cleanup is soft deletion, not permanent erasure.
+
+Use `npm run teams -- --once --project-config <root>` from `synthetic-tests/`, or
+`node dist/teams/src/worker.js --once --project-config <root>` after building.
+`--config` overrides only the service file, never root targets.
+
+## Bot endpoint and observation contracts
+
+The existing Connector and independently selected application Graph observer are reused:
+
+- Root target additionally requires an approved `serviceUrl`:
+  `https://smba.trafficmanager.net/{teams|amer|emea|apac}/`.
+- Install the approved bot in the test team. Bot registration/channel/installation
+  are approved administrator provisioning, not runtime operations. The worker
+  infrastructure does not provision those resources.
+- Bot Connector creates `/v3/conversations`, replies through
+  `/v3/conversations/{conversation}/activities/{parent}`, and deletes known owned
+  activities with `DELETE /v3/conversations/{conversation}/activities/{activity}`.
+  Graph readback matches the expected application author; activity IDs are not
+  assumed to be Graph message IDs.
+- Observer uses `graphAuthentication: "managed-identity" | "certificate"` and
+  approved channel read permissions (prefer installed-team
+  `ChannelMessage.Read.Group` resource-specific consent); bot/observer/targets must share a tenant.
+  Optional bot certificates require explicit `botAuthentication: "certificate"`,
+  `BOT_TENANT_ID`, `BOT_CLIENT_ID`, `BOT_CLIENT_CERTIFICATE_PATH`, with no MI fallback.
+  Hosted certificate access uses the separate `bot*` / `m365*` serviceAccess metadata
+  described in the [access guide](../../docs/cross-tenant-access.md).
+
+Bot coverage is not evidence of a user-delegated journey or employee authentication.
+
+## Independent provider/report identities
+
+`serviceHealth` and optional beta `serviceActivity` collectors always use separately
+selected **application** Graph credentials (`graphAuthentication` MI/certificate),
+never the delegated user token. Stable Service Health requires `ServiceHealth.Read.All`
+and publishes impact-suppressed supporting context under the Teams Experience.
+Beta activity additionally requires `ENABLE_BETA_SERVICE_ACTIVITY=true` and approved
+`ServiceActivity-Teams.Read.All`; it is diagnostic-only, not journey evidence.
+Provider failures do not change synthetic success, business steps or rollup.
+ARM health reports independently use `healthReportAuthentication`, hosted UAMI.
+See [provider contracts](../utils/README.md#optional-provider-collectors).

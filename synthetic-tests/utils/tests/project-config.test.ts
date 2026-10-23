@@ -24,7 +24,7 @@ describe("project-root monitoring configuration", () => {
     expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
     for (const type of ["exchange", "teams", "sharepoint"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
-      expect(Object.values(checkedIn.services[type].scenarios)).toEqual([true, true]);
+      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(type === "teams" ? [true, true, true] : [true, true]);
       const selected = await readProjectService(type, "../monitoring.config.json");
       expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }

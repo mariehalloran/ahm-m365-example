@@ -14,7 +14,7 @@ const exchange: Probe = { id: "exchange-001", cohort: "exchange-global", type: "
 const config = loadConfig({ PROBE_TIMEOUT_MS: "120000" });
 const telemetry = { emit: vi.fn() };
 
-async function exchangeRun(options: { deliveryAfter?: number; sendDurationMs?: number; fail?: "permission" | "send" | "read" | "cleanup" | "throttle"; authFail?: boolean } = {}) {
+async function exchangeRun(options: { deliveryAfter?: number; sendDurationMs?: number; fail?: "permission" | "send" | "read" | "cleanup" | "throttle"; authFail?: boolean; cleanupEnabled?: boolean } = {}) {
   let time = Date.parse("2026-10-16T20:00:00Z");
   let polls = 0;
   let sentSubject = "";
@@ -44,13 +44,27 @@ async function exchangeRun(options: { deliveryAfter?: number; sendDurationMs?: n
   const identity = options.authFail ? { getToken: async () => { throw new Error("private auth error"); } } : credential;
   const graph = new GraphClient(new AuthenticatedHttp(identity, "scope", { fetch: fetcher, attempts: 1 }));
   const result = await exchangeProbe(exchange, {
-    config, graph, telemetry, signal: AbortSignal.timeout(10000), now: () => time,
+    config: { ...config, EXCHANGE_CLEANUP_ENABLED: options.cleanupEnabled === false ? "false" : "true" },
+    graph, telemetry, signal: AbortSignal.timeout(10000), now: () => time,
     sleep: async ms => { time += ms; },
   });
   return { result, calls, sentSubject, time };
 }
 
 describe("Exchange send/poll/cleanup", () => {
+  it.each([undefined, "send", "read"] as const)("retains all mail copies without cleanup/reconciliation after %s", async fail => {
+    const { result, calls } = await exchangeRun({ cleanupEnabled: false, ...(fail ? { fail } : {}) });
+    expect(resultSchema.safeParse(result).success).toBe(true);
+    expect(result.success).toBe(fail === undefined);
+    expect(result.steps.at(-1)).toMatchObject({ name: "cleanup", status: "skipped", reason: "cleanup-disabled" });
+    expect(result.steps.at(-1)).not.toHaveProperty("durationMs");
+    expect(result.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+    expect(calls.some(call => call.method === "DELETE")).toBe(false);
+    expect(calls.filter(call => call.method === "GET").every(call => call.url.includes("/mailFolders/inbox/"))).toBe(true);
+    expect(telemetry.emit).toHaveBeenCalledWith("exchange-cleanup-disabled", expect.objectContaining({
+      mode: "live", mutationAttempted: true,
+    }));
+  });
   it("exposes independently callable authentication, draft, send, delivery and cleanup actions", async () => {
     const calls: string[] = [];
     const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", {

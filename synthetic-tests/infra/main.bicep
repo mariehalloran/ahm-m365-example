@@ -8,6 +8,11 @@ param serviceConfigs object = {
   teams: loadJsonContent('../teams/config.json')
   sharepoint: loadJsonContent('../sharepoint/config.json')
 }
+@description('Nonsecret M365/bot/public-client access metadata and Key Vault secret URIs; never private keys, tokens or user caches.')
+param serviceAccess object = {}
+@secure()
+@description('Approved Container Apps native certificate PEMs keyed by service. Supply separately as a protected secure parameter, never in ordinary config/parameter files.')
+param serviceCertificates object = {}
 param location string = resourceGroup().location
 @description('First deploy false to establish the private registry and identities; then deploy the built image.')
 param deployWorkers bool = false
@@ -30,6 +35,50 @@ var resourceToken = uniqueString(resourceGroup().id, modelName)
 var registryName = 'crm365${resourceToken}'
 var tags = { workload: modelName, purpose: 'synthetic-worker' }
 var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'
+var useTeamsUser = contains(services, 'teams') && serviceConfigs.teams.mode == 'live' && (serviceConfigs.teams.?teamsAuthentication ?? 'bot') == 'user-delegated' && ((projectConfig.services.teams.scenarios[?'publish-channel-message'] ?? true) || (projectConfig.services.teams.scenarios[?'reply-channel-message'] ?? true))
+var teamsCacheContainerName = 'teams-auth'
+var teamsCacheBlobName = 'teams-user.msal.json'
+
+resource teamsCache 'Microsoft.Storage/storageAccounts@2025-01-01' = if (useTeamsUser) {
+  name: 'stm365${resourceToken}'
+  location: location
+  tags: tags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    supportsHttpsTrafficOnly: true
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    defaultToOAuthAuthentication: true
+    encryption: {
+      keySource: 'Microsoft.Storage'
+      requireInfrastructureEncryption: true
+      services: { blob: { enabled: true, keyType: 'Account' } }
+    }
+  }
+}
+
+resource teamsBlobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = if (useTeamsUser) {
+  parent: teamsCache
+  name: 'default'
+}
+
+resource teamsAuthContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = if (useTeamsUser) {
+  parent: teamsBlobService
+  name: teamsCacheContainerName
+  properties: { publicAccess: 'None' }
+}
+
+resource teamsCacheAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (useTeamsUser) {
+  name: guid(teamsAuthContainer!.id, identities[indexOf(services, 'teams')].id, 'teams-token-cache')
+  scope: teamsAuthContainer
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    principalId: identities[indexOf(services, 'teams')].properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 
 resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (useAzureMonitor && !empty(services)) {
   name: applicationInsightsName
@@ -132,10 +181,15 @@ module workers './worker.bicep' = [
       workerImage: workerImage
       projectConfig: projectConfig
       serviceConfig: serviceConfigs[service]
+      serviceAccess: serviceAccess[?service] ?? {}
+      teamsCacheAccountUrl: useTeamsUser && service == 'teams' ? teamsCache!.properties.primaryEndpoints.blob : ''
+      m365CertificatePem: (serviceAccess[?service].?m365CertificateSource ?? 'key-vault') == 'container-app'
+        ? serviceCertificates[service]
+        : ''
       enableLiveProbes: enableLiveProbes
       applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
-    dependsOn: [reportAssignments, imagePullAssignments]
+    dependsOn: [reportAssignments, imagePullAssignments, teamsCacheAssignment]
   }
 ]
 
@@ -144,3 +198,7 @@ output registryServer string = registry.properties.loginServer
 output environmentId string = environment.id
 output appNames array = [for service in services: 'm365-${take(resourceToken, 6)}-${service}']
 output identityIds array = [for (service, index) in services: identities[index].id]
+output teamsCacheAccountUrl string = useTeamsUser ? teamsCache!.properties.primaryEndpoints.blob : ''
+output teamsCacheContainer string = useTeamsUser ? teamsCacheContainerName : ''
+output teamsCacheBlob string = useTeamsUser ? teamsCacheBlobName : ''
+output teamsCacheContainerId string = useTeamsUser ? teamsAuthContainer!.id : ''

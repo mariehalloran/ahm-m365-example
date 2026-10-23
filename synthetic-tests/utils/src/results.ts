@@ -11,7 +11,7 @@ export interface ResultOutput {
 export function outcomeOf(result: SyntheticResult): Outcome {
   if (result.success) return "success";
   return [
-    "authentication-failure", "permission-failure", "collector-failure", "configuration-failure",
+    "authentication-failure", "reauthentication-required", "permission-failure", "collector-failure", "configuration-failure",
     "malformed-response", "graph-throttling", "cancelled",
   ].includes(result.diagnosticCategory ?? "") ? "unexecutable" : "failure";
 }

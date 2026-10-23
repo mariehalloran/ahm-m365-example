@@ -23,9 +23,20 @@
     "teams": {
       "enabled": true,
       "configFile": "synthetic-tests/teams/config.json",
-      "scenarios": { "publish-channel-message": true, "reply-channel-message": true },
+      "scenarios": { "publish-channel-message": true, "reply-channel-message": true, "call-test-user": true },
       "targets": [
-        { "id": "teams-probe-001" }
+        {
+          "id": "teams-probe-001",
+          "tenantId": "00000000-0000-0000-0000-000000000000",
+          "teamId": "00000000-0000-0000-0000-000000000000",
+          "channelId": "replace-with-dedicated-standard-channel-id",
+          "serviceUrl": "https://smba.trafficmanager.net/teams/"
+        }
+      ],
+      "callTargets": [
+        { "id": "teams-call-user-001", "tenantId": "00000000-0000-0000-0000-000000000000", "callUserId": "11111111-1111-4111-8111-111111111111" },
+        { "id": "teams-call-user-002", "tenantId": "00000000-0000-0000-0000-000000000000", "callUserId": "22222222-2222-4222-8222-222222222222" },
+        { "id": "teams-call-user-003", "tenantId": "00000000-0000-0000-0000-000000000000", "callUserId": "33333333-3333-4333-8333-333333333333" }
       ]
     },
     "sharepoint": {

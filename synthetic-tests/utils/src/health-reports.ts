@@ -1,5 +1,5 @@
 import type { TokenCredential } from "@azure/identity";
-import { createServiceCredential } from "./auth.js";
+import { createHealthReportCredential } from "./auth.js";
 import { isReportedStep, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
 import type { ProjectConfig } from "./project-config.js";
@@ -235,9 +235,10 @@ export function createHealthReporter(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
   options: HttpOptions & { credential?: TokenCredential } = {},
 ): HealthReporter {
+  if (!service.enabled) return async () => undefined;
   const policy = project.healthModel;
   const http = service.mode === "live" ? new AuthenticatedHttp(
-    options.credential ?? createServiceCredential(env, service.graphAuthentication, "health-report"),
+    options.credential ?? createHealthReportCredential(env, service.healthReportAuthentication),
     "https://management.azure.com/.default", { ...options, attempts: 2, timeoutMs: REPORT_TIMEOUT_MS },
   ) : undefined;
   const modelName = `${policy.name}-${service.type}`;

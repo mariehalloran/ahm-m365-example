@@ -35,11 +35,23 @@ class WorkerTemplateContracts(unittest.TestCase):
 
     def test_real_worker_image_and_private_identity_pull_without_web_ingress(self):
         properties = self.app["properties"]
-        self.assertNotIn("ingress", properties["configuration"])
+        self.assertIn("useTeamsCalling", properties["configuration"]["ingress"])
+        self.assertIn("null()", properties["configuration"]["ingress"])
+        self.assertIn("'allowInsecure', false", properties["configuration"]["ingress"])
         self.assertEqual(self.app["identity"]["type"], "UserAssigned")
         self.assertEqual(properties["configuration"]["registries"][0]["identity"], "[parameters('identityResourceId')]")
         self.assertEqual(properties["template"]["containers"][0]["image"], "[parameters('workerImage')]")
         self.assertEqual(properties["template"]["scale"], {"minReplicas": 1, "maxReplicas": 1})
+
+    def test_public_callback_is_only_for_selected_live_teams_individual_calls(self):
+        calling = self.worker["variables"]["useTeamsCalling"]
+        self.assertIn("'teams'", calling)
+        self.assertIn("'live'", calling)
+        self.assertIn("call-test-user", calling)
+        self.assertNotIn("join-leave-call", calling)
+        probes = self.app["properties"]["template"]["containers"][0]["probes"]
+        self.assertIn("useTeamsCalling", probes)
+        self.assertIn("/healthz", probes)
 
     def test_minimal_report_permission_without_log_forwarding(self):
         role = next(item for item in self.resources if item["type"] == "Microsoft.Authorization/roleDefinitions")
@@ -70,8 +82,34 @@ class WorkerTemplateContracts(unittest.TestCase):
 
     def test_mounted_configuration_changes_roll_the_worker_revision(self):
         environment = self.app["properties"]["template"]["containers"][0]["env"]
-        self.assertIn("uniqueString(string(parameters('projectConfig')), string(parameters('serviceConfig')))", environment)
+        self.assertIn("uniqueString(string(parameters('projectConfig')), string(parameters('serviceConfig')), string(parameters('serviceAccess')), parameters('teamsCacheAccountUrl'))", environment)
         self.assertEqual(self.app["properties"]["template"]["terminationGracePeriodSeconds"], 60)
+
+    def test_cross_tenant_certificates_are_key_vault_references_and_separate_from_azure_identity(self):
+        self.assertEqual(self.template["parameters"]["serviceAccess"]["defaultValue"], {})
+        self.assertIn("serviceAccess", self.module["properties"]["parameters"])
+        self.assertIn("certificate", self.worker["variables"]["useM365Certificate"])
+        secrets = self.worker["variables"]["credentialSecrets"]
+        for value in ("keyVaultUrl", "identityResourceId", "m365CertificateSecretUri", "botCertificateSecretUri"):
+            self.assertIn(value, secrets)
+        self.assertIn("'value', parameters('m365CertificatePem')", secrets)
+        self.assertIn("container-app", secrets)
+        self.assertEqual(self.template["parameters"]["serviceCertificates"]["type"].lower(), "secureobject")
+        self.assertEqual(self.worker["parameters"]["m365CertificatePem"]["type"].lower(), "securestring")
+        self.assertNotIn("serviceCertificates", self.template["outputs"])
+        native_parameter = self.module["properties"]["parameters"]["m365CertificatePem"]
+        self.assertIsInstance(native_parameter, str)
+        self.assertIn("parameters('serviceCertificates')[", native_parameter)
+        files = self.worker["variables"]["credentialFiles"]
+        self.assertIn("m365.pem", files)
+        self.assertIn("bot.pem", files)
+        environment = self.app["properties"]["template"]["containers"][0]["env"]
+        for name in ("M365_TENANT_ID", "M365_CLIENT_ID", "M365_CLIENT_CERTIFICATE_PATH", "BOT_CLIENT_CERTIFICATE_PATH"):
+            self.assertIn(name, environment)
+        self.assertIn("'AZURE_CLIENT_ID', 'value', parameters('identityClientId')", environment)
+        container = self.app["properties"]["template"]["containers"][0]
+        self.assertIn("/etc/credentials", container["volumeMounts"])
+        self.assertIn("credentialFiles", self.app["properties"]["template"]["volumes"])
 
     def test_worker_selection_checks_every_configured_journey(self):
         services = self.template["variables"]["services"]
@@ -79,6 +117,53 @@ class WorkerTemplateContracts(unittest.TestCase):
         self.assertIn(".scenarios", services)
         self.assertIn("items(", services)
         self.assertNotIn("serviceJourneys", self.template["variables"])
+
+    def test_default_bot_uses_the_attached_uami_without_user_storage_or_certificate_fallback(self):
+        environment = self.app["properties"]["template"]["containers"][0]["env"]
+        self.assertIn("useBotIdentity", environment)
+        self.assertIn("'BOT_CLIENT_ID', 'value', if(variables('useBotCertificate')", environment)
+        self.assertIn("parameters('identityClientId')", environment)
+        self.assertIn("'BOT_TENANT_ID', 'value', if(variables('useBotCertificate')", environment)
+        self.assertIn("parameters('tenantId')", environment)
+        self.assertIn("'managed-identity'", self.worker["variables"]["useBotCertificate"])
+        self.assertIn("'certificate'", self.worker["variables"]["useBotCertificate"])
+        self.assertIn("'bot'", self.worker["variables"]["useTeamsUser"])
+        self.assertIn("'bot'", self.template["variables"]["useTeamsUser"])
+        self.assertNotIn("empty(", self.worker["variables"]["useBotCertificate"])
+
+    def test_delegated_cache_is_conditional_encrypted_https_and_container_scoped(self):
+        storage = next(item for item in self.resources if item["type"] == "Microsoft.Storage/storageAccounts")
+        self.assertEqual(storage["condition"], "[variables('useTeamsUser')]")
+        properties = storage["properties"]
+        self.assertTrue(properties["supportsHttpsTrafficOnly"])
+        self.assertEqual(properties["minimumTlsVersion"], "TLS1_2")
+        self.assertFalse(properties["allowSharedKeyAccess"])
+        self.assertFalse(properties["allowBlobPublicAccess"])
+        self.assertTrue(properties["encryption"]["requireInfrastructureEncryption"])
+        self.assertTrue(properties["encryption"]["services"]["blob"]["enabled"])
+        container = next(item for item in self.resources if item["type"].endswith("/blobServices/containers"))
+        self.assertEqual(container["properties"]["publicAccess"], "None")
+        self.assertEqual(container["condition"], "[variables('useTeamsUser')]")
+        role = next(item for item in self.resources if item["type"] == "Microsoft.Authorization/roleAssignments" and "ba92f5b4" in str(item))
+        self.assertEqual(role["condition"], "[variables('useTeamsUser')]")
+        self.assertIn("/blobServices/containers", role["scope"])
+        self.assertIn("indexOf(variables('services'), 'teams')", role["properties"]["principalId"])
+        for name in ("teamsCacheAccountUrl", "teamsCacheContainerId", "teamsCacheContainer", "teamsCacheBlob"):
+            self.assertIn(name, self.template["outputs"])
+        selection = self.template["variables"]["useTeamsUser"]
+        self.assertIn("'teams'", selection)
+        self.assertIn("'live'", selection)
+        self.assertIn("'user-delegated'", selection)
+
+    def test_delegated_worker_has_metadata_not_embedded_tokens_and_provider_auth_stays_separate(self):
+        environment = self.app["properties"]["template"]["containers"][0]["env"]
+        for name in ("TEAMS_PUBLIC_CLIENT_ID", "TEAMS_CACHE_ACCOUNT_URL", "TEAMS_CACHE_CONTAINER", "TEAMS_CACHE_BLOB"):
+            self.assertIn(name, environment)
+        self.assertIn("useTeamsUser", environment)
+        self.assertIn("needsApplicationGraph", self.worker["variables"]["useM365Certificate"])
+        self.assertIn("serviceHealth", self.worker["variables"]["needsApplicationGraph"])
+        self.assertNotIn("accessToken", environment)
+        self.assertNotIn("refreshToken", environment)
 
 
 if __name__ == "__main__":

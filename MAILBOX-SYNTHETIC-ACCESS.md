@@ -1,8 +1,8 @@
 # Exchange synthetic permissions and managed identity setup
 
-This is the administrator handoff for the **same-Entra-tenant** design. The worker runs in Azure Container Apps, authenticates to Graph with an explicitly selected **user-assigned managed identity**, and accesses only the dedicated synthetic mailbox.
+This is the administrator handoff for mailbox-scoped authorization. The default **same-Entra-tenant** path runs in Azure Container Apps and authenticates to Graph with an explicitly selected **user-assigned managed identity**. For a different M365 tenant, use a certificate-backed application registered in that tenant, with Azure report authentication kept separate; follow the [cross-tenant administrator walkthrough](./docs/cross-tenant-access.md). Both paths access only the approved synthetic mailbox.
 
-No mailbox password, application secret, customer-managed certificate, or Key Vault credential is required for hosted Exchange authentication. Azure manages the identity's credentials.
+No mailbox password is required. The same-tenant managed-identity path needs no application secret or customer-managed certificate. The explicit cross-tenant certificate path requires secure PEM storage/mounting and rotation; it never falls back from managed identity automatically.
 
 The [shared Container Apps setup](./synthetic-tests/infra/README.md) separates identity creation from worker enablement and does not grant mailbox permissions. The separate health-model deployment does not establish Exchange access. Start with the [administrator walkthrough](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests) for the full enablement sequence, including optional Graph app-role assignment.
 
@@ -21,7 +21,7 @@ At one message per minute, one target produces up to **1,440 messages/day or 43,
 
 An eligible Exchange Online subscription must exist. A shared mailbox up to 50 GB generally needs no separate mailbox license; archive, hold, capacity, and advanced compliance/security features can change that. Human delegates need their own eligible licensing. Ask the tenant owner to confirm it.
 
-An Azure subscription cannot itself host/create an Exchange Online mailbox. Azure and Microsoft 365 resources may be in different subscriptions, but this implementation's default assumes the **same Entra tenant**.
+An Azure subscription cannot itself host/create an Exchange Online mailbox. The default Graph managed-identity path assumes the **same Entra tenant**; explicit M365 certificate authentication supports different tenants without an Azure subscription in the mailbox tenant.
 
 ## 2. Permissions: separate the three responsibilities
 
@@ -50,7 +50,7 @@ Mailbox-scoped `Mail.ReadWrite` permits access to every message in the approved 
 
 ### Direct health reports
 
-Live workers aggregate each complete cycle by journey/action and publish direct health reports. Authorize the selected identity for health-report ingestion on the Exchange service model; see the [model permission contract](./health-model/README.md). It obtains a separate ARM-audience token using the same explicitly selected identity, without a default-credential fallback. Root account addresses belong in [monitoring.config.json](./monitoring.config.json), not credentials. Console diagnostics remain available; no separate telemetry destination or query-reader permission is required.
+Live workers aggregate each complete cycle by journey/action and publish direct health reports. Authorize the independently selected **Azure report identity** for ingestion on the Exchange service model; see the [model permission contract](./health-model/README.md). `healthReportAuthentication` defaults to managed identity and obtains a separate ARM-audience token, without Graph-credential or default-credential fallback. A cross-tenant M365 application needs mailbox authorization, not Azure report permissions. Root account addresses belong in [monitoring.config.json](./monitoring.config.json), not credentials. Console diagnostics remain available; no separate telemetry destination or query-reader permission is required.
 
 ### Optional Microsoft-reported provider data
 
@@ -103,6 +103,10 @@ if ((Get-ConnectionInformation | Select-Object -First 1).TenantID -ne $expectedT
     throw "Connected Exchange tenant does not match the approved tenant."
 }
 
+if ((Get-OrganizationConfig).IsDehydrated) {
+    throw "A tenant administrator must approve and run Enable-OrganizationCustomization once before creating custom scopes and role assignments."
+}
+
 New-ServicePrincipal -AppId $clientId -ObjectId $principalId `
     -DisplayName "AHM Exchange synthetic identity"
 
@@ -122,6 +126,8 @@ Test-ServicePrincipalAuthorization -Identity $principalId -Resource $controlMail
 ```
 
 The allowed test must show both roles in scope, and the control mailbox must be out of scope. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
+
+New test tenants may require the one-time, tenant-wide `Enable-OrganizationCustomization` prerequisite. Check `Get-OrganizationConfig`'s `IsDehydrated` property, obtain tenant-owner approval, and run the command only when it is `True`. Wait for completion before retrying the scoped setup; do not replace scoped grants with broader permissions.
 
 `Test-ServicePrincipalAuthorization` **does not include separately granted Entra permissions**, so a passing control test alone does not rule out an accidental tenant-wide Graph grant. Verify effective live Graph access/denial under administrator supervision before scheduling.
 
@@ -149,9 +155,9 @@ The worker uses `ManagedIdentityCredential({ clientId })` for `https://graph.mic
 
 Live execution still requires dedicated target configuration, `mode: live`, `enabled: true`, and `ENABLE_LIVE_M365=true`. Start with a single manually initiated run after authorization checks. Simulation stays entirely local and acquires no managed-identity token.
 
-For an approved **local development** application, choose `graphAuthentication: certificate` explicitly and provide `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_CERTIFICATE_PATH`. A normal laptop does not expose the Container App managed-identity endpoint. The certificate option does not become a silent production fallback.
+For an approved **cross-tenant or local** M365 application, choose `graphAuthentication: certificate` explicitly and provide `M365_TENANT_ID`, `M365_CLIENT_ID`, and `M365_CLIENT_CERTIFICATE_PATH`. The public certificate belongs on the M365 app registration; its Enterprise application Object ID is the Exchange `$principalId`. Graph no longer reads `AZURE_*` certificate settings. A normal laptop also needs independently selected Azure report certificate authentication (`healthReportAuthentication: certificate` with `AZURE_*`); it does not expose the Container App managed-identity endpoint. Neither certificate option is a silent fallback.
 
-Hosted Exchange uses the managed-identity path and needs no mailbox certificate/secret.
+Same-tenant hosted Exchange remains keyless by default. The shared hosting template supports explicit cross-tenant Graph PEM mounts through approved Key Vault references.
 
 ## 6. Journey and step boundaries
 
@@ -174,7 +180,7 @@ Teams Bot Connector authorization remains a separate implementation/installation
 
 The optional provider collectors require the additional read permissions listed above only when enabled. They do not broaden the core Exchange journey's mailbox scope.
 
-Cross-tenant managed identity is not enabled by this same-tenant implementation. A different tenant needs a separately reviewed federation/application authorization design; simply changing a tenant-ID setting on a managed identity does not move its identity into another directory.
+Cross-tenant managed identity and federation are not implemented. Different-tenant Graph access uses the explicit M365 application certificate path described in the [cross-tenant guide](./docs/cross-tenant-access.md); simply changing a tenant-ID setting on a managed identity does not move its identity into another directory.
 
 ## 8. Copy-and-send request
 

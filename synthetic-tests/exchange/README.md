@@ -2,11 +2,23 @@
 
 The employee goal is **send an email and have it arrive**, not merely receive an HTTP success response.
 
-The [journey](./src/journey.ts) orchestrates separately exported [actions](./src/steps.ts): `authenticate`, `createDraft`, `sendMessage`, `confirmDelivery`, and `cleanup`. It creates a draft in one dedicated mailbox, sends it to itself, waits for the exact message in its Inbox, and cleans up only that test's copies. A distinct sender/recipient pair and Outlook UI testing are not implemented.
+The [journey](./src/journey.ts) orchestrates separately exported [actions](./src/steps.ts): `authenticate`, `createDraft`, `sendMessage`, `confirmDelivery`, and `cleanup`. It creates a draft in one dedicated mailbox, sends it to itself, waits for the exact message in its Inbox, and by default cleans up only that test's copies. A distinct sender/recipient pair and Outlook UI testing are not implemented.
 
-Journey `send-receive-mail` has business-step entities `create-draft`, `send`, and `confirm-delivery`. A second journey, `edit-reopen-draft`, uses `create-draft`, `update-draft`, and `read-draft` beneath its separate `exchange-draft` entity. Step IDs are prefixed with the journey entity ID. Each journey/step always receives direct success/duration reports in **External Reports**; optional Azure OTEL adds a separate query-backed group. Token acquisition and cleanup are internal, with no published steps or standalone health signals. Failed prerequisites skip downstream operations; cleanup still runs after an attempted mutation with its own ten-second budget. Its failures remain journey diagnostics without rewriting prior business-action successes or delivery timing.
+Journey `send-receive-mail` has business-step entities `create-draft`, `send`, and `confirm-delivery`. A second journey, `edit-reopen-draft`, uses `create-draft`, `update-draft`, and `read-draft` beneath its separate `exchange-draft` entity. Step IDs are prefixed with the journey entity ID. Each journey/step always receives direct success/duration reports in **External Reports**; optional Azure OTEL adds a separate query-backed group. Token acquisition and cleanup are internal, with no published steps or standalone health signals. Failed prerequisites skip downstream operations; enabled cleanup still runs after an attempted mutation with its own ten-second budget. Its failures remain journey diagnostics without rewriting prior business-action successes or delivery timing.
 
 The [draft journey](./src/draft-journey.ts) reuses draft creation, then [edits and reopens](./src/draft-steps.ts) the same owned draft to verify its marker, edited content and draft state. It never sends mail. Both journeys are enabled independently at the root and share this worker, target mailboxes and cadence.
+
+For temporary manual inspection, set `"exchangeCleanupEnabled": false` in the
+Exchange service file selected by the private root profile and redeploy. Both
+journeys then skip cleanup and emit `exchange-cleanup-disabled`: delivered Inbox
+mail, Sent Items copies and draft-only artifacts remain, including artifacts from
+failed attempts. Search the configured mailbox for subjects beginning
+`AHM synthetic`; the mail-flow journey sends to that same mailbox, not every Teams
+test account. Cleanup remains enabled by default. At a one-minute cadence, each
+successful cycle adds one Inbox message, one sent copy and one edited draft.
+Restore `true` and redeploy after inspection; that affects future attempts only,
+not previously retained mail. A retained successful journey verifies business
+actions, not cleanup.
 
 Each attempt contributes success as **1 or 0** to cycle aggregation. Console observations separately measure **send request time**, **confirmed delivery time**, and **total attempt time**. Request acceptance is not delivery. Failed send requests still retain their elapsed time.
 
@@ -42,9 +54,9 @@ All paths are relative to `https://graph.microsoft.com/v1.0`; identifiers and qu
 
 ## Identity
 
-Hosted Graph uses `graphAuthentication: "managed-identity"` (the default) and requires a valid explicit `AZURE_CLIENT_ID`. Only `ManagedIdentityCredential({ clientId })` is constructed, for `https://graph.microsoft.com/.default`; there is no CLI, default credential, system-identity guess, client-secret, certificate, or Key Vault fallback.
+Same-tenant hosted Graph uses `graphAuthentication: "managed-identity"` (the default) and requires a valid explicit `AZURE_CLIENT_ID`. Only `ManagedIdentityCredential({ clientId })` is constructed, for `https://graph.microsoft.com/.default`; there is no CLI, default credential, system-identity guess, client-secret or certificate fallback.
 
-For approved local live development only, explicitly choose `graphAuthentication: "certificate"` and provide `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH`. Scope `Application Mail.ReadWrite` and `Application Mail.Send` through Exchange RBAC for Applications to dedicated mailboxes only; **do not grant tenant-wide Entra Graph mail application permissions**. The approved hosted identity must be in the mailbox tenant.
+For hosted cross-tenant access or local live development, explicitly choose `graphAuthentication: "certificate"` and provide `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for an application in the mailbox tenant. Scope `Application Mail.ReadWrite` and `Application Mail.Send` through Exchange RBAC for Applications to dedicated mailboxes only; **do not grant tenant-wide Entra Graph mail application permissions**. Health reporting independently defaults to `healthReportAuthentication: "managed-identity"` with the Azure UAMI. Graph certificate mode no longer reads `AZURE_*`. Follow the [cross-tenant administrator handoff and PEM mounting guide](../../docs/cross-tenant-access.md).
 
 This proves neither employee login/MFA, Outlook rendering, external delivery, nor tenant-wide availability. The [root config](../../monitoring.config.json) selects both journeys and their mailbox targets. The shared worker aggregates this cycle's journey/actions and publishes direct health reports to separate journey/business-step entities in the Exchange model. No history is persisted; reports replace cycle aggregates rather than providing a full metrics store or percentiles. See [reporting/configuration](../utils/README.md#per-cycle-health-reports).
 

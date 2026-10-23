@@ -23,7 +23,10 @@ const project = () => ({
   healthModel: { ...checkedIn.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
   services: {
     exchange: { ...structuredClone(checkedIn.services.exchange), scenarios: { "send-receive-mail": true, "edit-reopen-draft": false } },
-    teams: { ...structuredClone(checkedIn.services.teams), scenarios: { "publish-channel-message": true, "reply-channel-message": false } },
+    teams: {
+      ...structuredClone(checkedIn.services.teams), targets: [{ id: "teams-probe-001" }],
+      scenarios: { "publish-channel-message": true, "reply-channel-message": false, "call-test-user": false },
+    },
     sharepoint: { ...structuredClone(checkedIn.services.sharepoint), scenarios: { "save-reopen-file": true, "rename-reopen-file": false } },
   },
 });
@@ -63,7 +66,7 @@ describe("observed initialization failures", () => {
     expect(createDependencies).not.toHaveBeenCalled();
     expect(bodies[0]).toMatchObject({ signalName: "synthetic-success-percentage", healthState: "Unhealthy", value: 0 });
     expect(JSON.parse(String(bodies[0]!.additionalContext))).toMatchObject({
-      attempted: 1, succeeded: 0, diagnosticCategories: ["configuration-failure"],
+      attempted: project().services[type].targets.length, succeeded: 0, diagnosticCategories: ["configuration-failure"],
     });
     expect(bodies.slice(2).every(body => body.healthState === "Unknown" && body.value === undefined)).toBe(true);
     expect(credential.getToken.mock.calls.every(([scope]) => scope === "https://management.azure.com/.default")).toBe(true);

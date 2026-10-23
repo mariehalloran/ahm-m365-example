@@ -310,6 +310,8 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   } catch (error) {
     if (options.once || !signal.aborted) workerErrors.push(error);
   } finally {
+    try { await initialized?.dependencies.shutdown?.(); }
+    catch (error) { workerErrors.push(error); }
     try { await otel?.shutdown(); }
     catch (error) { workerErrors.push(error); }
     telemetry.emit("service-worker-stopped", { cancelled: signal.aborted });

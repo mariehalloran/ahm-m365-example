@@ -61,15 +61,18 @@ Root experience model
 |   `-- Edit/reopen draft journey -> business-step entities
 +-- Teams model
 |   +-- Publish channel message journey -> business-step entities
-|   `-- Reply in channel thread journey -> business-step entities
+|   +-- Reply in channel thread journey -> business-step entities
+|   `-- Place test calls/wait/hang up -> business-step entities
 `-- SharePoint model
     +-- Save/reopen file journey -> business-step entities
     `-- Rename/reopen file journey -> business-step entities
 ```
 
-Workers aggregate each cycle's journey/action results and submit health reports directly. Each journey and business-step entity has an **External Reports** signal group, plus an optional **OpenTelemetry** group when Azure Monitor export is enabled. With all six journeys selected, the family has **four models, 34 entities, and 30 relationships**, including **18 business-step entities**. Microsoft-reported Service Health publishes to a separate, impact-suppressed entity under each service Experience, not as a replacement for synthetic results. Token acquisition and cleanup execute internally without their own entities or published step data.
+Workers aggregate each cycle's journey/action results and submit health reports directly. Each journey and business-step entity has an **External Reports** signal group, plus an optional **OpenTelemetry** group when Azure Monitor export is enabled. With all seven journeys selected, the family has **four models, 38 entities, and 34 relationships**, including **21 business-step entities** and 59 worker-reported external signals. Microsoft-reported Service Health publishes to a separate, impact-suppressed entity under each service Experience. Token acquisition and failure cleanup remain internal; explicitly leaving a call is a business step.
 
-Reports replace the previous cycle's aggregates; they are not a full metrics store, percentile history, or arbitrary log-query interface. Workers retain no cross-cycle history or durable outbox. Console diagnostics remain available for investigation.
+Reports replace the previous cycle's aggregates; they are not a full metrics store, percentile history, or arbitrary log-query interface. Workers retain no cross-cycle journey history or durable outbox; only optional delegated Teams persists sensitive authentication state in its protected Blob cache. Default bot mode needs no user cache. Console diagnostics remain available for investigation.
+
+**Recommended for enterprise customers:** deploy workers and health models in the customer's Azure subscription associated with the M365 tenant, using customer-owned managed identities and scoped grants. Approved cross-tenant labs can instead use M365 application certificates for Graph, independently of Azure managed-identity reporting. Follow the [short setup instructions](./docs/cross-tenant-access.md); the temporary lab option is not the default recommendation for restrictive customers.
 
 ## Optional OpenTelemetry
 
@@ -78,7 +81,7 @@ OTEL is **disabled by default** in [monitoring.config.json](./monitoring.config.
 - Set `otel` to `{ "enabled": true, "destination": "console" }` to inspect OTEL logs and metrics locally without Azure credentials.
 - Select `"destination": "azure-monitor"` to export to workspace-backed Application Insights. The [model templates](./health-model/README.md#optional-otel-signals) provision the optional resources and add journey/step query signals; the [worker templates](./synthetic-tests/infra/README.md#optional-otel-export) mount the connection string as a secret.
 
-OTEL export failures are explicit and do not prevent direct report attempts. Historical OTEL queries use a 15-minute window, while direct reports describe the current cycle. Enabling OTEL adds ingestion/storage/query costs and requires separate live ingestion validation; the recorded report-only deployment has not been changed. See the [export contract and limits](./synthetic-tests/utils/README.md#optional-opentelemetry).
+OTEL export failures are explicit and do not prevent direct report attempts. Historical OTEL queries use a 15-minute window, while direct reports describe the current cycle. Enabling OTEL adds ingestion/storage/query costs and requires separate live ingestion validation. See the [export contract and limits](./synthetic-tests/utils/README.md#optional-opentelemetry).
 
 ## What this example exercises
 
@@ -86,8 +89,9 @@ OTEL export failures are explicit and do not prevent direct report attempts. His
 | --- | --- |
 | [Exchange](./synthetic-tests/exchange/README.md) | Create an email, send it to the dedicated mailbox itself, confirm Inbox delivery, and clean up |
 | Exchange | Save a draft, edit its content, reopen and verify it, and clean up without sending |
-| [Teams](./synthetic-tests/teams/README.md) | Publish a bot-owned channel message, confirm its marker and author through Graph, and remove it |
-| Teams | Create a test thread, post a bot-owned reply, confirm that reply through Graph, and remove owned activities |
+| [Teams](./synthetic-tests/teams/README.md) | Publish as an installed managed-identity bot, confirm marker and application author through Graph, and clean up the owned message |
+| Teams | Create a bot thread and reply, confirm the reply through Graph, and clean up the owned reply then parent |
+| Teams | Individually place calls to three root-configured test users, wait 10 seconds, hang up and confirm `terminated`/404; no answer/media required and no recipient-ringing proof |
 | [SharePoint](./synthetic-tests/sharepoint/README.md) | Upload synthetic content to an approved library, reopen and verify it, and remove it |
 | SharePoint | Upload a file, rename it, reopen and verify its name/content, and remove it |
 
@@ -95,7 +99,20 @@ These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, empl
 
 The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
 
-The demo's report-only live failure-path acceptance has **passed**: four models, 34 entities, 30 relationships, six journeys, 18 business steps and 51 fresh external signals. All six journeys and the root/native-service references are Unhealthy; skipped actions are Unknown without values. All three Service Health context signals are Unknown with explicit Graph 403/permission-failure diagnostics. All three apps have ready/running `--0000005` revisions using the same immutable image digest. Both the demo and original PoC telemetry pairs and associated smart-detector rules have been deleted; the original PoC model remains without queries. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. This verifies real failure reporting and rollup, **not successful Microsoft 365 journeys, production readiness, or notification delivery**. See [verified deployment details](./synthetic-tests/infra/README.md#verified-report-only-deployment) for the digest, validation results and remaining acceptance gates.
+Selected live Teams calls recur alongside messaging at the Teams cadence. Application
+`Calls.Initiate.All` requires administrator approval on the **bot** identity, not the Graph observer; its
+tenant-wide permission is constrained in this worker by the root individual-user
+allowlist. Healthy calling means successful placement, configured wait and verified
+hang-up—not proof that a recipient rang, received or answered the call, employee
+sign-in, or media quality. Actual API execution/report ingestion and human-observed
+notifications remain separate evidence. See the
+[calling setup and exact endpoints](./synthetic-tests/teams/README.md#individual-test-user-calls).
+
+The [recorded live baseline](./docs/deployment.md#deployment-status-and-order) verifies
+Exchange mail/draft and Teams bot messaging/reply/calling journeys, including actual
+health-report ingestion. SharePoint setup and production reliability gates remain
+incomplete. Successful API journeys do not establish employee UI experience or
+end-to-end alert delivery.
 
 ## How to use this example
 
@@ -108,7 +125,8 @@ Edit [monitoring.config.json](./monitoring.config.json), or keep a private copy 
 | Services to monitor | `services.exchange.enabled`, `services.teams.enabled`, `services.sharepoint.enabled` |
 | Journeys to run | Each service's `scenarios` switches |
 | Dedicated mailbox addresses | `services.exchange.targets[].mailbox` |
-| Approved Teams resources | `services.teams.targets[]`: tenant, team, channel, and bot conversation service URL |
+| Approved Teams messaging resources | `services.teams.targets[]`: tenant, team, standard channel, Bot Connector service URL; userPrincipalName only for optional delegated mode |
+| Approved individual call accounts | `services.teams.callTargets[]`: unique test alias `id`, `tenantId`, `callUserId` (user object UUID); three targets in the sample, no repeated channel metadata |
 | Approved SharePoint resources | `services.sharepoint.targets[]`: site, drive, and folder IDs |
 | Health-report destination and policy | `healthModel`: replace the subscription placeholder and confirm resource group, model name, thresholds, and report TTL |
 | Optional OTEL export | `otel.enabled` and `otel.destination`; disabled by default |
@@ -119,11 +137,26 @@ All supported services/scenarios are selected by default. Target placeholders ar
 
 The [Exchange](./synthetic-tests/exchange/config.json), [Teams](./synthetic-tests/teams/config.json), and [SharePoint](./synthetic-tests/sharepoint/config.json) files contain **only service-specific settings**: independent cadence, timeout, simulation/live mode, authentication, cohort, and optional provider collection. Selection, targets, and report policy are configured **only at the root**, not duplicated in these files.
 
-For older private service configs, move targets into the root file and remove the old `enabled`, `targets`, and `telemetry` keys; the loader now rejects these redundant fields.
-
 The service config's `scenario` chooses a deterministic simulation outcome; root `scenarios` chooses which user journey to monitor.
 
-Both journeys run in the same product worker on that service's cadence; enabling another journey does not add another Container App. The live service examples enable stable Service Health collection once per cycle, independently of journey setup. That read-only path needs separate `ServiceHealth.Read.All` admin consent. Exact overview status is reported to `${service}-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Failed, missing, or unknown status produces Unknown without a numeric value, with failure context. The existing trial observes Graph 403 until that consent is granted. Safe simulation profiles keep provider collection off; beta reports remain optional diagnostics only.
+Teams defaults to `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`:
+follow the [short bot setup](./synthetic-tests/teams/README.md#primary-setup-unattended-bot).
+The same-tenant installed bot uses an explicitly selected UAMI without user MFA,
+refresh tokens or user-cache storage. This measures bot APIs, not employee sign-in/UI.
+Team-scoped Graph readback uses a separate Entra application with managed-identity
+federation; set service `teamsReadbackClientId` and the matching manifest identity
+as described in the bot guide. Provider collection and ARM health reporting remain independent.
+Optional `teamsAuthentication: "user-delegated"` supports all selected test users
+with isolated credentials/cache partitions and [human bootstrap](./docs/teams-user-bootstrap.md).
+Reports remain journey/action aggregates, not per-account signal inventories.
+
+Teams also selects `call-test-user` by default. Approve the dedicated test users,
+bot application `Calls.Initiate.All` and [Teams-only authenticated HTTPS callback](./synthetic-tests/teams/README.md#individual-test-user-calls).
+Keep that root scenario `false` for messaging-only rollout. No user tokens or
+runtime meeting-creation/admin rights are used for calls. Validate each deployment's
+actual API execution and report ingestion before relying on it.
+
+All selected journeys run in the same product worker on that service's cadence; enabling another journey does not add another Container App. The live service examples enable stable Service Health collection once per cycle, independently of journey setup. That read-only path needs separate `ServiceHealth.Read.All` admin consent. Exact overview status is reported to `${service}-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Failed, missing, or unknown status produces Unknown without a numeric value, with failure context. The existing trial observes Graph 403 until that consent is granted. Safe simulation profiles keep provider collection off; beta reports remain optional diagnostics only.
 
 ### 3. Run a safe simulation
 
@@ -151,5 +184,6 @@ Direct health reports update separate journey and business-step entities through
 - [Health model guide](./health-model/README.md): model composition, signals, aggregation, and deployment.
 - [Deployment guide](./docs/deployment.md): hosting, identities, permission boundaries, and rollout.
 - [Operations guide](./docs/operations.md): report freshness, monitoring failures, notifications, and production acceptance.
+- [Teams/Exchange action catalog](./docs/m365-automation-capabilities.md): implemented and possible journeys, permissions and coverage limits.
 
 Independent monitoring is essential: a stopped worker or broken reporting path must not be mistaken for a healthy service. Neither a health report nor a model state is, by itself, an alert-delivery system.

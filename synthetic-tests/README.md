@@ -4,7 +4,7 @@
 
 This directory is the self-contained Node project. For why synthetic journeys complement Microsoft-reported health and how Azure Monitor Health Models exposes experience gaps, see the [repository overview](../README.md).
 
-Start with the service-owned journey guides: [Exchange mail/draft](./exchange/README.md), [Teams publication/reply](./teams/README.md), and [SharePoint save/rename](./sharepoint/README.md). Each documents its exact endpoints, reusable actions, config and tests. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no successful tenant journey or employee receipt is established by those tests.
+Start with the service-owned journey guides: [Exchange mail/draft](./exchange/README.md), [Teams publication/reply and individual call placement/hang-up](./teams/README.md), and [SharePoint save/rename](./sharepoint/README.md). Each documents its exact endpoints, reusable actions, config and tests. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no successful tenant journey or employee receipt is established by those tests. Calling health does not prove that each recipient rang.
 
 ```text
 Exchange Container App   [test + aggregation, every 60 seconds]  --+
@@ -17,7 +17,7 @@ SharePoint Container App [test + aggregation, every 300 seconds] --+
 
 ```
 
-The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of six journeys has its own entity and business-step child entities: **18 business steps, four models, 34 entities and 30 relationships** in the full family. Each journey/step has **External Reports**, plus an optional **OpenTelemetry** group for Azure Monitor export. Token acquisition and cleanup remain internal, with no entities or published step data. Use the [shared worker deployment](./infra/README.md) for rollout and the [migration procedure](../health-model/README.md#apply-and-migrate) when changing telemetry modes while preserving model entities/root.
+The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of seven journeys has its own entity and business-step child entities: **21 business steps, four models, 38 entities and 34 relationships** in the full source family. The new individual-user calling journey aggregates three test accounts without per-user signal inventories; existing deployed journey IDs stay unchanged. Each journey/step has **External Reports**, plus an optional **OpenTelemetry** group for Azure Monitor export. Token acquisition and cleanup remain internal, with no entities or published step data. Use the [shared worker deployment](./infra/README.md) for rollout and the [migration procedure](../health-model/README.md#apply-and-migrate) when changing telemetry modes while preserving model entities/root.
 
 Each service has its own Container App and cadence. Console diagnostics remain in that same process; no separate telemetry service or Kubernetes requirement is introduced.
 
@@ -48,19 +48,25 @@ All remaining npm and compiled-worker commands in this guide run from `synthetic
 | Root setting | Meaning |
 | --- | --- |
 | `services.<service>.enabled` | Enable Exchange, Teams, or SharePoint; all default to `true` |
-| `services.<service>.scenarios` | Select both journeys independently: Exchange `send-receive-mail`/`edit-reopen-draft`, Teams `publish-channel-message`/`reply-channel-message`, SharePoint `save-reopen-file`/`rename-reopen-file`; all default to `true` |
+| `services.<service>.scenarios` | Select journeys independently: Exchange `send-receive-mail`/`edit-reopen-draft`, Teams `publish-channel-message`/`reply-channel-message`/`call-test-user`, SharePoint `save-reopen-file`/`rename-reopen-file`; all default to `true` |
 | `services.<service>.targets` | Account email addresses or approved site/team/channel IDs, never credentials |
+| `services.teams.callTargets` | Separate individual user allowlist: `id`, `tenantId`, `callUserId` (object UUID), three users in the sample; no channel metadata |
 | `services.<service>.configFile` | Service-owned file for independent cadence, timeout, mode, authentication and provider settings; relative to the root config's directory |
 | `healthModel` | Root model name, subscription/resource group, report TTL, and success/mean-duration thresholds |
 | `otel` | Optional export: `enabled: false` by default; destination `console` or `azure-monitor` |
 
 Service/scenario selection, targets, and report policy are configured **only in the root file**. The service-file parser rejects duplicate `enabled`, `targets`, and obsolete `telemetry` keys instead of silently ignoring them. Root service/scenario switches disable execution before credentials are initialized. No generic all-service scheduler is introduced: run each selected worker independently. Live execution and beta/provider permissions remain separate safety gates.
 
+Each service accepts up to 30 configured targets; Teams separately accepts up to
+30 call targets. Selected journeys expand targets into independent attempts:
+30 messaging targets across two journeys plus 30 calls produce up to 90 Teams
+attempts in one cycle, aggregated into fixed journey/action signals.
+
 | Config | Cadence | Default |
 | --- | --- | --- |
 | [Exchange](./exchange/config.json) | 60 seconds | Simulated mail-flow result |
 | [SharePoint](./sharepoint/config.json) | 300 seconds | Simulated file result |
-| [Teams](./teams/config.json) | 120 seconds | Simulated channel publication; bot-backed live handler requires approved access |
+| [Teams](./teams/config.json) | 120 seconds | Simulation; live defaults to an installed same-tenant managed-identity bot |
 
 ```json
 {
@@ -79,7 +85,7 @@ Each command reads the root config (default `../monitoring.config.json` from thi
 
 ### Per-cycle health reports
 
-After each complete cycle, aggregate actual attempts separately for each journey and business action. Send `synthetic-success-percentage`/`synthetic-mean-duration` to that journey's entity and each journey-scoped business-step entity in `<root-model-name>-<service>`. Both enabled journeys use the same product worker and cadence. Defaults remain below 99%/95% success and above 15/60 seconds mean duration for Degraded/Unhealthy; these are demo thresholds, **not per-action SLOs or p95 latency**.
+After each complete cycle, aggregate actual attempts separately for each journey and business action. Send `synthetic-success-percentage`/`synthetic-mean-duration` to that journey's entity and each journey-scoped business-step entity in `<root-model-name>-<service>`. All selected journeys use the same product worker and cadence. Defaults remain below 99%/95% success and above 15/60 seconds mean duration for Degraded/Unhealthy; these are demo thresholds, **not per-action SLOs or p95 latency**.
 
 Executed failures count as zero success. Skipped/unobserved actions have no artificial samples and receive Unknown reports without a numeric value. No aggregation history is retained across cycles. Simulation only prints `health-report-preview`; live mode publishes direct ARM health reports and console diagnostics. Publication failures remain explicit.
 
@@ -113,9 +119,9 @@ These are setup instructions, **not permissions or deployments already applied**
 
 ### 1. Confirm the tenant and dedicated test resources
 
-- Confirm that the Azure worker identity and Microsoft 365 resources belong to the **same Entra tenant**. Azure hosting/billing and Microsoft 365 licensing are separate; another Azure subscription does not automatically mean another tenant. A newly purchased lab tenant might differ from the existing Azure subscription's tenant.
+- Confirm the Azure hosting tenant and Microsoft 365 tenant separately. Same-tenant application Graph can use the Azure UAMI. Teams delegated mode requires same-tenant hosting, a separately approved public client and the protected cache. For cross-tenant application Graph, use a certificate-backed application in the **M365 tenant**, independently of Azure health-report credentials; no Azure subscription is needed in the M365 tenant for that option. Follow the [cross-tenant administrator walkthrough](../docs/cross-tenant-access.md).
 - Provision an approved synthetic mailbox, dedicated SharePoint site/library/folder, and test team/standard channel as applicable. Confirm licensing, owners, cadence, cleanup/retention, and recipient restrictions. Business Basic supports the stable Service Health endpoints with administrator-granted access; it does not establish entitlement to optional beta reports.
-- Record the mailbox address; SharePoint site/drive/folder IDs; and Teams tenant/team/channel IDs and approved bot conversation metadata. Do not target employee resources merely to get started.
+- Record the mailbox address; SharePoint site/drive/folder IDs; and Teams tenant/team/standard-channel IDs and approved Bot Connector service URL. Only optional delegated coverage needs expected test-user UPNs. Do not target employee resources merely to get started.
 
 ### 2. Prepare and attach the hosted identity
 
@@ -130,7 +136,7 @@ Hand off these non-secret outputs to the tenant administrator:
 | `principalId` | Enterprise service-principal object ID for permission assignments |
 | `identityResourceId` | Attach the Azure identity to its Container App |
 
-An application-registration object ID is **not** the managed identity's `principalId`. Managed identities already have an enterprise service principal; do not create a duplicate application registration for hosted Graph access.
+An application-registration object ID is **not** the managed identity's `principalId`. For same-tenant Graph, managed identities already have an enterprise service principal; do not create a duplicate app registration. For cross-tenant Graph, the separate M365 application has its own Enterprise application Object ID; use that for M365 grants, not the Azure UAMI principal ID. The Azure UAMI remains responsible for health reports.
 
 The deploying administrator needs scoped resource creation/identity-attachment rights. A private registry also needs the appropriate scoped image-pull authorization. These Azure permissions do not grant Microsoft 365 access, and the runtime identity does not need subscription Owner/Contributor or tenant administrator roles.
 
@@ -140,13 +146,13 @@ The deploying administrator needs scoped resource creation/identity-attachment r
 | --- | --- | --- |
 | Exchange | Register the identity's service-principal reference in Exchange; assign **`Application Mail.ReadWrite`** and **`Application Mail.Send`** through Exchange RBAC for Applications | Scope only the dedicated mailbox; verify it is allowed and an approved control mailbox is denied |
 | SharePoint | Assign Graph application permission **`Sites.Selected`**, then explicitly grant the identity **`write`** on the approved test site | `Sites.Selected` alone grants no site access; the site grant covers that site, not just the configured folder |
-| Teams | Authorize the Graph observer with team-scoped **`ChannelMessage.Read.Group`** resource-specific consent through an approved Teams app installation; register/install the sending bot separately | Validate the exact team/channel, observer identity, bot identity, tenant, and conversation `serviceUrl` |
+| Teams | Approve the public client's delegated **`ChannelMessage.Send`**, **`ChannelMessage.Read.All`**, **`ChannelMessage.ReadWrite`** and individual human bootstraps; see the [cache/bootstrap guide](../docs/teams-user-bootstrap.md) | Every selected root test-user UPN, same tenant, dedicated standard channel, independently verified posting authors; no provisioning scopes on the runtime app |
 
 Follow the [Exchange administrator commands and effective-access checks](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), [SharePoint setup](./sharepoint/README.md), and [Teams setup](./teams/README.md).
 
 **Do not additionally grant tenant-wide Entra Graph `Mail.ReadWrite` or `Mail.Send`.** Entra grants and Exchange RBAC are a union; the scoped Exchange role cannot restrict a separate broad mail grant. Review both authorization paths. Allow propagation time and verify effective live access before scheduling.
 
-Teams is **not fully keyless** in the current implementation: Graph can use managed identity, but Bot Connector uses a separate certificate-backed identity with `BOT_TENANT_ID`, `BOT_CLIENT_ID`, and `BOT_CLIENT_CERTIFICATE_PATH`. Securely mount its private-key certificate and establish rotation. Never supply a mailbox/user password.
+Teams defaults to `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`: an installed same-tenant bot uses explicitly selected `BOT_CLIENT_ID` for Bot Connector, independent of application Graph observation and ARM reporting. Hosting supplies bot tenant/client metadata from the attached UAMI; no Teams serviceAccess credentials or user-cache storage are needed. No user MFA or refresh-token maintenance is involved, and this is not employee sign-in/UI coverage. Follow the [bot setup](./teams/README.md#primary-setup-unattended-bot). Optional delegated coverage requires explicit `teamsAuthentication: "user-delegated"`, isolated per-user protected caches and [human bootstrap](../docs/teams-user-bootstrap.md); provider collectors never reuse user tokens. Optional bot certificates require explicit `botAuthentication: "certificate"`, never fallback.
 
 ### 4. Optionally authorize Microsoft-reported context
 
@@ -216,13 +222,23 @@ Set these in the hosted worker's environment; keep secrets out of JSON and sourc
 | Setting | Value |
 | --- | --- |
 | `AZURE_CLIENT_ID` | Attached user-assigned identity's client ID |
-| `AZURE_TENANT_ID` | Approved tenant ID; also used for Teams identity/tenant checks |
+| `AZURE_TENANT_ID` | Azure hosting tenant ID |
+| Certificate Graph `M365_*` settings | M365 tenant/client ID and securely mounted PEM path; see the cross-tenant guide |
 | `ENABLE_LIVE_M365` | Exactly `true`, only after authorization |
-| Teams-only `BOT_*` settings | The separate bot tenant/client ID and securely mounted certificate path described above |
+| Teams delegated `TEAMS_PUBLIC_CLIENT_ID`, `TEAMS_CACHE_ACCOUNT_URL` | Public-client/storage access metadata; Bicep also supplies fixed `TEAMS_CACHE_CONTAINER` / `TEAMS_CACHE_BLOB`; account is root-owned |
+| Teams bot `BOT_TENANT_ID`, `BOT_CLIENT_ID` | Default bot mode: hosted metadata from the attached UAMI; only explicit `botAuthentication: "certificate"` needs a mounted `BOT_CLIENT_CERTIFICATE_PATH` |
 
-Managed identity authenticates Graph with `ManagedIdentityCredential({ clientId })`; there is no developer-login, system-identity, secret, or certificate fallback. The same explicitly selected identity obtains a separate ARM-audience token for mandatory live health reports and needs the health-model report action on its **service model**, independently of Graph grants. See [model permissions](../health-model/README.md).
+Same-tenant Graph defaults to the explicitly selected managed identity. Teams bot
+readback can instead use service `teamsReadbackClientId`: a separate Entra
+registration with team-scoped RSC trusts the worker UAMI through federation.
+Bot Connector, calling, provider collection and ARM reporting retain their
+independent identities. Follow the [bot identity mapping](./teams/README.md#primary-setup-unattended-bot).
+Neither mode falls back to developer login, a system identity, secrets or certificates.
+`healthReportAuthentication` independently obtains an ARM-audience token and
+requires ingestion permission on its own **service model**. Cross-tenant Graph
+uses explicit `certificate` mode and `M365_*`; it does not change Azure reporting.
 
-**Local live development:** a normal laptop does not expose the Container Apps managed-identity endpoint. Explicitly choose `graphAuthentication: "certificate"` and use an administrator-authorized development application's `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_CERTIFICATE_PATH`. Upload its public certificate to that app registration, keep the private-key PEM secure, and authorize **that development service principal** using the same scoped journey permissions. Hosted identity grants do not transfer to it. `az login` alone does not authenticate these workers.
+**Local live development:** a normal laptop does not expose the Container Apps managed-identity endpoint. Explicitly choose `graphAuthentication: "certificate"` and provide the M365 application's `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`. Independently choose `healthReportAuthentication: "certificate"` with an Azure-authorized report application's `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH`. Upload the corresponding public certificates, keep private PEMs secure, and authorize each service principal only for its purpose. Hosted identity grants do not transfer to them. **Migration:** move old Graph certificate metadata from `AZURE_*` to `M365_*`; no legacy fallback occurs. `az login` alone does not authenticate these workers.
 
 ### 6. Prove one cycle before enabling recurrence
 
@@ -243,15 +259,17 @@ Managed identity authenticates Graph with `ManagedIdentityCredential({ clientId 
 
 | Surface | Current state |
 | --- | --- |
-| Exchange, Teams, SharePoint journeys and named steps | Implemented with safe simulation defaults and HTTP-mocked tests; all-service live failure-path acceptance passed, not successful-journey acceptance |
+| Exchange, Teams, SharePoint journeys and named steps | Seven implemented journeys, safe simulation defaults and HTTP-mocked tests; Exchange/Teams have recorded successful live acceptance; SharePoint setup remains incomplete |
 | Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
-| Root model of service models and journey/step entities | Redeployed report-only: four models, 34 entities, 30 relationships, six journeys and 18 business steps; External Reports only; original PoC model retained without queries |
+| Root model of service models and journey/step entities | Four models, 38 entities, 34 relationships, seven journeys and 21 business steps; External Reports always, OTEL optional |
 | Stable provider context / beta diagnostics | All three context signals verified Unknown with Graph 403/permission-failure diagnostics and suppressed impact; issues and beta remain diagnostics only, never synthetic success samples |
-| Worker hosting and packaging | All three apps have ready/running `--0000005` revisions on the same immutable digest; no Application Insights environment settings or ingestion secrets, only root/service config secrets; see the shared deployment guide |
-| Tenant authorization and runtime settings | Successful mailbox/site/team access, Graph/Exchange grants, stable Service Health consent, and bot installation/certificates still need acceptance |
-| Production operations | Report-only rollout, telemetry deletion and all-service live failure-path reporting/rollup verified; successful journeys, independent failure detection and notification acceptance remain unproven |
+| Worker hosting and packaging | Separate Container Apps reuse one immutable image; see the dated [live baseline](../docs/deployment.md#deployment-status-and-order) rather than treating sample settings as deployed state |
+| Tenant authorization and runtime settings | Mailbox-scoped Exchange and team-scoped Teams readback verified in the baseline; each new deployment must validate its own allowed/denied grants, targets and ingestion |
+| Production operations | Independent stalled-worker/broken-publication detection, end-to-end notifications and OTEL cloud ingestion remain acceptance gates |
 
-The [current report-only deployment](./infra/README.md#verified-report-only-deployment) has passed all-service live failure-path acceptance with **51 fresh external signals**. All six journeys and root/native-service references are Unhealthy; skipped actions are Unknown without values. All three provider context signals are Unknown with Graph 403/permission-failure diagnostics. Both the demo and original PoC telemetry pairs and associated smart-detector rules are deleted, along with four workspace-query settings and four scoped reader roles. No telemetry resources, query bindings, workspace authentication, instrumentation-key/ingestion secrets, or configured platform log-forwarding destination remain. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. These facts verify real failure reporting and rollup, **not successful Microsoft 365 availability, production readiness, or notification delivery**.
+The [deployment status](../docs/deployment.md#deployment-status-and-order) distinguishes
+successful live evidence, incomplete setup and unverified production gates. Do not
+infer tenant-wide availability, employee UI success or alert delivery from API tests.
 
 ## Components
 

@@ -38,6 +38,7 @@ interface Call {
 }
 interface ReadState { poll: number; page: number; marker: string; url: URL }
 interface RunOptions {
+  cleanupEnabled?: boolean;
   target?: Probe;
   timeoutMs?: number;
   deliveryAfter?: number;
@@ -116,7 +117,10 @@ async function run(options: RunOptions = {}) {
   const graph = new GraphClient(new AuthenticatedHttp(credential("graph"), graphScope, httpOptions));
   const teamsBot = new TeamsBotClient(new AuthenticatedHttp(credential("bot"), botScope, httpOptions), applicationId);
   const result = await teamsProbe(options.target ?? probe, {
-    config: { SYNTHETIC_SCENARIO: "healthy", PROBE_TIMEOUT_MS: options.timeoutMs ?? 1000, POLL_INTERVAL_MS: 100 },
+    config: {
+      SYNTHETIC_SCENARIO: "healthy", PROBE_TIMEOUT_MS: options.timeoutMs ?? 1000, POLL_INTERVAL_MS: 100,
+      TEAMS_CLEANUP_ENABLED: options.cleanupEnabled === false ? "false" : "true",
+    },
     graph, teamsBot, signal: controller.signal, telemetry, now: () => clock,
     sleep: async (ms, signal) => { signal.throwIfAborted(); clock += ms; },
   });
@@ -126,6 +130,30 @@ async function run(options: RunOptions = {}) {
 }
 
 describe("Teams bot post / Graph readback / bot delete", () => {
+  it.each([true, false])("honors the cleanup toggle after correct-author bot readback (enabled=%s)", async cleanupEnabled => {
+    const { result, calls, telemetry } = await run({ cleanupEnabled });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(cleanupEnabled ? 1 : 0);
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    if (cleanupEnabled) {
+      expect(result.steps.at(-1)?.status).toBe("succeeded");
+      expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+      expect(telemetry.emit).not.toHaveBeenCalledWith("teams-cleanup-disabled", expect.anything());
+    } else {
+      expect(result.steps.at(-1)).toMatchObject({ name: "cleanup", status: "skipped", reason: "cleanup-disabled" });
+      expect(result.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+      expect(telemetry.emit).toHaveBeenCalledWith("teams-cleanup-disabled", expect.objectContaining({ mode: "live", mutationAttempted: true }));
+    }
+  });
+  it("retains bot messages after failed correct-author readback without attempting cleanup", async () => {
+    const { result, calls } = await run({
+      cleanupEnabled: false, onRead: ({ marker }) => json({ value: [message(marker, tenantId)] }),
+    });
+    expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("read-failure");
+    expect(calls.some(call => call.method === "DELETE")).toBe(false);
+    expect(result.steps.at(-1)).toMatchObject({ status: "skipped", reason: "cleanup-disabled" });
+  });
   it("allows every named action to run directly against the existing strict HTTP clients", async () => {
     const urls: string[] = [];
     const marker = "AHM synthetic 11111111-1111-4111-8111-111111111111";
@@ -340,6 +368,24 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     ]);
   });
 
+  it.each([false, true])("accepts Graph's literal ':'/'@' next-link pathname (found on first page=%s)", async firstPage => {
+    const { result, calls } = await run({
+      onRead: ({ page, marker }) => page === 1
+        ? json({
+          value: [
+            ...Array.from({ length: firstPage ? 49 : 50 }, (_, index) => message(`unrelated ${index}`)),
+            ...(firstPage ? [message(marker)] : []),
+          ],
+          "@odata.nextLink": `${graphBase}${messagesPath.replace(/%3A/gi, ":").replace(/%40/gi, "@")}?$top=50&$skiptoken=${"x".repeat(608)}`,
+        })
+        : json({ value: [message(marker)] }),
+    });
+    expect(result.success).toBe(true);
+    const reads = calls.filter(call => call.method === "GET");
+    expect(reads).toHaveLength(firstPage ? 1 : 2);
+    expect(reads.every(call => new URL(call.url).pathname === `/v1.0${messagesPath}`)).toBe(true);
+  });
+
   it("fails an incomplete five-page search instead of reporting healthy or scanning indefinitely", async () => {
     const { result, calls } = await run({
       onRead: ({ page }) => json({ value: [], "@odata.nextLink": nextLink(`page-${page + 1}`) }),
@@ -361,7 +407,13 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     `https://graph.microsoft.com:443/v1.0${messagesPath}?$skiptoken=x`,
     `https://user@graph.microsoft.com/v1.0${messagesPath}?$skiptoken=x`,
     `${graphBase}/users?$skiptoken=x`,
+    `${graphBase}${messagesPath.replace(teamId, tenantId)}?$skiptoken=x`,
+    `${graphBase}${messagesPath.replace(encodeURIComponent(channelId), "19:other@thread.tacv2")}?$skiptoken=x`,
+    `${graphBase}${messagesPath.replace("%3A", "%2F")}?$skiptoken=x`,
+    `${graphBase}${messagesPath.replace("%3A", "%5C")}?$skiptoken=x`,
+    `${graphBase}${messagesPath.replace("%3A", "%253A")}?$skiptoken=x`,
     `${graphBase}${messagesPath}/../messages?$skiptoken=x`,
+    `${graphBase}${messagesPath}/%2e%2e/messages?$skiptoken=x`,
     `${graphBase}${messagesPath}?$skiptoken=x#fragment`,
     `${graphBase}${messagesPath}?$filter=anything&$skiptoken=x`,
     `${graphBase}${messagesPath}?$expand=replies&$skiptoken=x`,

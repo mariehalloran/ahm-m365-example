@@ -40,8 +40,15 @@ export function journeyFailure(result: SyntheticResult, error: unknown, telemetr
 
 export async function cleanupStep(
   result: SyntheticResult, mutationAttempted: boolean,
-  operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry, now: () => number,
+  operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry, now: () => number, enabled = true,
 ): Promise<void> {
+  if (!enabled) {
+    result.steps.push({ name: "cleanup", status: "skipped", observedAt: new Date(now()).toISOString(), reason: "cleanup-disabled" });
+    telemetry.emit(`${probeServices[result.testType].service}-cleanup-disabled`, {
+      testId: result.testId, correlationId: result.correlationId, mode: "live", mutationAttempted,
+    });
+    return;
+  }
   if (!mutationAttempted) {
     result.steps.push({ name: "cleanup", status: "skipped", observedAt: new Date(now()).toISOString(), reason: "no-mutation" });
     result.diagnosticContext.cleanupSucceeded = true;

@@ -62,8 +62,8 @@ class ModelTemplateContracts(unittest.TestCase):
         selected = self.selected(self.project)
         journeys = [journey for service in selected for journey in service["journeys"]]
         steps = sum(len(journey["steps"]) for journey in journeys)
-        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps, len(selected) * 2 + len(journeys) + steps), (4, 34, 30))
-        self.assertEqual(steps, 18)
+        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps, len(selected) * 2 + len(journeys) + steps), (4, 38, 34))
+        self.assertEqual(steps, 21)
         for service in self.catalog:
             for journey in service["journeys"]:
                 self.assertIn(journey["name"], self.project["services"][service["service"]]["scenarios"])
@@ -88,6 +88,17 @@ class ModelTemplateContracts(unittest.TestCase):
         for resource in self.resources:
             if "copy" in resource:
                 self.assertEqual(resource["copy"]["count"], "[length(variables('enabledServices'))]")
+
+    def test_individual_call_journey_has_shared_wait_steps_and_preserves_existing_ids(self):
+        teams = next(service for service in self.catalog if service["service"] == "teams")
+        self.assertEqual([journey["entityName"] for journey in teams["journeys"]],
+                         ["teams-global", "teams-reply", "teams-call"])
+        call = next(journey for journey in teams["journeys"] if journey["name"] == "call-test-user")
+        self.assertEqual([step["name"] for step in call["steps"]],
+                         ["place-call", "wait-before-hangup", "end-call"])
+        self.assertEqual(len(self.project["services"]["teams"]["callTargets"]), 3)
+        self.assertEqual(len(self.project["services"]["teams"]["targets"]), 1)
+        self.assertEqual((1 + len(call["steps"])) * 2, 8)
 
     def test_multiple_journeys_are_selected_independently_in_one_service(self):
         catalog = copy.deepcopy(self.catalog)

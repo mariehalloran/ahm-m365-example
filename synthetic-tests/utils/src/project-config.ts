@@ -38,11 +38,16 @@ export const projectConfigSchema = z.object({
       ...selection,
       scenarios: z.object({
         "publish-channel-message": z.boolean().default(true), "reply-channel-message": z.boolean().default(true),
+        "call-test-user": z.boolean().default(true),
       }).strict(),
       targets: z.array(target.extend({
         tenantId: probeSchema.shape.tenantId, teamId: probeSchema.shape.teamId,
+        userPrincipalName: probeSchema.shape.userPrincipalName,
         channelId: probeSchema.shape.channelId, serviceUrl: probeSchema.shape.serviceUrl,
       }).strict()).max(30),
+      callTargets: z.array(target.extend({
+        tenantId: z.string().uuid(), callUserId: z.string().uuid(),
+      }).strict()).max(30).default([]),
     }).strict(),
     sharepoint: z.object({
       ...selection,
@@ -63,6 +68,14 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
     throw new ConfigurationError(`Invalid project config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}`);
   }
   const project = parsed.data;
+  const teams = project.services.teams;
+  if (teams.enabled && teams.scenarios["call-test-user"] && teams.callTargets.length === 0) {
+    throw new ConfigurationError("Enabled call-test-user requires root-configured callTargets");
+  }
+  if (new Set(teams.callTargets.map(item => item.id)).size !== teams.callTargets.length ||
+      new Set(teams.callTargets.map(item => `${item.tenantId.toLowerCase()}:${item.callUserId.toLowerCase()}`)).size !== teams.callTargets.length) {
+    throw new ConfigurationError("Call target IDs and individual users must be unique");
+  }
   const policy = project.healthModel;
   if (policy.successUnhealthyPercent > policy.successDegradedPercent ||
       policy.latencyUnhealthyMilliseconds < policy.latencyDegradedMilliseconds) {
@@ -72,7 +85,8 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
     if (new Set(selected.targets.map(item => item.id)).size !== selected.targets.length) {
       throw new ConfigurationError("Project target IDs must be unique within each service");
     }
-    if (selected.enabled && Object.values(selected.scenarios).some(Boolean) && selected.targets.length === 0) {
+    const needsMessageTargets = selected !== teams || teams.scenarios["publish-channel-message"] || teams.scenarios["reply-channel-message"];
+    if (selected.enabled && Object.values(selected.scenarios).some(Boolean) && needsMessageTargets && selected.targets.length === 0) {
       throw new ConfigurationError("Enabled project scenarios require at least one target");
     }
   }
@@ -103,6 +117,7 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceFileC
   }
   return parseServiceConfig({
     ...service, enabled, targets: selected.targets,
+    ...(service.type === "teams" ? { callTargets: project.services.teams.callTargets } : {}),
   });
 }
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { probeServices, type Probe, type Scenario, type StepName, type SyntheticResult, type Telemetry, type TestType } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
-import type { TeamsBotClient } from "./teams.js";
+import type { TeamsJourneyClient } from "./teams.js";
 import { IntegrationError } from "./http.js";
 
 export interface ProbeContext {
@@ -9,10 +9,15 @@ export interface ProbeContext {
     SYNTHETIC_SCENARIO: Scenario;
     PROBE_TIMEOUT_MS: number;
     POLL_INTERVAL_MS: number;
+    TEAMS_CLEANUP_ENABLED?: "true" | "false";
+    EXCHANGE_CLEANUP_ENABLED?: "true" | "false";
+    TEAMS_CALLING_CALLBACK_URL?: string | undefined;
+    TEAMS_CALLING_WAIT_SECONDS?: number;
   };
   signal: AbortSignal;
   graph?: GraphClient;
-  teamsBot?: TeamsBotClient;
+  teamsBot?: TeamsJourneyClient;
+  teamsCalling?: GraphClient;
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -44,9 +49,11 @@ export function baseResult(probe: Probe, now: number): SyntheticResult {
   };
 }
 
-export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) => {
+export const simulate: ProbeHandler = async (probe, { config, telemetry, now = Date.now }) => {
   const result = baseResult(probe, now());
   const metadata = probeServices[probe.type];
+  const retainArtifacts = (metadata.service === "teams" && probe.type !== "teams-call" && config.TEAMS_CLEANUP_ENABLED === "false") ||
+    (metadata.service === "exchange" && config.EXCHANGE_CLEANUP_ENABLED === "false");
   const orderedSteps: readonly StepName[] = metadata.steps;
   const scenario = probe.scenario ?? config.SYNTHETIC_SCENARIO;
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
@@ -55,18 +62,20 @@ export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) 
     ? metadata.service === "sharepoint" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
     : scenario === "timeout" ? "delivery-timeout" : null;
   result.diagnosticContext.testStage = "simulated";
-  result.diagnosticContext.cleanupSucceeded = true;
+  if (!retainArtifacts) result.diagnosticContext.cleanupSucceeded = true;
   if (scenario === "stale") {
     result.observedAt = new Date(now() - 30 * 60 * 1000).toISOString();
   }
   const failureSteps = {
     "exchange-mail-flow": "send", "exchange-draft": "update-draft",
     "teams-channel-message": "post-message", "teams-channel-reply": "post-reply",
+    "teams-call": "place-call",
     "sharepoint-file": "read-file", "sharepoint-rename": "rename-file",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
     "teams-channel-message": "confirm-publication", "teams-channel-reply": "confirm-reply",
+    "teams-call": "wait-before-hangup",
     "sharepoint-file": "read-file", "sharepoint-rename": "read-file",
   } as const;
   const failedStep = scenario === "failed" ? failureSteps[probe.type]
@@ -74,10 +83,12 @@ export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) 
   const longStep = failedStep ?? completionSteps[probe.type];
   const baseline = (name: StepName) => ["authenticate", "cleanup", "verify-drive"].includes(name) ? 100 : 200;
   const fixedDuration = orderedSteps.reduce((sum, name) =>
-    sum + (name === longStep || (failedStep && name !== "cleanup" && orderedSteps.indexOf(name) > orderedSteps.indexOf(failedStep)) ? 0 : baseline(name)), 0);
+    sum + (name === longStep || (name === "cleanup" && retainArtifacts) ||
+      (failedStep && name !== "cleanup" && orderedSteps.indexOf(name) > orderedSteps.indexOf(failedStep)) ? 0 : baseline(name)), 0);
   let blocked = false;
   result.steps = orderedSteps.map(name => {
     const common = { name, observedAt: result.observedAt };
+    if (name === "cleanup" && retainArtifacts) return { ...common, status: "skipped", reason: "cleanup-disabled" };
     if (blocked && name !== "cleanup") return { ...common, status: "skipped", reason: "prerequisite-failed" };
     const durationMs = name === longStep ? Math.max(0, result.durationMs - fixedDuration) : baseline(name);
     if (name === failedStep) {
@@ -85,6 +96,10 @@ export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) 
       return { ...common, status: "failed", durationMs, diagnosticCategory: result.diagnosticCategory! };
     }
     return { ...common, status: "succeeded", durationMs };
+  });
+  if (retainArtifacts) telemetry.emit(`${metadata.service}-cleanup-disabled`, {
+    testId: result.testId, correlationId: result.correlationId, mode: "simulation",
+    mutationAttempted: false, simulation: true,
   });
   const stepDuration = (name: string) => {
     const step = result.steps.find(step => step.name === name);
@@ -96,7 +111,7 @@ export const simulate: ProbeHandler = async (probe, { config, now = Date.now }) 
     if (submitted === undefined || confirmed === undefined) throw new IntegrationError("malformed-response");
     return submitted + confirmed;
   };
-  const sendStep = metadata.service === "teams"
+  const sendStep = metadata.service === "teams" && probe.type !== "teams-call"
     ? probe.type === "teams-channel-reply" ? "post-reply" : "post-message"
     : probe.type === "exchange-mail-flow" ? "send" : undefined;
   if (sendStep) {

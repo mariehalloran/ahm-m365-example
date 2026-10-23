@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { AuthenticatedHttp, IntegrationError } from "./http.js";
+import type { TeamsUserClient } from "./teams-user.js";
+
+export type TeamsJourneyClient = TeamsBotClient | TeamsUserClient;
 
 const identifier = z.string().min(1).max(2048).refine(value =>
   value.trim() === value && value !== "." && value !== ".." && !/[\u0000-\u001f\u007f]/.test(value));
@@ -14,6 +17,7 @@ export function validateTeamsServiceUrl(value: string): string {
 }
 
 export class TeamsBotClient {
+  readonly userDelegated = false;
   constructor(private readonly http: AuthenticatedHttp, public readonly applicationId: string) {
     if (!z.string().uuid().safeParse(applicationId).success) throw new IntegrationError("collector-failure");
   }

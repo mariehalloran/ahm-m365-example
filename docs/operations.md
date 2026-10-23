@@ -2,9 +2,9 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only that cycle's results by journey/action. It publishes success-percentage and mean-duration health reports to separate journey and business-step entities through **External Reports**, independently of optional OTEL export/query signals. **No Blob/file history or cross-cycle health state is stored**. Two journeys per product use the same three Container Apps; the full family has four models, 34 entities, 30 relationships and 18 business-step entities.
+Each service process runs its selected journeys and aggregates only that cycle's results by journey/action. It publishes success-percentage and mean-duration health reports to separate journey and business-step entities through **External Reports**, independently of optional OTEL export/query signals. **No journey history or cross-cycle health state is stored**; only optional delegated Teams persists protected authentication state. Seven journeys reuse three Container Apps; the full family has four models, 38 entities, 34 relationships and 21 business-step entities.
 
-Exchange, Teams, and SharePoint use separate configs/cadences and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for the no-ingress, single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions.
+Exchange, Teams, and SharePoint use separate configs/cadences and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
 Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey, config and tests; shared code and Node tooling also live in that project. Checked-in configs use simulation: console diagnostics and report previews make no live mutations or Azure calls.
 
@@ -24,15 +24,26 @@ Do not enable live mode against real-user resources.
 1. Obtain dedicated approved targets and an owner. Use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) for Exchange.
 2. Scope Exchange `Application Mail.ReadWrite` and `Application Mail.Send` to only approved mailboxes using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access.
 3. For SharePoint, use `Sites.Selected` and an explicit write grant to the approved site. The handler verifies drive/site ownership.
-4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. `graphAuthentication` defaults to `managed-identity`, using only that identity; no certificate, CLI, secret or host-identity fallback. For local live development only, opt into `certificate` and supply `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH`. Protect/ignore the private key.
+4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
 5. Set the config to `mode: live` and independently opt in through `ENABLE_LIVE_M365=true`.
 6. Use `--once` first and inspect operation and cleanup outcomes.
 
-Teams also needs an already registered/installed bot and a dedicated standard channel, plus a Graph observer with team-scoped `ChannelMessage.Read.Group`. Supply separate `BOT_TENANT_ID`, `BOT_CLIENT_ID`, `BOT_CLIENT_CERTIFICATE_PATH` and expected `AZURE_TENANT_ID`; bot/observer/target tenants must match even with Graph MI. The bot stays certificate-backed; Graph MI does not authorize bot posting automatically. Use only validated installation metadata. The worker does not request migration permissions, create a bot, or bypass user sign-in policies.
+Teams defaults to an installed managed-identity bot in a dedicated standard channel.
+Supply `BOT_TENANT_ID`/`BOT_CLIENT_ID` for the bot UAMI and matching
+`AZURE_TENANT_ID`. A separate same-tenant Entra application holds team-scoped
+`ChannelMessage.Read.Group`; service `teamsReadbackClientId` selects it through
+worker-UAMI federation. The manifest's `webApplicationInfo.id` references this
+application, not the UAMI. See [bot setup](../synthetic-tests/teams/README.md#primary-setup-unattended-bot).
+No runtime user MFA/cache or certificate is needed. Direct calls separately require
+approved `Calls.Initiate.All` and root-owned call targets; successful calling is
+placement/wait/verified hang-up, not answer/media proof.
 
-Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). They need no user password, interactive mailbox sign-in, directory-wide permission, `ServiceHealth.Read.All`, or Blob access. Optional provider collection requires its separately approved read-only application permissions; it never grants them.
+Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). Default bot/mail/file journeys need no user password, interactive sign-in or Blob access. Calling's tenant-wide application permission is a separate approved exception, not a scoped recipient grant. Optional provider collection requires separately approved read-only application permissions; it never grants them.
 
-Hosted cross-tenant Graph credential loading is not implemented. The current Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
+Explicit certificate-backed cross-tenant Graph is supported; generic cross-tenant
+managed-identity federation is not. The Teams readback federation above is same-tenant.
+The Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra
+Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
 
 ## Direct health reporting
 

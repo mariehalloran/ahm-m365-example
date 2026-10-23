@@ -3,7 +3,13 @@
   "intervalSeconds": 120,
   "timeoutSeconds": 45,
   "mode": "live",
+  "teamsAuthentication": "bot",
+  "botAuthentication": "managed-identity",
+  "teamsCallingPort": 8080,
+  "teamsCallingWaitSeconds": 10,
+  "teamsCleanupEnabled": true,
   "graphAuthentication": "managed-identity",
+  "healthReportAuthentication": "managed-identity",
   "serviceHealth": true,
   "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
   "cohort": "teams-global"

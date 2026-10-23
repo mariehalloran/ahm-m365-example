@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
-import { ConfigurationError, loadConfig, type Config } from "./config.js";
+import { ConfigurationError, loadConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 
 export const activityFunctions = {
   exchange: ["getConnectivityMetricsForExchange"],
@@ -21,6 +21,15 @@ const serviceFields = {
   scenario: z.enum(scenarios).default("healthy"),
   cohort: probeSchema.shape.cohort,
   graphAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
+  teamsAuthentication: z.enum(["user-delegated", "bot"]).default("bot"),
+  botAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
+  teamsReadbackClientId: z.string().uuid().optional(),
+  teamsCallingCallbackUrl: teamsCallingCallbackUrlSchema.optional(),
+  teamsCallingPort: z.number().int().min(1024).max(65535).default(8080),
+  teamsCallingWaitSeconds: z.number().int().min(1).max(30).default(10),
+  teamsCleanupEnabled: z.boolean().default(true),
+  exchangeCleanupEnabled: z.boolean().default(true),
+  healthReportAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
   serviceHealth: z.boolean().default(false),
   serviceActivity: serviceActivitySchema.default({}),
 };
@@ -48,15 +57,23 @@ const serviceSchema = z.discriminatedUnion("type", [
     ...common, type: z.literal("teams"),
     targets: z.array(target.extend({
       tenantId: probeSchema.shape.tenantId,
+      userPrincipalName: probeSchema.shape.userPrincipalName,
       teamId: probeSchema.shape.teamId,
       channelId: probeSchema.shape.channelId,
       serviceUrl: probeSchema.shape.serviceUrl,
     }).strict()).max(30),
+    callTargets: z.array(target.extend({
+      tenantId: z.string().uuid(), callUserId: z.string().uuid(),
+    }).strict()).max(30).default([]),
   }).strict(),
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
 
 function validateProviderSettings(service: ServiceFileConfig): void {
+  if (service.teamsReadbackClientId !== undefined &&
+      (service.type !== "teams" || service.teamsAuthentication !== "bot" || service.graphAuthentication !== "managed-identity")) {
+    throw new ConfigurationError("teamsReadbackClientId requires Teams bot mode with managed-identity Graph authentication");
+  }
   const activity = service.serviceActivity;
   if (activity.lookbackMinutes < activity.aggregationIntervalMinutes ||
       activity.lookbackMinutes % activity.aggregationIntervalMinutes !== 0) {
@@ -83,8 +100,16 @@ export function parseServiceConfig(raw: unknown): ServiceConfig {
     throw new ConfigurationError(`Invalid service config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}`);
   }
   const service = parsed.data;
+  if (service.type === "teams" && service.enabled && service.mode === "live" && service.teamsAuthentication === "user-delegated") {
+    const tenants = new Set(service.targets.map(item => item.tenantId?.toLowerCase()));
+    if (tenants.size > 1) {
+      throw new ConfigurationError("Delegated Teams targets must use one tenantId");
+    }
+  }
   validateProviderSettings(service);
-  if (service.enabled && service.targets.length === 0) throw new ConfigurationError("Enabled service config requires at least one target");
+  if (service.enabled && service.targets.length === 0 && (service.type !== "teams" || service.callTargets.length === 0)) {
+    throw new ConfigurationError("Enabled service config requires at least one target");
+  }
   if (new Set(service.targets.map(item => item.id)).size !== service.targets.length) {
     throw new ConfigurationError("Probe IDs must be unique");
   }
@@ -106,7 +131,8 @@ export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readon
   const selected = selectedScenarios
     ? supported.filter(type => selectedScenarios[probeServices[type].journey])
     : supported.slice(0, 1);
-  return selected.flatMap(type => service.targets.map(item => ({ ...item, cohort: service.cohort, type })));
+  return selected.flatMap(type => (type === "teams-call" && service.type === "teams" ? service.callTargets : service.targets)
+    .map(item => ({ ...item, cohort: service.cohort, type })));
 }
 
 export function serviceSettings(
@@ -119,6 +145,13 @@ export function serviceSettings(
   return loadConfig({
     ...env,
     EXECUTION_MODE: service.mode,
+    TEAMS_AUTHENTICATION: service.teamsAuthentication,
+    BOT_AUTHENTICATION: service.botAuthentication,
+    TEAMS_CALLING_CALLBACK_URL: service.teamsCallingCallbackUrl,
+    TEAMS_CALLING_PORT: String(service.teamsCallingPort),
+    TEAMS_CALLING_WAIT_SECONDS: String(service.teamsCallingWaitSeconds),
+    TEAMS_CLEANUP_ENABLED: String(service.teamsCleanupEnabled),
+    EXCHANGE_CLEANUP_ENABLED: String(service.exchangeCleanupEnabled),
     SYNTHETIC_SCENARIO: service.scenario,
     PROBE_TIMEOUT_MS: String(service.timeoutSeconds * 1000),
     PROBES_JSON: JSON.stringify(serviceProbes(service, selectedScenarios)),

@@ -30,7 +30,8 @@ export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
     journeyFailure(result, error, telemetry);
   } finally {
     await cleanupStep(result, attempt.mutationAttempted,
-      cleanupSignal => cleanup(context.graph!, attempt, cleanupSignal), telemetry, now);
+      cleanupSignal => cleanup(context.graph!, attempt, cleanupSignal), telemetry, now,
+      context.config.EXCHANGE_CLEANUP_ENABLED !== "false");
   }
   return finishJourney(result, startedAt, now);
 };

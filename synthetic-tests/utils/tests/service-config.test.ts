@@ -9,9 +9,23 @@ const raw = {
 describe("strict config-first service settings", () => {
   it("defaults to explicit managed identity and one target with no history or exporter settings", () => {
     const service = parseServiceConfig(raw);
-    expect(service).toMatchObject({ scenario: "healthy", graphAuthentication: "managed-identity" });
+    expect(service).toMatchObject({
+      scenario: "healthy", graphAuthentication: "managed-identity", healthReportAuthentication: "managed-identity",
+      teamsAuthentication: "bot", botAuthentication: "managed-identity",
+    });
     expect(service).not.toHaveProperty("telemetry");
     expect(serviceSettings(service, {}).probes).toHaveLength(1);
+  });
+  it.each(["cli", "default", "", null, true])("rejects unsupported bot authentication %s", botAuthentication => {
+    expect(() => parseServiceConfig({ ...raw, botAuthentication })).toThrow("botAuthentication");
+  });
+  it("keeps Bot Connector and Graph selectors independent and service-file-owned", () => {
+    const service = parseServiceConfig({ ...raw, type: "teams", graphAuthentication: "certificate" });
+    expect(serviceSettings(service, { BOT_AUTHENTICATION: "certificate" })).toMatchObject({
+      TEAMS_AUTHENTICATION: "bot", BOT_AUTHENTICATION: "managed-identity",
+    });
+    expect(parseServiceConfig({ ...service, botAuthentication: "certificate" }).graphAuthentication).toBe("certificate");
+    expect(serviceSettings(service, { TEAMS_AUTHENTICATION: "user-delegated" }).TEAMS_AUTHENTICATION).toBe("bot");
   });
   it("expands only selected journeys while reusing the target without extra target inventories", () => {
     const service = parseServiceConfig(raw);
@@ -19,6 +33,23 @@ describe("strict config-first service settings", () => {
       .toEqual(["exchange-mail-flow", "exchange-draft"]);
     expect(serviceSettings(service, {}, { "send-receive-mail": false, "edit-reopen-draft": true }).probes.map(probe => probe.type))
       .toEqual(["exchange-draft"]);
+  });
+  it("accepts every supported Teams target across both message journeys and individual calls", () => {
+    const service = parseServiceConfig({
+      ...raw, type: "teams", cohort: "teams-global",
+      targets: Array.from({ length: 30 }, (_, index) => ({ id: `channel-${index}` })),
+      callTargets: Array.from({ length: 30 }, (_, index) => ({
+        id: `call-${index}`, tenantId: "11111111-1111-4111-8111-111111111111",
+        callUserId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+      })),
+    });
+    const config = serviceSettings(service, {}, {
+      "publish-channel-message": true, "reply-channel-message": true, "call-test-user": true,
+    });
+    expect(config.probes).toHaveLength(90);
+    for (const type of ["teams-channel-message", "teams-channel-reply", "teams-call"]) {
+      expect(config.probes.filter(probe => probe.type === type)).toHaveLength(30);
+    }
   });
   it.each([null, [], "exchange", { ...raw, unexpected: true }, { ...raw, type: "unknown" }, { ...raw, enabled: "true" }])(
     "rejects invalid top-level JSON objects", value => expect(() => parseServiceConfig(value)).toThrow("Invalid service config"),
@@ -31,6 +62,18 @@ describe("strict config-first service settings", () => {
   });
   it.each(["default", "cli", "", null, true])("rejects unsupported Graph authentication %s", graphAuthentication => {
     expect(() => parseServiceConfig({ ...raw, graphAuthentication })).toThrow("graphAuthentication");
+  });
+  it.each(["default", "cli", "", null, true])("rejects unsupported health-report authentication %s", healthReportAuthentication => {
+    expect(() => parseServiceConfig({ ...raw, healthReportAuthentication })).toThrow("healthReportAuthentication");
+  });
+  it("keeps Graph and report modes independent in runtime and service-file configs", () => {
+    expect(parseServiceConfig({ ...raw, graphAuthentication: "certificate" })).toMatchObject({
+      graphAuthentication: "certificate", healthReportAuthentication: "managed-identity",
+    });
+    const { enabled: _enabled, targets: _targets, ...file } = raw;
+    expect(parseServiceFileConfig({ ...file, healthReportAuthentication: "certificate" })).toMatchObject({
+      graphAuthentication: "managed-identity", healthReportAuthentication: "certificate",
+    });
   });
   it.each([0, -1, 1.1, 86401, "60"])("rejects invalid intervals %s", intervalSeconds => {
     expect(() => parseServiceConfig({ ...raw, intervalSeconds })).toThrow("intervalSeconds");
@@ -69,7 +112,7 @@ describe("strict config-first service settings", () => {
   });
   it("requires complete, trusted Teams resource configuration in live mode", () => {
     const teams = {
-      ...raw, type: "teams", mode: "live",
+      ...raw, type: "teams", mode: "live", teamsAuthentication: "bot",
       targets: [{
         id: "teams-001",
         tenantId: "11111111-1111-4111-8111-111111111111",

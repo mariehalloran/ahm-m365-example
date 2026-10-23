@@ -4,6 +4,7 @@
   "timeoutSeconds": 45,
   "mode": "live",
   "graphAuthentication": "managed-identity",
+  "healthReportAuthentication": "managed-identity",
   "serviceHealth": true,
   "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
   "cohort": "sharepoint-global"

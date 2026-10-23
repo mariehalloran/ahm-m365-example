@@ -4,6 +4,7 @@
   "timeoutSeconds": 45,
   "mode": "simulation",
   "graphAuthentication": "managed-identity",
+  "healthReportAuthentication": "managed-identity",
   "serviceHealth": false,
   "serviceActivity": { "enabled": false, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 },
   "cohort": "exchange-global"

@@ -24,6 +24,7 @@ interface Options {
   authFail?: boolean;
   missingMailbox?: boolean;
   cleanupFail?: boolean;
+  cleanupEnabled?: boolean;
 }
 
 async function runDraft(options: Options = {}) {
@@ -80,7 +81,8 @@ async function runDraft(options: Options = {}) {
   const selectedProbe = { ...probe };
   if (options.missingMailbox) delete selectedProbe.mailbox;
   const result = await exchangeDraftProbe(selectedProbe, {
-    config, graph, telemetry, signal: controller.signal, now: () => time,
+    config: { ...config, EXCHANGE_CLEANUP_ENABLED: options.cleanupEnabled === false ? "false" : "true" },
+    graph, telemetry, signal: controller.signal, now: () => time,
   });
   expect(resultSchema.safeParse(result).success).toBe(true);
   expect(result.steps.map(step => step.name)).toEqual(["authenticate", "create-draft", "update-draft", "read-draft", "cleanup"]);
@@ -88,6 +90,19 @@ async function runDraft(options: Options = {}) {
 }
 
 describe("Exchange save/edit/reopen draft journey", () => {
+  it.each([undefined, "update", "read"] as const)("retains the draft without cleanup/reconciliation after %s", async stage => {
+    const { result, calls, telemetry } = await runDraft({
+      cleanupEnabled: false, ...(stage ? { failure: { stage, status: 503 } } : {}),
+    });
+    expect(result.success).toBe(stage === undefined);
+    expect(result.steps.at(-1)).toMatchObject({ name: "cleanup", status: "skipped", reason: "cleanup-disabled" });
+    expect(result.steps.at(-1)).not.toHaveProperty("durationMs");
+    expect(result.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+    expect(calls.some(call => call.method === "DELETE" || new URL(call.url).searchParams.has("$filter"))).toBe(false);
+    expect(telemetry.emit).toHaveBeenCalledWith("exchange-cleanup-disabled", expect.objectContaining({
+      mode: "live", mutationAttempted: true,
+    }));
+  });
   it("refuses to edit or reopen a message that was not created by this attempt", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const graph = new GraphClient(new AuthenticatedHttp({

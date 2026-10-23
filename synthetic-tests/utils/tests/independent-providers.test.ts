@@ -51,12 +51,13 @@ function project(): ProjectConfig {
     id: "teams-one", tenantId: env.AZURE_TENANT_ID, teamId: "33333333-3333-4333-8333-333333333333",
     channelId: "approved-channel", serviceUrl: "https://smba.trafficmanager.net/teams/",
   }];
+  configured.services.teams.scenarios["call-test-user"] = false;
   configured.services.sharepoint.targets = [{ id: "sharepoint-one", siteId: "site", driveId: "drive", folderId: "folder" }];
   return configured;
 }
 function service(type: ServiceConfig["type"]): ServiceConfig {
   return parseServiceConfig({
-    type, enabled: true, mode: "live", serviceHealth: true,
+    type, enabled: true, mode: "live", serviceHealth: true, teamsAuthentication: "bot",
     cohort: `${type}-global`, intervalSeconds: 60, timeoutSeconds: 45, targets: [{ id: `${type}-one` }],
   });
 }
@@ -143,7 +144,8 @@ describe("stable provider collection independent of live journey initialization"
       String(url).includes("/v1.0/") && init?.method === "GET")).toBe(true);
     expect(results.record).toHaveBeenCalledTimes(2);
     expect(results.record.mock.calls.map(([result]) => result.testType)).toEqual(
-      Object.keys(probeServices).filter(typeName => probeServices[typeName as keyof typeof probeServices].service === type),
+      Object.keys(probeServices).filter(typeName => typeName !== "teams-call" &&
+        probeServices[typeName as keyof typeof probeServices].service === type),
     );
     expect(results.record.mock.calls.every(([result]) =>
       !result.success && result.steps.length === 0 && result.diagnosticCategory === "configuration-failure")).toBe(true);
@@ -232,7 +234,7 @@ describe("stable provider collection independent of live journey initialization"
     const fetcher = providerTraffic("teams");
     await expect(runServiceWorker(service("teams"), {
       project: project(), once: true, env, providers: teamsProviders, telemetry: output,
-    })).rejects.toThrow("bot certificate settings");
+    })).rejects.toThrow("explicit bot settings");
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(results.record).toHaveBeenCalledTimes(2);
     expect(results.recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "overview" }));

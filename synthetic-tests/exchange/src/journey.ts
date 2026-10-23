@@ -101,6 +101,7 @@ export const exchangeProbe: ProbeHandler = async (probe, context) => {
       (cleanupSignal) => cleanup(context.graph!, attempt, cleanupSignal),
       telemetry,
       now,
+      config.EXCHANGE_CLEANUP_ENABLED !== "false",
     );
   }
   return finishJourney(result, startedAt, now);

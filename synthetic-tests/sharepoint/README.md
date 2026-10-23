@@ -57,7 +57,7 @@ Use an application identity with:
 - Microsoft Graph **`Sites.Selected` application permission**.
 - An explicit **`write` role grant on only the dedicated site**. The role permits the readback and file mutations needed here.
 - An approved same-tenant user-assigned managed identity for hosted Graph. `graphAuthentication` defaults to `managed-identity`; the explicit UUID `AZURE_CLIENT_ID` selects only that identity, without CLI/default/certificate fallback.
-- For local live development only, opt into `graphAuthentication: "certificate"` with `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH`.
+- For hosted cross-tenant or local live access, opt into `graphAuthentication: "certificate"` with the M365 application's `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`. Graph certificates no longer use `AZURE_*`; health reports select `healthReportAuthentication` independently and default to the Azure UAMI. Follow the [cross-tenant administrator and deployment guide](../../docs/cross-tenant-access.md).
 
 No `Sites.ReadWrite.All`, directory-wide discovery, real-user document access, or library-wide deletion is requested. The explicit site grant is an administrator setup action, not part of the periodic journey.
 

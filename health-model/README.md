@@ -2,7 +2,10 @@
 
 The [root config](../monitoring.config.json) selects services/scenarios, report policy and optional OTEL. The root health model references separate service models. Each selected journey has its own entity, with **business-step child entities**. Each journey and step always has an **External Reports** signal group; Azure Monitor export optionally adds an **OpenTelemetry** group.
 
-The isolated development family is `m365-experience-demo` in `rg-m365-demo`, redeployed report-only with four models, 34 entities, 30 relationships, six journeys and 18 business-step entities. The older `m365-experience-poc` remains separate: its model entities/root are retained and queries removed. Both families' old telemetry pairs and associated smart-detector rules have been deleted; see [Apply and migrate](#apply-and-migrate). Normal workspace deletion has a 14-day recovery window, not a permanent purge. Provisioning and failure-path testing do not prove successful Microsoft 365 access or production readiness.
+Use the same reviewed root configuration for model and worker deployment. For
+recorded live acceptance and remaining gaps, see [deployment status](../docs/deployment.md#deployment-status-and-order).
+Provisioning or failure-path testing alone does not prove successful Microsoft 365
+access or production readiness.
 
 ## Structure
 
@@ -28,6 +31,10 @@ Root model: Microsoft 365 Experience
 |   |   +-- Post message
 |   |   +-- Post reply
 |   |   `-- Confirm reply
+|   +-- Call test users [teams-call entity]
+|   |   +-- Place individual call
+|   |   +-- Wait before hang-up
+|   |   `-- End call and confirm disconnected
 |   `-- Service Health [suppressed context entity]
 |
 `-- SharePoint Experience [references the SharePoint model]
@@ -45,9 +52,9 @@ Root model: Microsoft 365 Experience
 
 Token acquisition and cleanup still execute internally, but have **no published step results or standalone health signals**. Operational failures remain journey diagnostics; hiding these steps does not remove credentials, cleanup, cancellation budgets, or failure handling.
 
-The service catalog contains two implemented journeys per service. Each enabled scenario receives its own entity and child business steps, without another service model or worker. Step IDs are journey-scoped (`<journey-entity>-<step>`), so reused actions never collide.
+The service catalog contains two journeys each for Exchange/SharePoint and three for Teams, including signaling-only individual test-user calls. Each enabled scenario receives its own entity and child business steps without another service model or worker. Step IDs are journey-scoped (`<journey-entity>-<step>`), so reused actions never collide.
 
-The default family has **four models, 34 entities and 30 relationships**: six journey entities, 18 business-step entities, service/root entities, three native model references and three suppressed Service Health entities. Service roots depend on their journeys and context; journeys depend on their business steps. Rollup uses `WorstOf` and `ignoreUnknown: false`.
+The default source family has **four models, 38 entities and 34 relationships**: seven journey entities, 21 business-step entities, service/root entities, three native model references and three suppressed Service Health entities. Service roots depend on their journeys and context; journeys depend on their business steps. Rollup uses `WorstOf` and `ignoreUnknown: false`. The `teams-call` journey has `place-call`, `wait-before-hangup`, `end-call` children; existing messaging/Exchange/SharePoint IDs are unchanged. Three user attempts aggregate into these shared entities, not per-user signals. Healthy calling is placement, dwell and verified hang-up, not proof of recipient ringing or receipt.
 
 Service models are named `<healthModel.name>-<service>`. Existing journey IDs (`exchange-global`, `teams-global`, `sharepoint-global`) remain stable. Each model's root entity has the same name as its model. Root prefixes are limited to 33 characters so service suffixes fit the 44-character model limit.
 
@@ -88,13 +95,13 @@ With OTEL disabled there are no query-backed sources. External Reports groups us
 
 Root `otel.enabled` defaults to false. Only `enabled: true` with `destination: azure-monitor` and at least one enabled journey provisions Log Analytics and workspace-backed Application Insights. `destination: console` is a local OTEL preview and does not create telemetry infrastructure or query-backed signals.
 
-Azure export adds `otel-success-percentage` and `otel-mean-duration` under **OpenTelemetry** on every enabled journey/business-step entity. The existing External Reports group, reports and 34-entity topology remain intact. Service Health stays suppressed and external-report-only. No per-target signal inventories or monitoring-pipeline entities are added.
+Azure export adds `otel-success-percentage` and `otel-mean-duration` under **OpenTelemetry** on every enabled journey/business-step entity. External Reports and the selected topology remain intact (38 entities with all seven journeys). Service Health stays suppressed and external-report-only. No per-target signal inventories or monitoring-pipeline entities are added.
 
 The shared [KQL source](./queries/synthetic.kql) binds the Application Insights resource ID, service, journey and business step. It queries `AppTraces` for live schema-2.0 `synthetic-result` or `synthetic-step` logs with observation and ingestion timestamps inside 15 minutes. Skipped/internal actions and provider logs cannot become synthetic samples. Success is the mean of binary samples times 100; duration is mean milliseconds, including executed failures. No data yields no numeric result, not a healthy fallback. Queries evaluate every minute and use the same root thresholds as direct reports, but their rolling window can differ from current-cycle report health and adds ingestion/query latency.
 
 Each service-model identity receives workspace-scoped Log Analytics Reader and managed-identity query authentication. Workers receive no workspace-query permission. Default resource names are `law-<model-name>` and `appi-<model-name>`; if overridden, use the same Application Insights name in the worker deployment. Connection strings are not model deployment outputs.
 
-Enabling export adds ingestion/storage/query costs and requires verifying actual `AppTraces`/metrics arrival and model evaluation. This source restoration has not changed the recorded report-only cloud deployment.
+Enabling export adds ingestion/storage/query costs and requires verifying actual `AppTraces`/metrics arrival and model evaluation. Offline validation does not establish cloud ingestion.
 
 ## Implementation and permissions
 
@@ -124,13 +131,14 @@ az deployment group create --subscription '<approved-subscription>' \
   --parameters projectConfig=@/absolute/path/monitoring.private.json
 ```
 
-Deploy the model before the matching worker image so all six journey and journey-scoped step destinations exist before reports arrive. The previous compact layout's inline `<step>-*` external signals stop refreshing after worker cutover and disappear after their existing TTL (normally 15 minutes); do not invent reports or recreate journey entities to clear them. Reconcile any earlier unscoped step entities/relationships only after verifying ownership.
+Deploy the model before the matching worker image so all seven selected journey and journey-scoped step destinations exist before reports arrive. Explicitly select `call-test-user` in the same root profile used by model and worker deployment. Adding it creates four entities, four relationships and eight external signals, preserving the existing six journeys. The previous compact layout's inline `<step>-*` external signals stop refreshing after worker cutover and disappear after their existing TTL (normally 15 minutes); do not invent reports or recreate journey entities to clear them. Reconcile any earlier unscoped step entities/relationships only after verifying ownership.
 
 **Incremental deployment does not delete obsolete resources.** When opting out of previously deployed OTEL, explicitly reconcile old query signals/groups, query authentication, scoped reader assignments and obsolete app connection-string settings. Delete only owned telemetry resources after reviewing retention/export obligations; never delete an active destination merely because earlier report-only migration instructions did so. Preserve model entities/root, native references and workers. When enabling OTEL, deploy model/telemetry resources before the matching workers. Never use complete deployment mode on a shared resource group.
 
-For the current demo, cleanup and report-only redeployment are verified: both telemetry pairs and associated smart-detector rules are deleted, four workspace-query settings and four scoped reader-role assignments are removed, and all three apps have ready/running `--0000006` revisions with no Application Insights environment settings or ingestion secrets. The latest model and optional-OTEL-capable workers were redeployed on 2026-10-22 with OTEL disabled. Only root/service configuration secrets remain. Normal workspace deletion has a **14-day recovery window**, not a permanent purge. The original PoC model entities/root remain with their queries removed.
-
-The [shared worker guide](../synthetic-tests/infra/README.md#verified-report-only-deployment) records the immutable image digest and passed all-service live failure-path acceptance. All **51 external signals are fresh**: all six journeys are Unhealthy, skipped business actions are Unknown without numeric values, and all three Service Health context signals are Unknown with Graph 403/permission-failure diagnostics. The root and native service references are Unhealthy. No telemetry resources, query bindings, workspace authentication, instrumentation-key/ingestion secrets, or configured platform log-forwarding destination remain. This verifies real failure reporting and model rollup, not successful Microsoft 365 journeys or notification delivery.
+When changing business-step IDs, deploy the new entities/relationships before
+worker cutover. Verify fresh reports, then remove only the superseded owned
+relationships/entities. Do not recreate stable journey roots or delete unrelated
+resources; incremental deployments can leave both generations present.
 
 ## Validation and limits
 
@@ -143,4 +151,4 @@ Offline tests cover scenario selection, multiple journey definitions, optional w
 
 Verify live business-action data, fresh direct reports and service/root rollup after deployment. Successful token acquisition is not mailbox access, API-backed tests are not employee login/UI tests, and Unhealthy configuration failures are not proof of a Microsoft outage.
 
-With both journeys per product at default cadence, synthetic journey/step reports make about **38,304 calls/day before retries**, plus stable provider reports when enabled. No extra Container Apps are added. Review applicable pricing, report/API quotas and the [enterprise acceptance gate](../docs/operations.md#enterprise-reliability-acceptance-gate). Passed all-service live failure-path acceptance does not establish successful tenant journeys, production readiness, or notification delivery.
+With all seven journeys at default cadence, synthetic journey/step reports make about **44,064 ingestion calls/day before retries**, plus stable provider reports when enabled. No extra Container Apps are added. Calling adds service API traffic and a Teams-only authenticated public callback; it proves placement, configured dwell and disconnection, not ringing, device notification, employee sign-in or media quality. Three sample user attempts aggregate into the same eight call signals per cycle. Review applicable pricing, report/API quotas and the [enterprise acceptance gate](../docs/operations.md#enterprise-reliability-acceptance-gate).

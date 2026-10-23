@@ -38,7 +38,16 @@ Separate service processes do not block each other. Keep one authoritative insta
 | `intervalSeconds` | Start-to-start cadence, 1-86,400 seconds |
 | `timeoutSeconds` | Probe execution timeout, up to 120 seconds; cleanup has a separate bounded budget |
 | `mode` | `simulation` or `live` |
-| `graphAuthentication` | `managed-identity` by default; `certificate` is explicit local-live opt-in |
+| `graphAuthentication` | `managed-identity` by default for same-tenant Graph; explicit `certificate` uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for hosted cross-tenant or local access |
+| `teamsAuthentication` | Default `bot`; `user-delegated` is explicitly opt-in and requires approved human bootstrap |
+| `botAuthentication` | Independently defaults to `managed-identity`, explicitly selecting `BOT_CLIENT_ID` and same-tenant `BOT_TENANT_ID`; optional `certificate` requires `BOT_CLIENT_CERTIFICATE_PATH` |
+| `teamsReadbackClientId` | Optional same-tenant Entra application for bot Graph readback through worker-UAMI federation; requires Teams bot mode and managed-identity Graph authentication |
+| `healthReportAuthentication` | Independently defaults to `managed-identity` using `AZURE_CLIENT_ID`; explicit local `certificate` uses `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH` |
+| `exchangeCleanupEnabled` | Default `true`; set `false` in the Exchange service file to retain Inbox/Sent Items copies and draft-journey artifacts for inspection |
+| `teamsCleanupEnabled` | Default `true`; set `false` in the Teams service file to retain channel posts and replies for inspection |
+| `teamsCallingCallbackUrl` | Required for selected live calls: real public HTTPS URL with exact `/api/calls` path; only the Teams app gets ingress |
+| `teamsCallingPort` | Callback listener port, default 8080 |
+| `teamsCallingWaitSeconds` | Dwell after individual call placement, default 10 seconds (1–30); does not prove ringing/receipt, and hang-up is never disabled by message retention |
 | `serviceHealth` | Optional boolean, default `false`; stable Microsoft service health context only |
 | `serviceActivity` | Optional strict beta diagnostic settings, default disabled; see below |
 | `scenario` | Optional deterministic simulation scenario |
@@ -50,11 +59,13 @@ The obsolete per-service `reportToHealthModel` field remains rejected: live work
 
 ## Per-cycle health reports
 
-For each complete cycle, report each selected journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of the optional OpenTelemetry group. Success counts only executed samples and duration includes executed failures. Token acquisition and cleanup remain internal; the publication projection excludes their steps and private timing/status fields from console results, reports and OTEL. Operational failures still explain unsuccessful journeys, and cleanup still executes safely. All six journeys produce 18 business-step entities within a family of four models, 34 entities and 30 relationships.
+For each complete cycle, report each selected journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of the optional OpenTelemetry group. Success counts only executed samples and duration includes executed failures. Token acquisition and cleanup remain internal; the publication projection excludes their steps and private timing/status fields from console results, reports and OTEL. Operational failures still explain unsuccessful journeys, and enabled cleanup still executes safely. Retention instead records internal skipped cleanup (`cleanup-disabled`) and an explicit service cleanup-disabled diagnostic; it never claims successful cleanup. Restoring cleanup affects future attempts, not previously retained content. All seven journeys produce 21 business-step entities within a family of four models, 38 entities and 34 relationships. Calls use the same schedule with three independent root call-user attempts aggregated into one journey and three business steps.
 
 No executed samples means Unknown without a numeric value, not 100% success or zero duration. Skipped actions are excluded rather than failed. Cleanup failures affect cleanup and the whole journey, not earlier successful actions. The default policy uses below 99/95% success and above 15,000/60,000 ms mean duration; threshold equality does not breach. There is no rolling window, sample minimum, cross-cycle smoothing, or persisted state.
 
-Simulation logs previews only and acquires no report credential. Live reports use the explicitly selected service identity (or explicit local certificate mode), a separate `https://management.azure.com/.default` token, and `POST .../entities/<entity>/ingestHealthReport?api-version=2026-05-01-preview`. Only 204 acknowledges ingestion. Requests are bounded to 5 seconds, at most two attempts and three concurrent sends, with a 30-second batch budget. All signals are attempted; failures are sanitized and make a one-shot command fail. There is no durable outbox or exactly-once guarantee.
+Simulation logs previews only and acquires no report credential. Live reports use the independently selected **Azure report identity**, never the Graph selector or `M365_*` certificate, a separate `https://management.azure.com/.default` token, and `POST .../entities/<entity>/ingestHealthReport?api-version=2026-05-01-preview`. Only 204 acknowledges ingestion. Requests are bounded to 5 seconds, at most two attempts and three concurrent sends, with a 30-second batch budget. All signals are attempted; failures are sanitized and make a one-shot command fail. There is no durable outbox or exactly-once guarantee.
+
+Graph certificate mode previously read `AZURE_*`; migrate it to `M365_*` explicitly. No credential fallback occurs. Providers always use the explicitly selected **application** Graph credential. Teams defaults to an installed bot with independent `botAuthentication: "managed-identity"` and `https://api.botframework.com/.default`; bot/target/observer share a tenant, and bot MI additionally matches `AZURE_TENANT_ID`. Certificate Graph uses `M365_TENANT_ID`; MI Graph uses explicit `M365_TENANT_ID` when supplied, otherwise `AZURE_TENANT_ID`. Optional delegated journeys use account-bound public-client tokens and never pass them to providers or ARM; per-account encrypted-at-rest Blob caches are provisioned only for selected live delegated mode. Missing/expired auth for one account does not block healthy users. See [bot setup](../teams/README.md#primary-setup-unattended-bot) or the [optional bootstrap guide](../../docs/teams-user-bootstrap.md).
 
 Console diagnostics accompany execution and publication failures. Incomplete/cancelled cycles explicitly skip synthetic health publication instead of presenting a healthy partial aggregate. Stable provider reporting remains a separate, impact-suppressed branch.
 
@@ -79,14 +90,14 @@ Example live target:
 ```json
 {
   "id": "teams-probe-001",
+  "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com",
   "tenantId": "11111111-1111-4111-8111-111111111111",
   "teamId": "22222222-2222-4222-8222-222222222222",
-  "channelId": "approved-standard-channel-id",
-  "serviceUrl": "https://smba.trafficmanager.net/teams/"
+  "channelId": "approved-standard-channel-id"
 }
 ```
 
-The Teams `serviceUrl` must come from approved bot-installation metadata; the example is not proof of a valid conversation route. Only the supported public-cloud Connector origin/path is accepted. Bot installation and its validated metadata are administrator setup inputs, not created by a periodic test.
+Optional delegated Teams needs no `serviceUrl`; its public client/cache metadata follows the [human bootstrap guide](../../docs/teams-user-bootstrap.md). Default bot mode requires an approved `serviceUrl`, including the documented public-cloud `https://smba.trafficmanager.net/teams/` proactive endpoint. Provisioning these resources is an administrator action, not a periodic test.
 
 One target now produces useful measurements; there is no worker-side three-sample minimum or stabilization counter.
 
@@ -168,20 +179,27 @@ First-party references: [stable health overviews](https://learn.microsoft.com/gr
 
 ## Credentials and report publication
 
-Hosted live Graph uses only `ManagedIdentityCredential({ clientId })`, selected with a valid UUID `AZURE_CLIENT_ID`, for `https://graph.microsoft.com/.default`. It never falls back to DefaultAzureCredential, Azure CLI, client secrets, a certificate, Key Vault, or a guessed/system host identity. The identity and approved target must be in the same Microsoft 365 tenant. Assign Exchange roles through mailbox-scoped Exchange RBAC for Applications, not tenant-wide Entra Graph mail grants.
+Hosted live Graph defaults to `ManagedIdentityCredential({ clientId })`, explicitly
+selected by `AZURE_CLIENT_ID`. For bot readback, `teamsReadbackClientId` explicitly
+selects an Entra application that trusts this UAMI through a federated identity
+credential. Only this observer uses the exchanged application token; providers,
+calling and health reporting keep their independently configured identities.
+Neither path falls back to CLI, secrets, certificates or a guessed host identity.
+Assign Exchange roles through mailbox-scoped Exchange RBAC for Applications,
+not tenant-wide Entra Graph mail grants.
 
 Explicit `graphAuthentication: "certificate"` local live Graph operations require:
 
-- `AZURE_TENANT_ID`
-- `AZURE_CLIENT_ID`
-- `AZURE_CLIENT_CERTIFICATE_PATH`
+- `M365_TENANT_ID`
+- `M365_CLIENT_ID`
+- `M365_CLIENT_CERTIFICATE_PATH`
 - `ENABLE_LIVE_M365=true`, after the mailbox/site access checks
 
 Do not store passwords or private keys in config files. Keep PEM files ignored and readable only by their owner. See the [administrator handoff](../../MAILBOX-SYNTHETIC-ACCESS.md).
 
-Teams also requires `BOT_TENANT_ID`, `BOT_CLIENT_ID`, and `BOT_CLIENT_CERTIFICATE_PATH`. The bot's Connector token uses `https://api.botframework.com/.default`; Graph observation uses `https://graph.microsoft.com/.default`. Bot, observer, and target tenants must match. The two tokens are not interchangeable.
+Default Teams **bot mode** requires explicit `BOT_TENANT_ID` and `BOT_CLIENT_ID`, supplied from the hosted UAMI. Only `botAuthentication: "certificate"` additionally requires `BOT_CLIENT_CERTIFICATE_PATH`. The Connector token uses `https://api.botframework.com/.default`; application Graph observation uses `https://graph.microsoft.com/.default`. Bot, observer and target tenants must match; bot MI additionally matches the host tenant. Opt-in delegated mode instead requires public-client/cache metadata and the explicit same-tenant UAMI, never a password or bot fallback.
 
-Live reports obtain a separate ARM-audience token from the explicitly selected identity, which needs scoped ingestion permission on its own service model independently of Graph grants. Cross-tenant hosted Graph authentication is not implemented. Teams MI observation additionally requires `AZURE_TENANT_ID` for the expected bot/Graph/target tenant guard; Bot Connector stays certificate-backed and independently authorized. Simulation and disabled configs initialize no credentials. See the [shared Container Apps deployment](../infra/README.md) for cloud hosting.
+Live reports obtain a separate ARM-audience token from the explicitly selected identity, which needs scoped ingestion permission on its own service model independently of Graph grants. Cross-tenant application Graph supports explicitly selected M365 certificates; delegated Teams hosting requires the same tenant. Bot Connector defaults independently to managed identity, with certificate mode explicitly opt-in. Simulation and disabled configs initialize no credentials. See the [shared Container Apps deployment](../infra/README.md) for cloud hosting.
 
 Advanced execution settings such as `POLL_INTERVAL_MS` remain environment variables. Report thresholds and TTL belong in root `healthModel`; persisted minimum-sample/consecutive-failure state, `AHM_MODEL_ID`, and `STATE_STORAGE_URL` are not part of this worker.
 
@@ -193,7 +211,7 @@ Each attempt result has an outcome and measured durations, never a Healthy/Unhea
 - Journey authentication/authorization problems are identified as unexecutable rather than asserted to be Exchange delivery failures. Independent provider failures do not rewrite the journey result.
 - A delivery timeout is a failed test with no confirmed delivery-duration sample.
 - Exchange request timing is emitted when the send request was attempted, even if it failed. Send duration, confirmed delivery duration, and total duration are distinct.
-- Teams records bot send-request time and confirmed channel-publication time. This is not a recipient read receipt or UI test.
+- Teams records bot (or opt-in delegated-user) send-request time and confirmed channel-publication time. This is not a recipient read receipt or UI test.
 - SharePoint records upload and verified-readback time, including failed attempted phases, as well as total time.
 - A confirmed delivery followed by cleanup failure retains delivery timing but has a failed overall outcome.
 - Simulation durations are modeled and always labeled as simulation.

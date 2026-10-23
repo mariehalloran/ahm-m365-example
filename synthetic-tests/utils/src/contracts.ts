@@ -3,7 +3,7 @@ import { z } from "zod";
 export const scenarios = ["healthy", "slow", "failed", "timeout", "stale"] as const;
 export type Scenario = (typeof scenarios)[number];
 export const categories = [
-  "authentication-failure", "permission-failure", "send-failure", "delivery-timeout",
+  "authentication-failure", "reauthentication-required", "permission-failure", "send-failure", "delivery-timeout",
   "read-failure", "cleanup-failure", "graph-throttling", "graph-unavailable",
   "collector-failure", "configuration-failure", "cancelled", "malformed-response",
 ] as const;
@@ -11,7 +11,7 @@ export type DiagnosticCategory = (typeof categories)[number];
 
 export const testTypes = [
   "exchange-mail-flow", "exchange-draft", "sharepoint-file", "sharepoint-rename",
-  "teams-channel-message", "teams-channel-reply",
+  "teams-channel-message", "teams-channel-reply", "teams-call",
 ] as const;
 export type TestType = (typeof testTypes)[number];
 
@@ -36,6 +36,10 @@ export const probeServices = {
     service: "teams", target: "Microsoft Teams", journey: "reply-channel-message", entityName: "teams-reply",
     steps: ["authenticate", "post-message", "post-reply", "confirm-reply", "cleanup"],
   },
+  "teams-call": {
+    service: "teams", target: "Microsoft Teams", journey: "call-test-user", entityName: "teams-call",
+    steps: ["authenticate", "place-call", "wait-before-hangup", "end-call", "cleanup"],
+  },
   "sharepoint-rename": {
     service: "sharepoint", target: "SharePoint Online", journey: "rename-reopen-file", entityName: "sharepoint-rename",
     steps: ["authenticate", "verify-drive", "upload-file", "rename-file", "read-file", "cleanup"],
@@ -47,6 +51,7 @@ export const stepNames = [
   "authenticate", "create-draft", "send", "confirm-delivery", "cleanup",
   "post-message", "confirm-publication", "verify-drive", "upload-file", "read-file",
   "update-draft", "read-draft", "post-reply", "confirm-reply", "rename-file",
+  "place-call", "wait-before-hangup", "end-call",
 ] as const;
 export type StepName = (typeof stepNames)[number];
 export type ReportedStepName = Exclude<StepName, "authenticate" | "cleanup">;
@@ -64,7 +69,7 @@ export const stepResultSchema = z.discriminatedUnion("status", [
   }).strict(),
   z.object({
     name: z.enum(stepNames), status: z.literal("skipped"), observedAt: isoDate,
-    reason: z.enum(["prerequisite-failed", "no-mutation"]),
+    reason: z.enum(["prerequisite-failed", "no-mutation", "cleanup-disabled"]),
   }).strict(),
 ]);
 export type StepResult = z.infer<typeof stepResultSchema>;
@@ -95,6 +100,8 @@ export const resultSchema = z.object({
 }).strict().superRefine((value, ctx) => {
   const allowedSteps: readonly string[] = probeServices[value.testType].steps;
   if (new Set(value.steps.map(step => step.name)).size !== value.steps.length ||
+      value.steps.some(step => step.status === "skipped" && step.reason === "cleanup-disabled" &&
+        (step.name !== "cleanup" || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
       value.steps.some((step, index) => !allowedSteps.includes(step.name) ||
         (index > 0 && allowedSteps.indexOf(step.name) <= allowedSteps.indexOf(value.steps[index - 1]!.name))) ||
       (value.success && value.steps.some(step => step.status === "failed"))) {
@@ -146,9 +153,11 @@ export const probeSchema = z.object({
   driveId: z.string().min(1).optional(),
   folderId: z.string().min(1).optional(),
   tenantId: z.string().uuid().optional(),
+  userPrincipalName: z.string().email().optional(),
   teamId: z.string().uuid().optional(),
   channelId: z.string().min(1).max(300).optional(),
   serviceUrl: z.string().url().optional(),
+  callUserId: z.string().uuid().optional(),
   region: z.string().max(80).optional(),
   scenario: z.enum(scenarios).optional(),
 }).strict();

@@ -13,6 +13,9 @@ type ServiceStep = {
     | 'post-reply'
     | 'confirm-reply'
     | 'rename-file'
+    | 'place-call'
+    | 'wait-before-hangup'
+    | 'end-call'
   displayName: string
 }
 
@@ -80,6 +83,16 @@ var serviceDefinitions ServiceDefinition[] = [
           { name: 'post-message', displayName: 'Post root message' }
           { name: 'post-reply', displayName: 'Post reply' }
           { name: 'confirm-reply', displayName: 'Confirm reply visibility' }
+        ]
+      }
+      {
+        name: 'call-test-user'
+        entityName: 'teams-call'
+        displayName: 'Place test calls and hang up'
+        steps: [
+          { name: 'place-call', displayName: 'Call dedicated test user' }
+          { name: 'wait-before-hangup', displayName: 'Wait before hang-up' }
+          { name: 'end-call', displayName: 'Hang up and confirm disconnected' }
         ]
       }
     ]

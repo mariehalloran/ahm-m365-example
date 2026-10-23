@@ -1,28 +1,42 @@
 # Deploy the service workers
 
-This shared deployment hosts the real Exchange, Teams, and SharePoint worker entries in **separate Azure Container Apps**, using one private image, one environment, and separate user-assigned identities. It does not deploy a sample web server or expose HTTP ingress.
+Deploy the [health models](../../health-model/README.md#apply-and-migrate) first.
+This template hosts Exchange, Teams and SharePoint in **separate Azure Container
+Apps**, using one private image, independent service configurations and separate
+user-assigned managed identities (UAMIs). Only selected live Teams calling enables
+public HTTPS ingress; Exchange, SharePoint and messaging-only Teams stay private.
 
-Use the independently deployed [health models](../../health-model/README.md) first. This template creates the registry, environment, worker identities, an ingest-only custom role, scoped role assignments, and optionally the apps. It grants **no Microsoft 365 permissions**, creates no mailboxes/sites/teams/bots, and installs no certificates.
+The foundation creates the registry, environment, identities and narrowly scoped
+image-pull/report-ingestion roles. It creates no Microsoft 365 resources, bot
+registrations or permission grants. Start with the [access setup guide](../../docs/cross-tenant-access.md)
+and [Teams bot setup](../teams/README.md#primary-setup-unattended-bot).
+For dated live acceptance, see [deployment status](../../docs/deployment.md#deployment-status-and-order).
 
 ## Configuration and safety
 
-Keep a private copy of [the root config](../../monitoring.config.json) with the approved subscription/resource group/model prefix and targets. Select the intended service-specific files through each root `configFile`. The parameter preparer reads those exact files rather than duplicating their settings in Bicep:
+Keep a private copy of [the root config](../../monitoring.config.json) with the
+approved model destination, service/scenario selection and targets. Each root
+`configFile` selects the service-owned cadence, authentication and execution
+settings. Commands below run from the repository root.
 
 ```sh
 npm --prefix synthetic-tests run deployment:prepare -- \
-  /absolute/path/monitoring.private.json \
-  /absolute/path/foundation.parameters.json
+  /absolute/path/monitoring.private.json /absolute/path/foundation.parameters.json
 ```
 
-Run this and subsequent Azure commands from the repository root. `foundation.parameters.json` contains approved target metadata, not credentials. Keep private parameter files out of Git.
+The preparer reads the selected files; do not maintain a second copy of their
+settings in Bicep. Generated parameters contain target/access metadata, never
+private keys or user tokens. Keep private configurations and parameters out of Git.
+Foundation preparation leaves `deployWorkers: false`. Deploying live worker
+profiles additionally requires `--enable-live`; `mode: live` alone is insufficient.
 
-The first preparation sets `deployWorkers: false`, so no probes run. Image deployment with live profiles requires the separate **`--enable-live`** argument; the environment gate is never inferred merely from `mode: live`.
-
-The checked-in service files remain safe local simulations. A hosted live trial uses live profiles and makes real authentication/API attempts. Unavailable mailbox/permissions produce observed failures, not simulated health. Valid-but-incomplete target or credential setup produces a `configuration-failure`/unexecutable journey and Unhealthy success report; actions that never ran remain Unknown. This is evidence that the probe cannot complete its task, **not proof of a Microsoft outage**.
+Checked-in profiles remain safe simulations. An approved live profile attempts
+real authentication/operations: incomplete setup produces observed Unhealthy
+journeys, not simulated success. Actions that never ran remain Unknown.
 
 ## Provision and publish
 
-Review every preview before applying. Use the approved subscription explicitly and keep the model destination consistent:
+Use the approved subscription explicitly. Review each preview before applying:
 
 ```sh
 SUBSCRIPTION_ID='<approved-subscription>'
@@ -38,95 +52,147 @@ az deployment group create --subscription "$SUBSCRIPTION_ID" \
   --template-file synthetic-tests/infra/main.bicep --parameters @"$PARAMETERS"
 ```
 
-Read the `registryName` and `registryServer` outputs. The Basic registry disables admin credentials and anonymous pull. Each worker UAMI receives AcrPull only on this registry, and the health-report ingestion action only on its own service model.
+Read the `registryName` and `registryServer` outputs. The registry disables admin
+credentials and anonymous pull. Each UAMI receives AcrPull on that registry and
+ingest-only permission on its own service model, not model administration.
 
-Build the image from the self-contained Node project:
+Build from the self-contained Node project:
 
 ```sh
 docker build --platform linux/amd64 --pull -t m365-synthetic:<unique-version> synthetic-tests
 ```
 
-Before publishing, run all three image entries with `--once` using mounted root/service files. A network-disabled local simulation is a packaging smoke test only; it must not publish simulated cloud health. The runtime image is non-root and contains production dependencies and compiled code, not private configs or certificates.
-
-Authenticate and push to the approved registry:
+Before publishing, smoke-test all three entries with `--once`, mounted simulation
+root/service files and networking disabled. This verifies packaging, not live
+access. The non-root runtime image contains production dependencies and compiled
+code, not private configurations or credentials.
 
 ```sh
 az acr login --subscription "$SUBSCRIPTION_ID" --name '<registryName>'
 docker tag m365-synthetic:<unique-version> '<registryServer>/m365-synthetic:<unique-version>'
 docker push '<registryServer>/m365-synthetic:<unique-version>'
-```
 
-Prefer the returned immutable image digest when preparing the app deployment:
-
-```sh
 npm --prefix synthetic-tests run deployment:prepare -- \
-  /absolute/path/monitoring.private.json \
-  /absolute/path/workers.parameters.json \
+  /absolute/path/monitoring.private.json /absolute/path/workers.parameters.json \
   '<registryServer>/m365-synthetic@sha256:<digest>' --enable-live
 ```
 
-Preview and apply the same shared template using `workers.parameters.json`. Existing infrastructure is reconciled; the three apps are added. For each subsequent change, regenerate parameters from the private root config, preview, and apply again.
+Preview and apply the same shared template with `workers.parameters.json`.
+Regenerate parameters from the active root profile for every rollout; use an
+immutable digest and verify the actual ready revision, image and configuration.
+Do not silently substitute another deployment profile.
+
+## Separate M365 and Azure credentials
+
+`graphAuthentication` and `healthReportAuthentication` independently default to
+`managed-identity`. Hosted reporting uses the selected Azure UAMI and ARM audience,
+even when Graph uses another application identity.
+
+Teams defaults to `teamsAuthentication: bot` and
+`botAuthentication: managed-identity`. `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the
+attached UAMI for Bot Connector and calling. Team-scoped Graph readback uses a
+separate Entra registration with `teamsReadbackClientId` and managed-identity
+federation. Follow the [exact identity mapping](../teams/README.md#primary-setup-unattended-bot);
+do not put the UAMI ID in the manifest's RSC `webApplicationInfo.id`.
+No runtime user MFA, public-client cache or certificate is needed for this flow.
+
+### Explicit certificate access
+
+For approved cross-tenant Graph or certificate-backed alternatives, select
+`graphAuthentication: certificate`, keep hosted reporting on managed identity,
+and supply nonsecret access metadata:
+
+```sh
+npm --prefix synthetic-tests run deployment:prepare -- \
+  /absolute/path/monitoring.private.json /absolute/path/workers.parameters.json \
+  '<registryServer>/m365-synthetic@sha256:<digest>' \
+  --enable-live --access-config /absolute/path/service-access.private.json
+```
+
+Copy only required entries from [service-access.example.json](./service-access.example.json).
+The worker mounts raw UTF-8 PEMs at `/etc/credentials/m365.pem` and, for explicitly
+selected bot certificate authentication, `/etc/credentials/bot.pem`. It keeps
+`M365_*`, `BOT_*` and Azure reporting's `AZURE_*` separate. There is no credential
+fallback. Preparation rejects incomplete/mixed metadata and inconsistent tenants.
+
+Each UAMI needs separately approved secret-read access and network reachability
+to its hosting-tenant Key Vault secrets. The template does not create the vault,
+certificates or those grants. Prefer versioned secret URIs; verify new credentials
+and reports before revoking old public certificates. Do not weaken vault policy.
+The [cross-tenant guide](../../docs/cross-tenant-access.md) documents this explicit
+certificate option; generic cross-tenant managed-identity federation is not implemented.
+
+### Approved temporary alternative: native Container Apps certificate secret
+
+Only with explicit organizational approval, set `m365CertificateSource: container-app`
+and `m365CertificateRevision` to the public certificate's SHA-256 fingerprint
+(64 hex characters). Keep its tenant/client IDs and omit `m365CertificateSecretUri`.
+Mixed sources are rejected; there is no Key Vault fallback.
+
+Supply the raw PEM through the separate secure-object parameter `serviceCertificates`,
+keyed by service. An approved process may create a mode-0600 temporary parameter file
+outside Git and pass only its path:
+
+```sh
+az deployment group create --subscription '<approved-subscription>' \
+  --resource-group '<approved-resource-group>' --template-file synthetic-tests/infra/main.bicep \
+  --parameters @/absolute/path/workers.parameters.json \
+    serviceCertificates=@/secure/temporary/service-certificates.json
+```
+
+Never print/paste the private PEM or put it in ordinary parameters. Delete the
+temporary file after success or failure. Supply the secure parameter on every
+subsequent deployment in this mode. Native encrypted secrets still require
+credential rotation and restricted secret-reading/application-modification access.
+
+### Optional delegated Teams
+
+Explicit `teamsAuthentication: user-delegated` provisions encrypted Blob storage
+with public/shared-key access disabled and container-scoped access for the Teams
+UAMI. Supply `serviceAccess.teams.teamsPublicClientId` and follow the
+[human bootstrap guide](../../docs/teams-user-bootstrap.md). Accounts/targets stay
+root-owned; cache partitions are per account. This optional flow can need MFA or
+reauthentication. Switching to bot mode does not delete old caches/revoke grants;
+retire them only through approved cleanup.
 
 ## Runtime behavior and verification
 
-- Each service uses its own configured cadence, one minimum/maximum replica, single-revision mode, and 0.25 CPU/0.5 GiB. No ingress is exposed. Always-running replicas and the registry incur charges; this sizing is not a reliability/performance commitment.
-- Each app mounts its root config and selected service file read-only. A nonsecret config hash in the revision template triggers a new revision when those files change. Secret-only rotations still require an explicit restart if no template input changes.
-- Managed identity selection is explicit. The same UAMI obtains separate Graph and ARM tokens; Teams bot credentials remain a separately approved prerequisite.
-- Direct health reports and structured console diagnostics are always active; root-selected OTEL is optional. Parameter preparation needs no telemetry connection-string secret.
-- The environment has platform log forwarding disabled. Live console streaming remains available; durable diagnostic retention, external observers and alert delivery remain separate work.
-- Shutdown has a 60-second grace period for bounded cleanup and reporting. Single-revision rollout can briefly overlap replicas; do not claim exactly-once probes. Workers retain no persistent history or outbox.
+- One authoritative replica per service/target set, single-revision mode and
+  independent cadence; rollouts may briefly overlap, so probes are not exactly once.
+- Default sizing is 0.25 CPU/0.5 GiB per app, not a performance/reliability guarantee.
+  Always-running replicas and the registry incur charges.
+- Root/service configs are mounted read-only. Config hashes trigger revisions;
+  secret-only rotations may require an explicit restart.
+- Selected live calls expose only the Teams HTTPS callback on `/api/calls`.
+  `/healthz` is static readiness, not proof of journey progress.
+- Direct reports and console diagnostics are always active. Platform log forwarding
+  is disabled by default; durable diagnostic retention needs separate configuration.
+- Shutdown allows 60 seconds for bounded cleanup/reporting. Workers retain no
+  cross-cycle journey history or durable outbox.
 
-Check app provisioning, active revisions and replicas, then inspect console diagnostics and fresh external signals on all six selected journey entities and their 18 business-step children. Verify **External Reports**, any explicitly enabled **OpenTelemetry** group, separate impact-suppressed provider reports, and propagation into each service root and the all-up root model. The full family has four models, 34 entities and 30 relationships; successful ARM deployment alone is not acceptance.
+Verify every selected journey/action, fresh report timestamps and native service/root
+rollup, not just successful ARM provisioning. The complete topology is four models,
+38 entities, 34 relationships, seven journeys and 21 business steps. Provider context
+is separate and impact-suppressed. Invalid schemas or unusable report credentials
+can prevent publication and require independent detection.
 
-Expected early-trial failures include denied Exchange operations and unconfigured Teams/SharePoint resources. Startup failures are retried on the service cadence, reported explicitly and do not fabricate executed action samples. Invalid root/service schemas, unusable report credentials, or an inaccessible health-report destination can still prevent publication and require independent monitoring.
-
-No HTTP endpoint is exposed, so there is no app URL to probe. Use Azure resource/revision health, real report timestamps, and the model graph. Production use still requires the [operations acceptance gate](../../docs/operations.md#enterprise-reliability-acceptance-gate), tenant grants, successful journeys, retention/cost review, and independent notification tests.
+Production acceptance additionally requires [worker-stall, publication-failure and
+end-to-end notification checks](../../docs/operations.md#enterprise-reliability-acceptance-gate).
+TTL expiry removes reports; it does not guarantee an Unhealthy state or alert.
 
 ## Optional OTEL export
 
-The root config defaults to `otel: { "enabled": false, "destination": "console" }`. Disabled or console-only deployments add no Application Insights secret/environment setting and no platform log forwarding. Console OTEL runs in the existing workers without a separate service.
+Root `otel` is disabled by default. Disabled/console-only modes add no Application
+Insights settings or platform log forwarding. Azure Monitor export runs in the
+same workers, not a separate telemetry service.
 
-For enabled `destination: azure-monitor`, first deploy the [model/telemetry resources](../../health-model/README.md#optional-otel-signals). This template reads the existing `appi-<healthModel.name>` component (or matching `applicationInsightsName` override) and passes its connection string through a secure module parameter into an app secret. The runtime receives only a secret reference. Keep target metadata in root configuration and credentials out of parameter files. Rotating a secret without a template change still requires a revision restart.
+For `destination: azure-monitor`, deploy the [model/telemetry resources](../../health-model/README.md#optional-otel-signals)
+first. The worker template reads `appi-<healthModel.name>` (or matching
+`applicationInsightsName`) and passes its connection string as a secret reference,
+not a normal parameter. Verify live ingestion/query evaluation, report independence,
+retention and cost; offline tests do not prove cloud export.
 
-The legacy Exchange-only host also accepts a secure `applicationInsightsConnectionString` parameter when Azure export is selected; use the shared host for new deployments. Direct reports always remain active. Before acceptance, verify exported live `AppTraces` and metrics, query-backed journey/step signals, explicit ingestion failures, report independence, retention and costs. Local mocked tests do not prove cloud ingestion. No OTEL-enabled deployment has been performed by this source change.
-
-## Verified failure-path trial
-
-The isolated `m365-experience-demo` trial ran two journeys per product in the same three apps. Exchange managed-identity authentication succeeded but actual draft creation failed for the placeholder mailbox; Teams and SharePoint reported their actual missing-configuration failures. All six journeys were Unhealthy and the root rollup remained Unhealthy. This is evidence for the earlier real failure-reporting path, not successful Microsoft 365 availability.
-
-Stable Service Health collection attempts both overview and issue APIs once per cycle from every service even when its journeys cannot initialize. The earlier live trial verified **HTTP 403 / `permission-failure`** for all three worker identities. A tenant administrator must separately grant `ServiceHealth.Read.All` admin consent before real overview status can populate. The report-only implementation publishes `microsoft-reported-service-status` directly to `${service}-service-health` with `impactSuppressed`: 100 healthy, 50 degraded, 0 interruption. Failed/missing/unknown overviews publish Unknown without a numeric value and with failure context; neither a Microsoft outage nor a healthy provider snapshot is invented. Issue/history and optional beta remain console diagnostics only; experimental beta collection remains off.
-
-No simulated cloud reports or Microsoft 365 permission grants were used. This verifies the real failure-reporting path, not successful Microsoft 365 availability or notification delivery. Teams bot certificate mounting/environment settings remain an additional hosting prerequisite before posting can work.
-
-For a later configuration change, regenerate parameters and redeploy; workers read config only at startup. An incremental deployment does not delete or stop an app omitted by a newly disabled service selection: stop/deactivate that existing worker explicitly before removing its deployment/reference. The foundation-only stage likewise does not stop previously deployed workers.
-
-## Verified report-only deployment
-
-The current demo models have been redeployed report-only: **four models, 34 entities, 30 relationships, six journeys and 18 business-step entities**, with **External Reports** as the only signal group on reporting entities.
-
-On 2026-10-22, the latest optional-OTEL-capable workers were deployed with OTEL disabled using the existing private `monitoring.demo.json` live-trial profile for `m365-experience-demo` in subscription `46433637-4539-481a-b054-e2c9f83ae51d`, resource group `rg-m365-demo`. All three Container Apps have ready/running revisions ending in `--0000006`, using this immutable image digest:
-
-```text
-sha256:f741daf4c5a8d716a783bc7bb009664b8d32016043ca15d39c392f5698509b0c
-```
-
-No Application Insights environment settings or ingestion secrets remain in those apps; only root/service configuration secrets remain. The obsolete Exchange-only mock Bicep has also been stripped of telemetry and compiled.
-
-**All-service report-only live failure-path acceptance has passed**, with **51 fresh external signals**:
-
-- All six journeys are Unhealthy.
-- Skipped business actions are Unknown without numeric values, not fabricated failed requests.
-- All three `microsoft-reported-service-status` context signals are Unknown without fabricated values, with explicit Graph 403/`permission-failure` diagnostics; `ServiceHealth.Read.All` admin consent remains required.
-- The root and native service references are Unhealthy.
-- All three apps are ready/running on the revision suffix and immutable digest above.
-- No telemetry resources, query bindings, workspace authentication, instrumentation-key/ingestion secrets, or configured platform log-forwarding destination remain.
-
-Validation also passed **588 runtime tests plus 17 infrastructure tests (605 total)**, typecheck/build, both Bicep compilations, and all six journey Docker smoke tests. Live acceptance verified all 51 external signals were reported after rollout began. The image includes optional OTEL dependencies, but the active configuration leaves export disabled and deploys no telemetry resources or query bindings. This verifies real negative-path reporting, skipped-action semantics, provider failure context and model rollup. It does **not** establish successful Microsoft 365 journeys, production reliability, OTEL-enabled ingestion, or end-to-end notification delivery.
-
-## Report-only migration cleanup
-
-Incremental model/app deployments do not delete obsolete telemetry resources. Explicitly remove old query signals/groups, query authentication and scoped reader grants, and app connection-string secrets/settings. Delete both the current demo and original PoC Log Analytics/Application Insights pairs and associated smart-detector rules after confirming ownership and retention/export obligations. Preserve the original PoC model entities/root, stripping only telemetry bindings; see the [model migration guide](../../health-model/README.md#apply-and-migrate).
-
-For the current migration, both the demo and original PoC telemetry pairs and associated smart-detector rules have been deleted. Four workspace-query settings and four scoped reader-role assignments were removed. The original PoC model is retained, with its queries removed. Workspaces used normal deletion with a **14-day recovery window**, **not permanent purge**.
-
-For subsequent environments or changes, rebuild/publish the report-only image, regenerate parameters with the same preparation CLI and optional image/`--enable-live` arguments shown above, and redeploy. Verify actual cloud deletion, the new revision/image/configuration, direct reports, provider Unknown/failure context, and service/root propagation. The current all-service live failure-path check has passed. TTL expiry only removes external signals; independent stopped/stalled-worker, broken-reporting and notification tests remain acceptance gates. Reports replace current-cycle aggregates, not a full metrics store, percentile history or arbitrary log-query interface.
+When disabling OTEL, incremental deployment does not remove old query bindings,
+permissions, app settings or telemetry resources. Follow the [model migration
+procedure](../../health-model/README.md#apply-and-migrate), preserve active models
+and remove only owned resources after retention/export review.

@@ -2,9 +2,17 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 
 describe("safe runtime configuration", () => {
+  it("defaults to bot MI and rejects unrecognized authentication environment modes", () => {
+    expect(loadConfig({})).toMatchObject({ TEAMS_AUTHENTICATION: "bot", BOT_AUTHENTICATION: "managed-identity" });
+    expect(loadConfig({ TEAMS_AUTHENTICATION: "user-delegated" }).TEAMS_AUTHENTICATION).toBe("user-delegated");
+    for (const value of ["", "cli", "default", "user-delegated"]) {
+      expect(() => loadConfig({ BOT_AUTHENTICATION: value })).toThrow("BOT_AUTHENTICATION");
+    }
+    expect(() => loadConfig({ TEAMS_AUTHENTICATION: "automatic" })).toThrow("TEAMS_AUTHENTICATION");
+  });
   it("has no model, policy, TTL, or persistence settings", () => {
     expect(Object.keys(loadConfig({})).sort()).toEqual([
-      "ENABLE_LIVE_M365", "EXECUTION_MODE", "POLL_INTERVAL_MS", "PROBE_TIMEOUT_MS", "SYNTHETIC_SCENARIO", "probes",
+      "BOT_AUTHENTICATION", "ENABLE_LIVE_M365", "EXCHANGE_CLEANUP_ENABLED", "EXECUTION_MODE", "POLL_INTERVAL_MS", "PROBE_TIMEOUT_MS", "SYNTHETIC_SCENARIO", "TEAMS_AUTHENTICATION", "TEAMS_CALLING_PORT", "TEAMS_CALLING_WAIT_SECONDS", "TEAMS_CLEANUP_ENABLED", "probes",
     ].sort());
     expect(loadConfig({}).probes).toHaveLength(1);
   });
@@ -25,6 +33,12 @@ describe("safe runtime configuration", () => {
       { ...target, type: "exchange-mail-flow" }, { ...target, type: "exchange-draft" },
     ]) });
     expect(config.probes).toHaveLength(2);
+  });
+  it("keeps the expanded probe inventory bounded", () => {
+    const probes = Array.from({ length: 91 }, (_, index) => ({
+      id: `probe-${index}`, type: "teams-channel-message", cohort: "teams-global",
+    }));
+    expect(() => loadConfig({ PROBES_JSON: JSON.stringify(probes) })).toThrow("Invalid PROBES_JSON");
   });
   it.each(["NaN", "-1", "0", "120001"])("rejects invalid execution deadlines %s", PROBE_TIMEOUT_MS => {
     expect(() => loadConfig({ PROBE_TIMEOUT_MS })).toThrow("PROBE_TIMEOUT_MS");

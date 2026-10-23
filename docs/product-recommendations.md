@@ -4,7 +4,7 @@
 
 The worker performs a bounded journey, cleans up its artifacts, and aggregates this cycle's executed samples by journey/action. It sends evaluated success-percentage and mean-duration health reports directly to Azure Monitor Health Models, without storing cross-cycle history or a durable outbox. Console diagnostics always remain available. Root-configured OTEL is optional and disabled by default; it adds in-process export without replacing direct reports.
 
-The [root configuration](../monitoring.config.json) selects services, supported journey scenarios, account/target metadata and report policy. All supported services/scenarios default to enabled, while safe simulation defaults and separate live/beta gates remain. Each service has its own config/process and independent cadence. Azure Container Apps is the intended host; separate no-ingress apps reuse one image, with explicit managed identities, single-revision mode, 0.25 CPU/0.5 GiB each and configuration-hash rollouts.
+The [root configuration](../monitoring.config.json) selects services, supported journey scenarios, account/target metadata and report policy. All supported services/scenarios default to enabled, while safe simulation defaults and separate live/beta gates remain. Each service has its own config/process and independent cadence. Separate Azure Container Apps reuse one image, explicit managed identities and configuration-hash rollouts. Only selected live Teams calls expose an authenticated HTTPS callback; other apps stay private.
 
 The [shared utilities guide](../synthetic-tests/utils/README.md#measurement-semantics) documents measurement semantics; each service under `synthetic-tests/` owns its worker, configuration, journey/actions and tests. Reusable helpers remain in `synthetic-tests/utils/`, and model infrastructure remains in root `health-model/`. Provider status and monitor failures remain distinguishable from actual service results. Authentication failure skips send/read steps rather than fabricating service-operation failures.
 
@@ -22,13 +22,19 @@ Provider issue/history and beta observations remain structured console diagnosti
 
 ## Teams: bot-backed channel journey
 
-[Teams](../synthetic-tests/teams/README.md) implements bot channel publication, Graph correlation/author readback, and deletion of the bot's own activity. HTTP-level tests assume approved access. Real resources, bot installation/metadata, credentials, and live validation are still required. Graph defaults to an explicitly selected same-tenant UAMI; Bot Connector remains independently certificate-backed.
+[Teams](../synthetic-tests/teams/README.md) implements bot publication/replies,
+Graph correlation/author readback, optional owned-message cleanup and individual
+call placement/wait/hang-up. The default bot uses a same-tenant UAMI; a separate
+Entra readback application uses team-scoped RSC and worker-UAMI federation.
+These journeys have [recorded live acceptance](./deployment.md#deployment-status-and-order);
+validate every new deployment's resources, grants and actual reports independently.
 
 | Candidate | Requirements / limitations |
 | --- | --- |
 | Read approved team/channel metadata | Lightweight API reachability only, not messaging/calls |
-| Implemented bot post/readback/delete | Separate Connector and Graph identities, exact correlation and expected author, only bot-owned cleanup; not human-to-human receipt |
-| Meeting/call/media | Supported calling APIs, licensed identity, endpoint/network placement, privacy, and cleanup |
+| Implemented post/reply/readback | Separate Connector/Graph identities, exact correlation and expected author, optional bot-owned cleanup; not human-to-human receipt |
+| Implemented individual calls | Approved `Calls.Initiate.All`, root-selected users, authenticated callback and verified termination; not recipient answer or media proof |
+| Future meeting/answered-call/media journeys | Additional supported APIs/permissions, answering/media implementation, appropriate hosting, privacy and cleanup; see the [capability catalog](./m365-automation-capabilities.md) |
 
 Do not block initial Exchange work on a full media synthetic or bypass controls with password/browser automation.
 
@@ -36,7 +42,7 @@ Do not block initial Exchange work on a full media synthetic or bypass controls 
 
 Exchange creates a correlated draft, sends to the dedicated mailbox, confirms Inbox delivery, and cleans up known copies. Record delivery duration separately from total duration; neither proves Outlook rendering or external delivery.
 
-The confirmed hosted Exchange path uses the same-tenant UAMI with mailbox-scoped Exchange RBAC for Applications; do not add tenant-wide Entra Graph mail application grants. Certificate Graph credentials are explicit local-live opt-in, not a hosted fallback.
+The recorded hosted Exchange acceptance used the same-tenant UAMI with mailbox-scoped Exchange RBAC for Applications; do not add tenant-wide Entra Graph mail application grants. Explicit certificate-backed Graph access now supports a different M365 tenant without changing Azure managed-identity health reporting. This new cross-tenant path still needs live acceptance; see the [administrator setup and credential migration guide](./cross-tenant-access.md).
 
 SharePoint verifies the approved site/drive with bounded pagination, uploads a uniquely named synthetic file, downloads/verifies its content, and deletes only its own artifact. Upload/readback phases have separate timings. This does not test coauthoring, document rendering, desktop sync, or every user population.
 
@@ -52,7 +58,13 @@ Use scoped permissions and dedicated resources. One mailbox/site tests an integr
 - Use model dependencies for rollup and keep Microsoft-reported provider context separate.
 - Reuse service-owned named business actions and attribute their measurements to fixed journey/step IDs. Token acquisition and cleanup remain internal; their failures can explain the overall result without emitting standalone steps or rewriting successful business-action observations.
 
-The [model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of six journey entities receives whole-journey reports; 18 separate business-step child entities receive action reports. **External Reports** always remains; optional Azure OTEL adds a separate **OpenTelemetry** group. The family has four models, 34 entities and 30 relationships. Cloud rollout is independent of local validation; the isolated development model family and [shared worker deployment](../synthetic-tests/infra/README.md#verified-report-only-deployment) have passed report-only live failure-path acceptance with all three apps ready/running and 51 fresh external signals. All six journeys and root/native-service references are Unhealthy; skipped actions are Unknown without values, and all three provider context signals are Unknown with Graph 403/permission-failure diagnostics. This is not positive Microsoft 365 availability or notification proof. The earlier telemetry cleanup is verified while the original PoC model remains without queries; optional OTEL has not been redeployed. Normal workspace deletion has a 14-day recovery window, not a permanent purge. Reports replace the previous cycle with a TTL; expiry removes external signals, not a guaranteed Unhealthy state or alert. Service aggregates do not identify individual missing mailboxes, and no “last healthy” state is preserved in a worker.
+The [model templates](../health-model/README.md) create four models, 38 entities and
+34 relationships with all services/scenarios selected. Seven journeys receive
+whole-journey reports; 21 business-step children receive action reports.
+**External Reports** always remains; Azure OTEL optionally adds **OpenTelemetry**.
+Reports replace the previous cycle with a TTL; expiry removes signals, not a
+guaranteed Unhealthy state or alert. Aggregates do not identify individual missing
+mailboxes, and workers preserve no last-healthy state or durable outbox.
 
 ## Recommended sequence
 
@@ -62,6 +74,6 @@ The [model templates](../health-model/README.md) create a root model referencing
 4. Obtain approved live resources and scoped Graph plus service-model report-ingestion permissions.
 5. Verify separate journey/step reports, suppressed provider reports and root propagation, including Unknown/skipped cases and report failure/expiry.
 6. Choose report-only or optional Azure OTEL using the same root profile; review [telemetry migration](../health-model/README.md#apply-and-migrate), verify the selected export/query path if enabled, and independently detect execution/report gaps.
-7. Validate the bot-backed Teams journey against approved resources before enabling live Teams producers or considering employee/call/media journeys.
+7. Validate selected Teams messaging and placement/hang-up journeys before recurrence; treat employee UI, answered calls and media as separate future coverage.
 
 Production acceptance still needs actual live evidence, safe cleanup, report-ingestion/failure tests, retention/cost approval, credential rotation, stopped/stalled-worker detection, and end-to-end notification tests.

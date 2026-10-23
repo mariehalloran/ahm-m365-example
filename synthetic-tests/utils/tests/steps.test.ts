@@ -7,6 +7,20 @@ import { resultSchema } from "../src/contracts.js";
 const sample = () => baseResult({ id: "ex-001", type: "exchange-mail-flow", cohort: "exchange-global" }, 1000);
 
 describe("per-attempt step measurement", () => {
+  it.each([true, false])("never executes disabled cleanup (mutation attempted: %s)", async mutated => {
+    const result = sample();
+    const operation = vi.fn();
+    const output = { emit: vi.fn() };
+    await cleanupStep(result, mutated, operation, output, () => 1000, false);
+    expect(operation).not.toHaveBeenCalled();
+    expect(result.steps).toEqual([{
+      name: "cleanup", status: "skipped", observedAt: new Date(1000).toISOString(), reason: "cleanup-disabled",
+    }]);
+    expect(result.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+    expect(output.emit).toHaveBeenCalledWith("exchange-cleanup-disabled", expect.objectContaining({
+      mode: "live", mutationAttempted: mutated,
+    }));
+  });
   it("returns an operation's value with one successful timed observation", async () => {
     const result = sample();
     let clock = 1000;

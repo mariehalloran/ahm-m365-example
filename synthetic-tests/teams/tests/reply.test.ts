@@ -49,6 +49,7 @@ interface ReadState {
   page: number;
 }
 interface RunOptions {
+  cleanupEnabled?: boolean;
   timeoutMs?: number;
   authenticationMs?: number;
   rootMs?: number;
@@ -145,7 +146,10 @@ async function run(options: RunOptions = {}) {
   const graph = new GraphClient(new AuthenticatedHttp(credential("graph"), "https://graph.microsoft.com/.default", httpOptions));
   const teamsBot = new TeamsBotClient(new AuthenticatedHttp(credential("bot"), "https://api.botframework.com/.default", httpOptions), applicationId);
   const result = await teamsReplyProbe(probe, {
-    config: { SYNTHETIC_SCENARIO: "healthy", PROBE_TIMEOUT_MS: options.timeoutMs ?? 1000, POLL_INTERVAL_MS: 100 },
+    config: {
+      SYNTHETIC_SCENARIO: "healthy", PROBE_TIMEOUT_MS: options.timeoutMs ?? 1000, POLL_INTERVAL_MS: 100,
+      TEAMS_CLEANUP_ENABLED: options.cleanupEnabled === false ? "false" : "true",
+    },
     graph, teamsBot, signal: controller.signal, telemetry, now: () => clock,
     sleep: async (ms, signal) => { signal.throwIfAborted(); clock += ms; },
   });
@@ -155,6 +159,26 @@ async function run(options: RunOptions = {}) {
 }
 
 describe("Teams bot root / thread reply / Graph readback / owned cleanup", () => {
+  it.each([true, false])("honors the cleanup toggle for both owned bot activities (enabled=%s)", async cleanupEnabled => {
+    const { result, calls, telemetry } = await run({ cleanupEnabled });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(cleanupEnabled ? 2 : 0);
+    expect(result.steps.find(step => step.name === "confirm-reply")?.status).toBe("succeeded");
+    if (cleanupEnabled) expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+    else {
+      expect(result.steps.at(-1)).toMatchObject({ name: "cleanup", status: "skipped", reason: "cleanup-disabled" });
+      expect(result.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+      expect(telemetry.emit).toHaveBeenCalledWith("teams-cleanup-disabled", expect.objectContaining({ mutationAttempted: true }));
+    }
+  });
+  it("retains the owned parent after a failed bot reply without any deletion or reconciliation", async () => {
+    const { result, calls } = await run({ cleanupEnabled: false, replyStatus: 403 });
+    expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("permission-failure");
+    expect(calls.some(call => call.method === "DELETE" || call.method === "GET")).toBe(false);
+    expect(result.steps.at(-1)).toMatchObject({ status: "skipped", reason: "cleanup-disabled" });
+    expect(result.diagnosticContext).not.toHaveProperty("cleanupSucceeded");
+  });
   it("requires a known owned root before directly replying or cleaning up", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const credential: TokenCredential = { getToken: async () => ({ token: "test-token", expiresOnTimestamp: Date.now() + 60000 }) };
@@ -276,6 +300,25 @@ describe("Teams bot root / thread reply / Graph readback / owned cleanup", () =>
     ]);
   });
 
+  it("accepts literal ':'/'@' in root and reply next links while preserving encoded known root IDs", async () => {
+    const canonicalLink = (path: string) =>
+      nextLink(path.replace(/%3A/gi, ":").replace(/%40/gi, "@"), "page-two");
+    const { result, calls } = await run({
+      onRootRead: ({ page, marker }) => page === 1
+        ? json({ value: Array.from({ length: 50 }, (_, index) => message(`unrelated ${index}`)),
+          "@odata.nextLink": canonicalLink(messagesPath) })
+        : json({ value: [message(marker)] }),
+      onReplyRead: ({ page, marker }) => page === 1
+        ? json({ value: Array.from({ length: 50 }, (_, index) => message(`unrelated ${index}`)),
+          "@odata.nextLink": canonicalLink(repliesPath) })
+        : json({ value: [message(marker)] }),
+    });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.method === "GET").map(call => new URL(call.url).pathname)).toEqual([
+      `/v1.0${messagesPath}`, `/v1.0${messagesPath}`, `/v1.0${repliesPath}`, `/v1.0${repliesPath}`,
+    ]);
+  });
+
   it.each(["root", "reply"] as const)("bounds the %s search at five pages", async activity => {
     const path = activity === "root" ? messagesPath : repliesPath;
     const { result, calls } = await run({
@@ -303,7 +346,14 @@ describe("Teams bot root / thread reply / Graph readback / owned cleanup", () =>
     `https://graph.microsoft.com/beta${repliesPath}?$skiptoken=x`,
     `${graphBase}${messagesPath}?$skiptoken=x`,
     `${graphBase}${messagesPath}/other-root/replies?$skiptoken=x`,
+    `${graphBase}${repliesPath.replace(teamId, tenantId)}?$skiptoken=x`,
+    `${graphBase}${repliesPath.replace("%3A", "%2F")}?$skiptoken=x`,
+    `${graphBase}${repliesPath.replace("%3A", "%5C")}?$skiptoken=x`,
+    `${graphBase}${repliesPath.replace("%3A", "%253A")}?$skiptoken=x`,
+    `${graphBase}${repliesPath.replace("%2F", "/")}?$skiptoken=x`,
+    `${graphBase}${repliesPath.replace("%2F", "%252F")}?$skiptoken=x`,
     `${graphBase}${repliesPath}/../replies?$skiptoken=x`,
+    `${graphBase}${repliesPath}/%2e%2e/replies?$skiptoken=x`,
     `${graphBase}${repliesPath}?$skiptoken=x#fragment`,
     `${graphBase}${repliesPath}?$expand=replies&$skiptoken=x`,
     `${graphBase}${repliesPath}?$skiptoken=x&$skiptoken=y`,
