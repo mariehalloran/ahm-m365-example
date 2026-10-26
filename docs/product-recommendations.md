@@ -10,11 +10,11 @@ The [shared utilities guide](../synthetic-tests/utils/README.md#measurement-sema
 
 ## Optional Microsoft-reported providers
 
-Service-owned collectors reuse the existing process and Graph identity, once per service cycle independently of target/journey count or journey-initialization success. Safe simulation configs keep providers off; live examples enable stable `serviceHealth`, while beta `serviceActivity` remains off. Scoped synthetic access must not silently expand to tenant provider permissions; denied provider calls remain explicit diagnostics.
+Service-owned collectors reuse the existing container with an independent provider lane (default 300 seconds), credential and cadence, regardless of synthetic targets/initialization. Optional `providerClientId` selects the separate federated read-only application. Safe profiles keep providers off; live examples enable stable context, with beta still separately gated. Scoped synthetic grants never silently expand to tenant provider permissions; denied calls remain explicit diagnostics/Unknown context.
 
 Stable health overviews and issue history need `ServiceHealth.Read.All` admin consent and remain **context-only/impact-suppressed**. Exact live v1.0 overview status reports directly to `${service}-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Failed/missing/unknown overview status yields Unknown without a numeric value and with failure context. The existing trial observes Graph 403 pending consent. Issues/history never populate journey health.
 
-Exchange's verified beta report is `getConnectivityMetricsForExchange`; Teams' is `getMessageVolumeMetricsForTeamsChat`. They need explicit `ENABLE_BETA_SERVICE_ACTIVITY=true`, service-specific approved application permissions and tenant eligibility/enablement. Beta is experimental, unsupported for production, and **diagnostic-only—never bubbles into Experience or journey health**. No verified SharePoint report exists, so enabling it is rejected rather than substituting OfficeApps. Optional/unverified functions are not exposed.
+Exchange and Teams each support five approved beta functions in independent provider lanes inside their existing containers. They need explicit `ENABLE_BETA_SERVICE_ACTIVITY=true`, approved application permissions and actual tenant eligibility. Counts and Teams percentages remain diagnostic absent explicit customer thresholds; configured fresh-bucket reports feed only suppressed Service Health, never Experience/journey health or automatic call quality. Beta remains unsupported for production; SharePoint supports stable collection only. See [provider setup and exact contracts](./provider-monitoring.md).
 
 Basic tenants can run the API-backed synthetics and stable Service Health with the subscribed services/appropriate Teams SKU and approved access. Do not promise beta reports on Basic: API permission documentation does not explicitly confirm Basic entitlement. The separate [advanced Microsoft 365 monitoring feature](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service. That published feature threshold is not a verified beta API licensing rule; tenant report eligibility must still be checked.
 
@@ -58,9 +58,9 @@ Use scoped permissions and dedicated resources. One mailbox/site tests an integr
 - Use model dependencies for rollup and keep Microsoft-reported provider context separate.
 - Reuse service-owned named business actions and attribute their measurements to fixed journey/step IDs. Token acquisition and cleanup remain internal; their failures can explain the overall result without emitting standalone steps or rewriting successful business-action observations.
 
-The [model templates](../health-model/README.md) create four models, 38 entities and
-34 relationships with all services/scenarios selected. Seven journeys receive
-whole-journey reports; 21 business-step children receive action reports.
+The [model templates](../health-model/README.md) create four models, 61 entities and
+57 relationships with all services/scenarios selected. Eleven journeys receive
+whole-journey reports; 40 business-step children receive action reports.
 **External Reports** always remains; Azure OTEL optionally adds **OpenTelemetry**.
 Reports replace the previous cycle with a TTL; expiry removes signals, not a
 guaranteed Unhealthy state or alert. Aggregates do not identify individual missing

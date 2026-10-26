@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { GraphClient } from "./graph.js";
-import { ProviderCollectionError, readProviderCollection } from "./provider-collection.js";
-import { serviceActivitySchema } from "./service-config.js";
+import { ProviderCollectionError, readProviderCollection, type ProviderSourceDefinition } from "./provider-collection.js";
+import { serviceActivitySchema, type ServiceConfig } from "./service-config.js";
+import { activityFunctionNames, activityFunctions, isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
 
 export interface ServiceActivityWindow {
   start: string;
@@ -23,9 +24,9 @@ export function serviceActivityWindow(raw: z.input<typeof serviceActivitySchema>
 }
 
 export function serviceActivityPath(
-  name: "getConnectivityMetricsForExchange" | "getMessageVolumeMetricsForTeamsChat", window: ServiceActivityWindow,
+  name: ActivityFunction, window: ServiceActivityWindow,
 ): string {
-  if (!["getConnectivityMetricsForExchange", "getMessageVolumeMetricsForTeamsChat"].includes(name) ||
+  if (!(activityFunctionNames as readonly string[]).includes(name) ||
       ![5, 10, 15, 30].includes(window.aggregationIntervalMinutes)) {
     throw new ProviderCollectionError("collector-failure");
   }
@@ -71,4 +72,25 @@ export function getConnectivityMetricsForExchange(graph: GraphClient, window: Se
 }
 export function getMessageVolumeMetricsForTeamsChat(graph: GraphClient, window: ServiceActivityWindow, signal: AbortSignal) {
   return readActivity(graph, "getMessageVolumeMetricsForTeamsChat", valueSchema, window, signal);
+}
+
+export function serviceActivitySources(service: ServiceConfig): ProviderSourceDefinition[] {
+  if (!service.serviceActivity.enabled) return [];
+  const functions = service.serviceActivity.functions ?? activityFunctions[service.type];
+  return functions.map(name => ({
+    source: name, apiVersion: "beta",
+    async collect(graph, signal, collectedAt) {
+      const window = serviceActivityWindow(service.serviceActivity, Date.parse(collectedAt));
+      const rows = isPercentageActivity(name)
+        ? await readActivity(graph, name, percentageSchema, window, signal)
+        : await readActivity(graph, name, valueSchema, window, signal);
+      return rows.map(row => ({
+        kind: "activity", service: service.type, collectedAt, function: name,
+        intervalStart: row.intervalStartDateTime,
+        intervalEnd: new Date(Date.parse(row.intervalStartDateTime) + window.aggregationIntervalMinutes * 60_000).toISOString(),
+        aggregationIntervalMinutes: window.aggregationIntervalMinutes,
+        ...("percentage" in row ? { percentage: row.percentage } : { value: row.value }),
+      }));
+    },
+  }));
 }

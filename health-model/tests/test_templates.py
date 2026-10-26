@@ -62,8 +62,8 @@ class ModelTemplateContracts(unittest.TestCase):
         selected = self.selected(self.project)
         journeys = [journey for service in selected for journey in service["journeys"]]
         steps = sum(len(journey["steps"]) for journey in journeys)
-        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps, len(selected) * 2 + len(journeys) + steps), (4, 38, 34))
-        self.assertEqual(steps, 21)
+        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps, len(selected) * 2 + len(journeys) + steps), (4, 61, 57))
+        self.assertEqual(steps, 40)
         for service in self.catalog:
             for journey in service["journeys"]:
                 self.assertIn(journey["name"], self.project["services"][service["service"]]["scenarios"])
@@ -107,9 +107,37 @@ class ModelTemplateContracts(unittest.TestCase):
         catalog[0]["journeys"].append(additional)
         project = copy.deepcopy(self.project)
         project["services"]["exchange"]["scenarios"]["future-journey"] = True
-        self.assertEqual(len(self.selected(project, catalog)[0]["journeys"]), 3)
+        self.assertEqual(len(self.selected(project, catalog)[0]["journeys"]), 7)
         project["services"]["exchange"]["scenarios"]["send-receive-mail"] = False
-        self.assertEqual([journey["entityName"] for journey in self.selected(project, catalog)[0]["journeys"]], ["exchange-draft", "exchange-future"])
+        self.assertEqual([journey["entityName"] for journey in self.selected(project, catalog)[0]["journeys"]],
+                         ["exchange-draft", "exchange-attachment", "exchange-distribution", "exchange-recurring", "exchange-meeting", "exchange-future"])
+
+    def test_exchange_six_journeys_and_all_business_steps(self):
+        exchange = next(service for service in self.catalog if service["service"] == "exchange")
+        self.assertEqual([journey["name"] for journey in exchange["journeys"]], [
+            "send-receive-mail", "edit-reopen-draft", "attachment-reply-mail",
+            "distribution-list-mail", "recurring-calendar", "meeting-invitation",
+        ])
+        self.assertTrue(all(self.project["services"]["exchange"]["scenarios"].values()))
+        by_name = {journey["name"]: journey for journey in exchange["journeys"]}
+        self.assertEqual([step["name"] for step in by_name["edit-reopen-draft"]["steps"]],
+                         ["create-draft", "read-initial-draft", "update-draft", "read-draft", "delete-draft"])
+        self.assertEqual(by_name["recurring-calendar"]["steps"][-1]["name"], "delete-event")
+        self.assertEqual(by_name["meeting-invitation"]["steps"][-1]["name"], "cancel-meeting")
+
+    def test_direct_provider_activity_signals_are_on_suppressed_context_not_journey_nodes(self):
+        compiled = json.dumps(self.service_template)
+        for function in [
+            "getConnectivityMetricsForExchange", "getMessageVolumeMetricsForEmailDelivery",
+            "getActiveUserMetricsForOutlookWebByReadEmail", "getActiveUserMetricsForOutlookWebByAppOpening",
+            "getActiveUserMetricsForEmailByModernAuthentication", "getUsageMetricsForTeamsByMeetingsJoined",
+            "getUsageMetricsForTeamsByLaunch", "getMessageVolumeMetricsForTeamsChat",
+            "getAudioStreamQoEMetricsForTeams", "getAudioStreamsOverUdpMetricsForTeams",
+        ]:
+            self.assertIn(function, compiled)
+        self.assertIn("microsoft-activity-", compiled)
+        self.assertIn("microsoft-reported-service-status", compiled)
+        self.assertNotIn("serviceActivity", self.service_template["parameters"])
 
     def test_all_services_disabled_keeps_evidence_free_root(self):
         project = copy.deepcopy(self.project)

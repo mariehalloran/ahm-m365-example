@@ -172,9 +172,15 @@ retire them only through approved cleanup.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
 rollup, not just successful ARM provisioning. The complete topology is four models,
-38 entities, 34 relationships, seven journeys and 21 business steps. Provider context
+61 entities, 57 relationships, eleven journeys and 40 business steps. Provider context
 is separate and impact-suppressed. Invalid schemas or unusable report credentials
 can prevent publication and require independent detection.
+
+Each container also runs an independent provider lane (`providerIntervalSeconds`,
+default 300), with no second worker/container. Explicit beta preparation uses
+`--enable-beta-service-activity` to mount `ENABLE_BETA_SERVICE_ACTIVITY=true`;
+service config still owns beta enablement/functions/thresholds. See the
+[direct provider report setup](../../docs/provider-monitoring.md).
 
 Production acceptance additionally requires [worker-stall, publication-failure and
 end-to-end notification checks](../../docs/operations.md#enterprise-reliability-acceptance-gate).

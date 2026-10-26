@@ -19,6 +19,7 @@ param deployWorkers bool = false
 param workerImage string = ''
 @description('Separate Microsoft 365 mutation gate; simulation deployments leave this false.')
 param enableLiveProbes bool = false
+param enableBetaServiceActivity bool = false
 @description('The optional Application Insights component created by the health-model deployment.')
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
@@ -187,6 +188,7 @@ module workers './worker.bicep' = [
         ? serviceCertificates[service]
         : ''
       enableLiveProbes: enableLiveProbes
+      enableBetaServiceActivity: enableBetaServiceActivity
       applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
     dependsOn: [reportAssignments, imagePullAssignments, teamsCacheAssignment]

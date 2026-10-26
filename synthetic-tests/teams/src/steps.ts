@@ -88,13 +88,13 @@ async function findMessage(
     const messages = await graph.json(path, messagesSchema, signal);
     signal.throwIfAborted();
     if (now() > deadline) throw new IntegrationError("read-failure");
-    const next = messages["@odata.nextLink"] === undefined
-      ? undefined : nextPagePath(messages["@odata.nextLink"], messagesPath);
     const found = messages.value.find(message =>
       message.deletedDateTime == null &&
       message.from?.application?.id.toLowerCase() === applicationId.toLowerCase() &&
       matchesMarker(message.body, marker));
     if (found) return found.id;
+    const next = messages["@odata.nextLink"] === undefined
+      ? undefined : nextPagePath(messages["@odata.nextLink"], messagesPath);
     if (!next) return undefined;
     path = next;
   }

@@ -1,7 +1,7 @@
 import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
-import { readDraft, updateDraft } from "./draft-steps.js";
+import { deleteDraft, readDraft, updateDraft } from "./draft-steps.js";
 import { authenticate, cleanup, createDraft, type MailAttempt } from "./steps.js";
 
 export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
@@ -21,9 +21,13 @@ export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
     result.diagnosticContext.authenticationDurationMs = Math.max(0, now() - startedAt);
     result.diagnosticContext.testStage = "execution";
     const draftId = await measureStep(result, "create-draft", () => createDraft(graph, attempt, signal), now);
+    await measureStep(result, "read-initial-draft", () => readDraft(graph, attempt, draftId, signal, false), now);
     await measureStep(result, "update-draft", () => updateDraft(graph, attempt, draftId, signal), now);
     result.diagnosticContext.testStage = "download";
     await measureStep(result, "read-draft", () => readDraft(graph, attempt, draftId, signal), now);
+    if (context.config.EXCHANGE_CLEANUP_ENABLED === "false") {
+      result.steps.push({ name: "delete-draft", status: "skipped", observedAt: new Date(now()).toISOString(), reason: "cleanup-disabled" });
+    } else await measureStep(result, "delete-draft", () => deleteDraft(graph, attempt, draftId, signal), now, () => "cleanup-failure");
     result.success = true;
     result.diagnosticContext.testStage = "complete";
   } catch (error) {

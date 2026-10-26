@@ -2,13 +2,60 @@
 
 ## Deployment status and order
 
-The [model templates](../health-model/README.md) define a root Azure Monitor Health Models resource referencing independent service models. Exchange and SharePoint each have two independently selected journeys; Teams has messaging, reply and individual-account calling journeys. Each journey has business-step child entities and receives aggregated direct reports in **External Reports**, plus optional OTEL query signals when Azure Monitor export is selected. All services/scenarios give four models, 38 entities, 34 relationships, seven journeys and 21 business-step entities. Token acquisition and internal cleanup have neither entities nor published step data; ending a test call is an explicit business step.
+The [model templates](../health-model/README.md) define a root referencing independent service models. Exchange has six journey families, SharePoint two and Teams three. Each journey/business step receives aggregated direct **External Reports**, plus optional OTEL query signals. All selections give four models, 61 entities, 57 relationships, eleven journeys and 40 business steps. Token acquisition and generic cleanup are internal; explicit deletion/cancellation/hang-up are business steps. Provider context is separately suppressed and runs on independent container-local lanes.
 
-**Recorded live baseline, 2026-10-23:** the same-tenant
-`m365-experience-consto` trial uses the private root profile `monitoring.consto.json`,
+### Recorded live acceptance evidence — 2026-10-26
+
+The same-tenant `m365-experience-consto` trial has all three workers at
+ready/desired revision **11**, using immutable image:
+
+```text
+crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82
+```
+
+The original private root profile `monitoring.consto.json` was migrated in place:
+all six Exchange journeys selected, user1 sender → user2 recipient, dedicated
+`ahm-synthetic-mail@constosuites.onmicrosoft.com` with user1/user2 as explicit
+expected recipients, provider cadence 300 seconds and explicit live beta approval.
+Only the two approved mail/calendar accounts are scoped; user3 remains denied for
+both Mail and Calendar, with no tenant-wide grants.
+
+| Surface | Observed outcome |
+| --- | --- |
+| Exchange mail/draft/DL | Actual revision-11 logs at 13:50 UTC: mailflow, draft and DL journeys passed. Mail/draft cleanup remains disabled; explicit draft deletion was skipped, not counted as failed or verified |
+| Exchange attachment/reply | All four business steps passed: send attachment, verify delivered hash, send correlated reply and confirm received reply |
+| Exchange calendars | Both selected calendar journeys remain Unhealthy: user1 actual Graph access returns `403 ErrorAccessDenied`; user2 calendar access succeeds. These are real failures, not simulated successes |
+| Teams messaging/replies | Actual revision-11 posts and replies passed Graph readback, including expected bot author and correlation |
+| Teams calls | All three configured account call flows passed |
+| Stable provider context | Real direct reports were ingested through ARM: Exchange and Teams Degraded; SharePoint Healthy; all with suppressed impact, independent of synthetic rollup |
+| Beta activity | All ten selected Exchange/Teams functions returned HTTP 403 backend `UnknownError`, “The redirected request failed.” The actual provider token contains both approved beta roles plus Service Health. Collection remains explicitly enabled without synthetic fallback or broader grants |
+| SharePoint synthetic journeys | Missing configured live targets remain an acceptance gap and produce Unhealthy evidence; stable provider Healthy does not establish synthetic journey health |
+| Scheduling | Nine measured revision-10 fast-lane intervals were 59.977–60.018 seconds; extended interval 300.036941 seconds and provider interval 300.023373 seconds. Revision 11 uses the same scheduler/configuration; these measurements are not a new revision-11 cadence sample |
+
+**Calendar acceptance remains pending.** Scoped RBAC diagnostics show user1 in
+scope, but those diagnostics bypass the application authorization cache. Microsoft
+documents that an active application cache can retain authorization for up to two
+hours ([Exchange application RBAC](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)).
+The grant was applied around 13:05 UTC; do not treat an in-scope diagnostic as proof
+of effective Graph access or assume that the observed denial is resolved. Recheck
+actual operations after cache refresh; retain Unhealthy reports until they succeed.
+Do not switch actors or broaden grants to hide this failure.
+
+**This is observed deployment evidence, not full enterprise monitoring acceptance.**
+Independent stopped/stalled-worker and broken-publication/telemetry/alerting
+detection, end-to-end notification delivery and OTEL cloud ingestion/query evaluation
+remain unverified. The current capture does not establish fresh complete
+journey/step/root rollup verification. Beta backend availability and SharePoint
+live setup remain unresolved. API-backed messaging/call operations do not establish
+employee UI experience, answered calls or audio quality.
+
+### Historical live baseline — 2026-10-23
+
+The earlier same-tenant
+`m365-experience-consto` trial used the private root profile `monitoring.consto.json`,
 three ready revision-9 workers and immutable image
 `sha256:16283e992e86f59853239047a5266b8afa4daba40598d6a631012ea835c4ef69`.
-This is acceptance evidence, not a default configuration or proof of later deployments.
+The following outcomes apply only to that historical baseline, not revision 11.
 
 | Surface | Verified outcome |
 | --- | --- |
@@ -97,7 +144,7 @@ tenant-claim URI are normalized consistently with Microsoft's .NET SDK; conflict
 aliases are rejected. Optional `nbf` is validated when present. Diagnostics expose
 only allowlisted error codes/claim names, never bearer tokens or claim values.
 
-Live execution also requires `mode: live`, all selection gates, approved targets and `ENABLE_LIVE_M365=true`. Live examples collect stable Service Health once per cycle independently of journey initialization; simulation keeps it off. Stable context needs separately approved `ServiceHealth.Read.All` admin consent. Exact overview status reports directly to `${service}-service-health` using `microsoft-reported-service-status` (100 healthy, 50 degraded, 0 interruption), with `impactSuppressed`. Failed/missing/unknown overviews produce Unknown without a numeric value and retain failure context; the existing trial observes Graph 403 pending consent. Experimental beta diagnostics remain off and require service-specific permissions plus `ENABLE_BETA_SERVICE_ACTIVITY=true`. Neither provider context nor beta diagnostics contributes to synthetic reports or Experience rollup.
+Live execution requires `mode: live`, root selection, approved targets and `ENABLE_LIVE_M365=true`. Independent provider lanes inside each service container default to 300 seconds (`providerIntervalSeconds`), with separate provider identity/permissions. Approved stable states report directly to suppressed Service Health; missing/failed/unapproved data is Unknown. Optional beta supports all five approved Exchange and Teams functions, with explicit customer thresholds for direct context reports; otherwise raw activity remains diagnostic. No mandatory Log Analytics or synthetic/Experience rollup impact is added. Parameter preparation requires **`--enable-beta-service-activity`** to set ARM `enableBetaServiceActivity: true` and mount **`ENABLE_BETA_SERVICE_ACTIVITY=true`**; it never silently enables beta from another profile. See [exact provider setup and endpoints](./provider-monitoring.md).
 
 ## Container Apps boundary
 

@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import { ConfigurationError } from "./config.js";
 import { probeSchema } from "./contracts.js";
+import { executionLanes } from "./execution-lanes.js";
 import { parseServiceConfig, readServiceConfig, type ServiceConfig, type ServiceFileConfig } from "./service-config.js";
 
 const target = probeSchema.pick({ id: true, region: true, scenario: true });
@@ -31,8 +32,13 @@ export const projectConfigSchema = z.object({
       ...selection,
       scenarios: z.object({
         "send-receive-mail": z.boolean().default(true), "edit-reopen-draft": z.boolean().default(true),
+        "attachment-reply-mail": z.boolean().default(false), "distribution-list-mail": z.boolean().default(false),
+        "recurring-calendar": z.boolean().default(false), "meeting-invitation": z.boolean().default(false),
       }).strict(),
-      targets: z.array(target.extend({ mailbox: probeSchema.shape.mailbox }).strict()).max(30),
+      targets: z.array(target.extend({
+        mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
+        distributionList: probeSchema.shape.distributionList,
+      }).strict()).max(30),
     }).strict(),
     teams: z.object({
       ...selection,
@@ -111,7 +117,12 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceFileC
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
     const cycleBudgetSeconds = project.otel.enabled ? 224 : 212;
-    if (project.healthModel.reportTtlMinutes * 60 <= service.intervalSeconds + cycleBudgetSeconds) {
+    const longestInterval = Math.max(...executionLanes(service)
+      .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]))
+      .map(lane => lane.intervalSeconds));
+    const providerBudget = service.serviceHealth || service.serviceActivity.enabled
+      ? service.providerIntervalSeconds + (project.otel.enabled ? 72 : 60) : 0;
+    if (project.healthModel.reportTtlMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
       throw new ConfigurationError(`Health report TTL must exceed the service cadence plus the bounded cycle/report budget (${cycleBudgetSeconds} seconds)`);
     }
   }

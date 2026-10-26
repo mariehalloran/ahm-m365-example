@@ -99,6 +99,70 @@ describe("independent Graph and health-report identities", () => {
     AZURE_CLIENT_ID: certificate.AZURE_CLIENT_ID, AZURE_TENANT_ID: certificate.AZURE_TENANT_ID,
     BOT_CLIENT_ID: "44444444-4444-4444-8444-444444444444", BOT_TENANT_ID: certificate.AZURE_TENANT_ID,
   };
+  it("keeps readback and provider federation on their distinct configured applications when both are enabled", async () => {
+    const teamsReadbackClientId = "77777777-7777-4777-8777-777777777777";
+    const providerClientId = "88888888-8888-4888-8888-888888888888";
+    const service = botService({ serviceHealth: true, teamsReadbackClientId, providerClientId });
+    const env = { ...botEnv, ENABLE_LIVE_M365: "true" };
+    const provider = providerGraphClient(service, env)!;
+    const runtime = await serviceRuntime(service, serviceSettings(service, env), output, env);
+    expect(credentials.assertion.mock.calls.map(args => args.slice(0, 2))).toEqual([
+      [botEnv.AZURE_TENANT_ID, providerClientId],
+      [botEnv.AZURE_TENANT_ID, teamsReadbackClientId],
+    ]);
+    await Promise.all([
+      provider.authenticate(new AbortController().signal),
+      runtime.graph!.authenticate(new AbortController().signal),
+    ]);
+    expect(runtime.graph).not.toBe(provider);
+    expect(runtime.teamsBot).toBeInstanceOf(TeamsBotClient);
+    expect(credentials.certificate).not.toHaveBeenCalled();
+    expect(credentials.default).not.toHaveBeenCalled();
+  });
+  it("federates provider access without changing synthetic Graph or Bot Connector identities", async () => {
+    const providerClientId = "88888888-8888-4888-8888-888888888888";
+    const service = botService({ serviceHealth: true, providerClientId });
+    const graph = providerGraphClient(service, { ...botEnv, ENABLE_LIVE_M365: "true" });
+    expect(graph).toBeInstanceOf(GraphClient);
+    expect(credentials.assertion).toHaveBeenCalledExactlyOnceWith(
+      botEnv.AZURE_TENANT_ID, providerClientId, expect.any(Function),
+    );
+    const assertion = credentials.assertion.mock.calls[0]![2] as () => Promise<string>;
+    await expect(assertion()).resolves.toBe("test-token");
+    expect(credentials.token).toHaveBeenCalledWith("api://AzureADTokenExchange/.default");
+    const runtime = await serviceRuntime(service, serviceSettings(service, { ENABLE_LIVE_M365: "true" }), output, botEnv);
+    expect(runtime.teamsBot).toBeInstanceOf(TeamsBotClient);
+    expect(credentials.assertion).toHaveBeenCalledOnce();
+    expect(credentials.managed.mock.calls).toEqual([
+      [{ clientId: botEnv.AZURE_CLIENT_ID }], [{ clientId: botEnv.AZURE_CLIENT_ID }], [{ clientId: botEnv.BOT_CLIENT_ID }],
+    ]);
+    expect(credentials.certificate).not.toHaveBeenCalled();
+    expect(credentials.default).not.toHaveBeenCalled();
+  });
+  it.each([
+    { mode: "simulation", serviceHealth: true },
+    { mode: "live", serviceHealth: false },
+    { mode: "live", serviceHealth: true, enabled: false },
+  ])("does not initialize optional provider federation without enabled live collection", overrides => {
+    const service = botService({ providerClientId: certificate.M365_CLIENT_ID, ...overrides });
+    expect(providerGraphClient(service, {})).toBeUndefined();
+    expect(credentials.managed).not.toHaveBeenCalled();
+    expect(credentials.assertion).not.toHaveBeenCalled();
+  });
+  it("rejects certificate/provider federation conflicts and malformed application IDs", () => {
+    expect(() => botService({ providerClientId: certificate.M365_CLIENT_ID, graphAuthentication: "certificate" }))
+      .toThrow("providerClientId requires managed-identity");
+    expect(() => botService({ providerClientId: "not-a-uuid" })).toThrow("providerClientId");
+  });
+  it("fails provider federation explicitly without host identity/tenant or live approval", () => {
+    const service = botService({ serviceHealth: true, providerClientId: certificate.M365_CLIENT_ID });
+    for (const env of [{}, { ...botEnv, AZURE_TENANT_ID: "" }, { ...botEnv, AZURE_CLIENT_ID: "" }]) {
+      expect(() => providerGraphClient(service, { ...env, ENABLE_LIVE_M365: "true" })).toThrow();
+    }
+    expect(() => providerGraphClient(service, botEnv)).toThrow("ENABLE_LIVE_M365");
+    expect(credentials.token).not.toHaveBeenCalled();
+    expect(credentials.assertion).not.toHaveBeenCalled();
+  });
   it("uses explicit readback app federation without changing the Bot Connector identity or provider identity", async () => {
     const readbackId = "77777777-7777-4777-8777-777777777777";
     const service = botService({ teamsReadbackClientId: readbackId, serviceHealth: true });

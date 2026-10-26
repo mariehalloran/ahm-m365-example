@@ -22,7 +22,10 @@ const project = () => ({
   ...structuredClone(checkedIn),
   healthModel: { ...checkedIn.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
   services: {
-    exchange: { ...structuredClone(checkedIn.services.exchange), scenarios: { "send-receive-mail": true, "edit-reopen-draft": false } },
+    exchange: { ...structuredClone(checkedIn.services.exchange), scenarios: {
+      "send-receive-mail": true, "edit-reopen-draft": false, "attachment-reply-mail": false,
+      "distribution-list-mail": false, "recurring-calendar": false, "meeting-invitation": false,
+    } },
     teams: {
       ...structuredClone(checkedIn.services.teams), targets: [{ id: "teams-probe-001" }],
       scenarios: { "publish-channel-message": true, "reply-channel-message": false, "call-test-user": false },

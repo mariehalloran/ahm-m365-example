@@ -1,3 +1,22 @@
+@export()
+var providerActivityFunctions = {
+  exchange: [
+    'getConnectivityMetricsForExchange'
+    'getMessageVolumeMetricsForEmailDelivery'
+    'getActiveUserMetricsForOutlookWebByReadEmail'
+    'getActiveUserMetricsForOutlookWebByAppOpening'
+    'getActiveUserMetricsForEmailByModernAuthentication'
+  ]
+  teams: [
+    'getUsageMetricsForTeamsByMeetingsJoined'
+    'getUsageMetricsForTeamsByLaunch'
+    'getMessageVolumeMetricsForTeamsChat'
+    'getAudioStreamQoEMetricsForTeams'
+    'getAudioStreamsOverUdpMetricsForTeams'
+  ]
+  sharepoint: []
+}
+
 type ServiceStep = {
   name:
     | 'create-draft'
@@ -16,6 +35,25 @@ type ServiceStep = {
     | 'place-call'
     | 'wait-before-hangup'
     | 'end-call'
+    | 'read-initial-draft'
+    | 'delete-draft'
+    | 'send-attachment'
+    | 'verify-attachment'
+    | 'reply-mail'
+    | 'confirm-reply-mail'
+    | 'send-group-mail'
+    | 'confirm-group-delivery'
+    | 'create-event'
+    | 'read-occurrence'
+    | 'update-event'
+    | 'verify-event'
+    | 'delete-event'
+    | 'create-meeting'
+    | 'confirm-invitation'
+    | 'verify-attendee-calendar'
+    | 'accept-meeting'
+    | 'confirm-acceptance'
+    | 'cancel-meeting'
   displayName: string
 }
 
@@ -56,8 +94,55 @@ var serviceDefinitions ServiceDefinition[] = [
         displayName: 'Save, edit and reopen draft'
         steps: [
           { name: 'create-draft', displayName: 'Create draft' }
+          { name: 'read-initial-draft', displayName: 'Read saved draft' }
           { name: 'update-draft', displayName: 'Edit draft' }
           { name: 'read-draft', displayName: 'Reopen and verify draft' }
+          { name: 'delete-draft', displayName: 'Delete draft' }
+        ]
+      }
+      {
+        name: 'attachment-reply-mail'
+        entityName: 'exchange-attachment'
+        displayName: 'Verify attachment and correlated reply'
+        steps: [
+          { name: 'send-attachment', displayName: 'Send attachment' }
+          { name: 'verify-attachment', displayName: 'Verify delivered attachment hash' }
+          { name: 'reply-mail', displayName: 'Reply from recipient' }
+          { name: 'confirm-reply-mail', displayName: 'Verify correlated reply at sender' }
+        ]
+      }
+      {
+        name: 'distribution-list-mail'
+        entityName: 'exchange-distribution'
+        displayName: 'Deliver through distribution list'
+        steps: [
+          { name: 'send-group-mail', displayName: 'Send to distribution list' }
+          { name: 'confirm-group-delivery', displayName: 'Verify every expected recipient' }
+        ]
+      }
+      {
+        name: 'recurring-calendar'
+        entityName: 'exchange-recurring'
+        displayName: 'Create, edit and remove recurring calendar event'
+        steps: [
+          { name: 'create-event', displayName: 'Create recurring series' }
+          { name: 'read-occurrence', displayName: 'Read occurrence' }
+          { name: 'update-event', displayName: 'Update recurring series' }
+          { name: 'verify-event', displayName: 'Verify series and occurrence update' }
+          { name: 'delete-event', displayName: 'Delete recurring series' }
+        ]
+      }
+      {
+        name: 'meeting-invitation'
+        entityName: 'exchange-meeting'
+        displayName: 'Invite, accept and cancel meeting'
+        steps: [
+          { name: 'create-meeting', displayName: 'Send meeting invitation' }
+          { name: 'confirm-invitation', displayName: 'Read attendee invitation' }
+          { name: 'verify-attendee-calendar', displayName: 'Verify attendee calendar event' }
+          { name: 'accept-meeting', displayName: 'Accept as attendee' }
+          { name: 'confirm-acceptance', displayName: 'Observe acceptance as organizer' }
+          { name: 'cancel-meeting', displayName: 'Cancel as organizer' }
         ]
       }
     ]

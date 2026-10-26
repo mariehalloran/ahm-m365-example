@@ -5,6 +5,7 @@ import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } fro
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
+import { isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
 
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
@@ -19,7 +20,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status";
+    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | `microsoft-activity-${ActivityFunction}`;
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -155,19 +156,65 @@ export function aggregateHealthReports(
 }
 
 const serviceStatusScores: Readonly<Record<string, number>> = {
-  serviceoperational: 100, servicerestored: 100, resolved: 100, resolvedexternal: 100,
-  falsepositive: 100, postincidentreviewpublished: 100,
+  serviceoperational: 100,
   serviceinterruption: 0,
-  servicedegradation: 50, investigating: 50, restoringservice: 50, verifyingservice: 50,
-  extendedrecovery: 50, investigationsuspended: 50, mitigated: 50, mitigatedexternal: 50,
-  confirmed: 50, reported: 50,
+  servicedegradation: 50,
 };
 
+export function serviceActivityReports(
+  service: ServiceConfig, cycle: ProviderCycle, ttlMinutes: number, now = Date.now(),
+): HealthReport[] {
+  if (!service.serviceActivity.enabled) return [];
+  const parsed = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.safeParse(record));
+  const records = parsed.flatMap(record => record.success && record.data.service === service.type ? [record.data] : []);
+  return Object.entries(service.serviceActivity.thresholds).flatMap(([name, thresholds]) => {
+    if (!thresholds) return [];
+    const functionName = name as ActivityFunction;
+    const rows = records.filter((record): record is Extract<ProviderDiagnostic, { kind: "activity" }> =>
+      record.kind === "activity" && record.function === functionName)
+      .sort((a, b) => Date.parse(b.intervalEnd) - Date.parse(a.intervalEnd));
+    const latest = rows[0];
+    const failed = parsed.some((record, index) => !record.success &&
+      cycle.providerDiagnostics[index]?.kind === "activity" &&
+      (cycle.providerDiagnostics[index] as Extract<ProviderDiagnostic, { kind: "activity" }>).function === functionName) || records.some(record =>
+      (record.kind === "failure" || record.kind === "skipped") && record.source === functionName);
+    const end = latest ? Date.parse(latest.intervalEnd) : NaN;
+    const stale = !Number.isFinite(end) || end > now || now - end > service.serviceActivity.maxAgeMinutes * 60000 ||
+      (latest && (Date.parse(latest.collectedAt) > now || now - Date.parse(latest.collectedAt) > service.serviceActivity.maxAgeMinutes * 60000));
+    const valid = latest && Date.parse(latest.intervalEnd) - Date.parse(latest.intervalStart) === latest.aggregationIntervalMinutes * 60000 &&
+      rows.filter(row => row.intervalEnd === latest.intervalEnd).length === 1 &&
+      (isPercentageActivity(functionName) ? latest.value === undefined && latest.percentage !== undefined
+        : latest.percentage === undefined && latest.value !== undefined);
+    const sample = latest ? isPercentageActivity(functionName) ? latest.percentage : latest.value : undefined;
+    const value = failed || stale || !valid ? undefined : sample;
+    const rules: EvaluationRules = {
+      degradedRule: { operator: "LessThan", threshold: thresholds.degradedBelow },
+      unhealthyRule: { operator: "LessThan", threshold: thresholds.unhealthyBelow },
+    };
+    return [{
+      entityName: `${service.type}-service-health`,
+      body: {
+        signalName: `microsoft-activity-${functionName}` as const, expiresInMinutes: ttlMinutes,
+        healthState: value === undefined ? "Unknown" : evaluateHealthState(value, rules),
+        ...(value === undefined ? {} : { value, evaluationRules: rules }),
+        additionalContext: JSON.stringify({
+          cycleId: cycle.cycleId, source: functionName, apiVersion: "beta", aggregation: "latest-complete-bucket",
+          ...(latest ? { intervalStart: latest.intervalStart, intervalEnd: latest.intervalEnd } : {}),
+          unit: isPercentageActivity(functionName) ? "percentage" : "count",
+          interpretation: functionName === "getAudioStreamQoEMetricsForTeams" ? "telemetry-coverage-not-call-quality"
+            : functionName === "getAudioStreamsOverUdpMetricsForTeams" ? "network-context-not-call-quality" : "customer-configured-threshold",
+          diagnosticCategories: failed ? ["collection-failure"] : !latest ? ["no-data"] : stale ? ["stale-data"] : value === undefined ? ["malformed-response"] : [],
+        }),
+      },
+    }];
+  });
+}
+
 export function serviceHealthReport(
-  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number,
+  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number, now = Date.now(), maxAgeMinutes = 60,
 ): HealthReport {
-  const records = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.parse(record))
-    .filter(record => record.service === service);
+  const parsed = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.safeParse(record));
+  const records = parsed.flatMap(record => record.success && record.data.service === service ? [record.data] : []);
   const overviews = records.filter(record => record.kind === "overview");
   const failures = records.filter((record): record is Extract<ProviderDiagnostic, { kind: "failure" }> =>
     record.kind === "failure" && record.apiVersion === "v1.0" && record.source === "serviceAnnouncement.healthOverviews");
@@ -175,7 +222,10 @@ export function serviceHealthReport(
     record.kind === "skipped" && record.source === "serviceAnnouncement.healthOverviews");
   const scores = overviews.map(record => serviceStatusScores[record.status.toLowerCase()]);
   const knownScores = scores.filter((score): score is number => typeof score === "number");
-  const value = failures.length || skipped || !scores.length || knownScores.length !== scores.length
+  const stale = overviews.some(record => Date.parse(record.collectedAt) > now ||
+    now - Date.parse(record.collectedAt) > maxAgeMinutes * 60000);
+  const invalid = parsed.some((record, index) => !record.success && cycle.providerDiagnostics[index]?.kind === "overview");
+  const value = failures.length || skipped || stale || invalid || !scores.length || knownScores.length !== scores.length
     ? undefined : Math.min(...knownScores);
   return {
     entityName: `${service}-service-health`,
@@ -188,7 +238,7 @@ export function serviceHealthReport(
         overviewCount: overviews.length,
         statuses: [...new Set(overviews.map(record => record.status))].slice(0, 8),
         diagnosticCategories: failures.length ? [...new Set(failures.map(record => record.category))]
-          : !overviews.length ? ["no-data"] : [],
+          : !overviews.length ? ["no-data"] : stale ? ["stale-data"] : [],
         httpStatuses: [...new Set(failures.flatMap(record => record.httpStatus === undefined ? [] : [record.httpStatus]))].slice(0, 8),
       }),
     },
@@ -246,7 +296,10 @@ export function createHealthReporter(
     + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(modelName)}`;
   return async cycle => {
     const reports = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
-      : service.mode === "live" && service.serviceHealth ? [serviceHealthReport(service.type, cycle, policy.reportTtlMinutes)] : [];
+      : service.mode === "live" ? [
+        ...(service.serviceHealth ? [serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes)] : []),
+        ...serviceActivityReports(service, cycle, policy.reportTtlMinutes),
+      ] : [];
     if (!http) {
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;

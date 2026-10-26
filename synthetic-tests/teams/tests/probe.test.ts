@@ -395,6 +395,20 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
   });
 
+  it.each([
+    "https://attacker.invalid/unfollowed",
+    `${graphBase}${messagesPath}?$top=51&$skiptoken=unfollowed`,
+    `${graphBase}${messagesPath}?$skiptoken=${"x".repeat(4097)}`,
+  ])("confirms actual first-page bot evidence without following irrelevant continuation metadata: %s", async link => {
+    const { result, calls } = await run({
+      onRead: ({ marker }) => json({ value: [message(marker)], "@odata.nextLink": link }),
+    });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.method === "GET").map(call => call.url)).toEqual([
+      `${graphBase}${messagesPath}?$top=50`,
+    ]);
+  });
+
   it("rejects pagination cycles", async () => {
     const { result, calls } = await run({ onRead: () => json({ value: [], "@odata.nextLink": nextLink("same-page") }) });
     expect(result.diagnosticCategory).toBe("read-failure");

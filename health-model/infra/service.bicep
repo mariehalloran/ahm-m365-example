@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-import { ServiceDefinition } from './service-catalog.bicep'
+import { ServiceDefinition, providerActivityFunctions } from './service-catalog.bicep'
 
 @minLength(3)
 @maxLength(44)
@@ -207,7 +207,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                   'external-reports',
                   'External Reports',
                   node.kind == 'context'
-                    ? ['microsoft-reported-service-status']
+                    ? concat(['microsoft-reported-service-status'], map(providerActivityFunctions[service.service], name => 'microsoft-activity-${name}'))
                     : ['synthetic-success-percentage', 'synthetic-mean-duration']
                 )
               ],

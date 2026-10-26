@@ -13,6 +13,8 @@ export interface MailAttempt {
   correlationId: string;
   ownedMessageIds: Set<string>;
   mutationAttempted: boolean;
+  recipientMailbox?: string | undefined;
+  deliveredMessageIds?: Set<string>;
 }
 
 function paths(attempt: MailAttempt) {
@@ -22,7 +24,7 @@ function paths(attempt: MailAttempt) {
   });
   return {
     messages: `${mailbox}/messages`,
-    inbox: `${mailbox}/mailFolders/inbox/messages?${query}`,
+    inbox: `/users/${encodeURIComponent(attempt.recipientMailbox ?? attempt.mailbox)}/mailFolders/inbox/messages?${query}`,
     copies: `${mailbox}/messages?${query}`,
   };
 }
@@ -39,7 +41,7 @@ export async function createDraft(graph: GraphClient, attempt: MailAttempt, sign
   const draft = await graph.json(paths(attempt).messages, messageSchema, signal, "POST", {
     subject: `AHM synthetic ${attempt.correlationId}`,
     body: { contentType: "Text", content: "Dedicated synthetic probe. Safe to delete." },
-    toRecipients: [{ emailAddress: { address: attempt.mailbox } }],
+    toRecipients: [{ emailAddress: { address: attempt.recipientMailbox ?? attempt.mailbox } }],
     internetMessageHeaders: [{ name: "x-ahm-correlation-id", value: attempt.correlationId }],
   }, false);
   attempt.ownedMessageIds.add(draft.id);
@@ -58,7 +60,11 @@ export async function confirmDelivery(
   while (now() < deadline) {
     signal.throwIfAborted();
     const inbox = await graph.json(paths(attempt).inbox, messageListSchema, signal);
-    for (const message of inbox.value) attempt.ownedMessageIds.add(message.id);
+    for (const message of inbox.value) {
+      if (attempt.recipientMailbox && attempt.recipientMailbox !== attempt.mailbox) {
+        (attempt.deliveredMessageIds ??= new Set()).add(message.id);
+      } else attempt.ownedMessageIds.add(message.id);
+    }
     if (inbox.value.length > 0) return;
     await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - now())), signal);
   }
@@ -73,5 +79,14 @@ export async function cleanup(graph: GraphClient, attempt: MailAttempt, signal: 
   for (const message of copies.value) attempt.ownedMessageIds.add(message.id);
   for (const id of attempt.ownedMessageIds) {
     await graph.request(`${collection.messages}/${encodeURIComponent(id)}`, signal, "DELETE");
+  }
+  if (attempt.recipientMailbox && attempt.recipientMailbox !== attempt.mailbox) {
+    const recipient = { ...attempt, mailbox: attempt.recipientMailbox, recipientMailbox: undefined };
+    const delivered = await graph.json(paths(recipient).copies, messageListSchema, signal);
+    if (delivered["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
+    for (const message of delivered.value) (attempt.deliveredMessageIds ??= new Set()).add(message.id);
+    for (const id of attempt.deliveredMessageIds ?? []) {
+      await graph.request(`${paths(recipient).messages}/${encodeURIComponent(id)}`, signal, "DELETE");
+    }
   }
 }

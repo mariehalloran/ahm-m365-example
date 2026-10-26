@@ -53,7 +53,7 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   const result = baseResult(probe, now());
   const metadata = probeServices[probe.type];
   const retainArtifacts = (metadata.service === "teams" && probe.type !== "teams-call" && config.TEAMS_CLEANUP_ENABLED === "false") ||
-    (metadata.service === "exchange" && config.EXCHANGE_CLEANUP_ENABLED === "false");
+    (metadata.service === "exchange" && !["exchange-recurring-calendar", "exchange-meeting"].includes(probe.type) && config.EXCHANGE_CLEANUP_ENABLED === "false");
   const orderedSteps: readonly StepName[] = metadata.steps;
   const scenario = probe.scenario ?? config.SYNTHETIC_SCENARIO;
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
@@ -68,12 +68,16 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   }
   const failureSteps = {
     "exchange-mail-flow": "send", "exchange-draft": "update-draft",
+    "exchange-attachment-reply": "send-attachment", "exchange-distribution-list": "send-group-mail",
+    "exchange-recurring-calendar": "update-event", "exchange-meeting": "accept-meeting",
     "teams-channel-message": "post-message", "teams-channel-reply": "post-reply",
     "teams-call": "place-call",
     "sharepoint-file": "read-file", "sharepoint-rename": "rename-file",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
+    "exchange-attachment-reply": "confirm-reply-mail", "exchange-distribution-list": "confirm-group-delivery",
+    "exchange-recurring-calendar": "verify-event", "exchange-meeting": "confirm-acceptance",
     "teams-channel-message": "confirm-publication", "teams-channel-reply": "confirm-reply",
     "teams-call": "wait-before-hangup",
     "sharepoint-file": "read-file", "sharepoint-rename": "read-file",
@@ -83,12 +87,12 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   const longStep = failedStep ?? completionSteps[probe.type];
   const baseline = (name: StepName) => ["authenticate", "cleanup", "verify-drive"].includes(name) ? 100 : 200;
   const fixedDuration = orderedSteps.reduce((sum, name) =>
-    sum + (name === longStep || (name === "cleanup" && retainArtifacts) ||
+    sum + (name === longStep || (["cleanup", "delete-draft"].includes(name) && retainArtifacts) ||
       (failedStep && name !== "cleanup" && orderedSteps.indexOf(name) > orderedSteps.indexOf(failedStep)) ? 0 : baseline(name)), 0);
   let blocked = false;
   result.steps = orderedSteps.map(name => {
     const common = { name, observedAt: result.observedAt };
-    if (name === "cleanup" && retainArtifacts) return { ...common, status: "skipped", reason: "cleanup-disabled" };
+    if (["cleanup", "delete-draft"].includes(name) && retainArtifacts) return { ...common, status: "skipped", reason: "cleanup-disabled" };
     if (blocked && name !== "cleanup") return { ...common, status: "skipped", reason: "prerequisite-failed" };
     const durationMs = name === longStep ? Math.max(0, result.durationMs - fixedDuration) : baseline(name);
     if (name === failedStep) {

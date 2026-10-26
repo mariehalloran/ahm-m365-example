@@ -13,7 +13,7 @@ const draftId = "draft/+?=immutable";
 const probe: Probe = { id: "exchange-draft-001", cohort: "exchange-draft", type: "exchange-draft", mailbox };
 const config = loadConfig({ PROBE_TIMEOUT_MS: "120000" });
 const json = (value: unknown) => new Response(JSON.stringify(value));
-type Stage = "create" | "update" | "read" | "cleanup";
+type Stage = "create" | "update" | "initial-read" | "read" | "cleanup";
 interface Options {
   failure?: { stage: Stage; status: number };
   ambiguous?: "create" | "update";
@@ -49,7 +49,7 @@ async function runDraft(options: Options = {}) {
     calls.push({ url: path.href, method, body, headers: new Headers(init?.headers), aborted: init?.signal?.aborted ?? false });
     time += 10;
     const stage: Stage = method === "POST" ? "create" : method === "PATCH" ? "update"
-      : method === "DELETE" || path.searchParams.has("$filter") ? "cleanup" : "read";
+      : method === "DELETE" || path.searchParams.has("$filter") ? "cleanup" : editedContent ? "read" : "initial-read";
     if (stage === "create") {
       subject = body.subject;
       createdContent = body.body.content;
@@ -65,14 +65,14 @@ async function runDraft(options: Options = {}) {
     if (stage === "cleanup" && options.cleanupFail) return new Response(null, { status: 403 });
     if (method === "POST") return options.malformed === "create" ? json({ unexpected: true }) : json({ id: draftId });
     if (method === "PATCH") return json({ id: draftId });
-    if (method === "DELETE") return new Response(null, { status: 204 });
+    if (method === "DELETE") { created = false; return new Response(null, { status: 204 }); }
     if (stage === "cleanup") return json({
       value: created ? [{ id: draftId }, { id: "owned-copy" }] : [],
       ...(options.cleanupNextPage ? { "@odata.nextLink": "https://graph.microsoft.com/v1.0/users/another/messages" } : {}),
     });
-    if (options.malformed === "read") return json({ id: draftId });
-    const saved: Record<string, unknown> = { id: draftId, subject, bodyPreview: editedContent, isDraft: true };
-    if (options.mismatch) saved[options.mismatch] = options.mismatch === "isDraft" ? false : "unrelated";
+    if (options.malformed === "read" && stage === "read") return json({ id: draftId });
+    const saved: Record<string, unknown> = { id: draftId, subject, bodyPreview: editedContent || createdContent, isDraft: true };
+    if (options.mismatch && stage === "read") saved[options.mismatch] = options.mismatch === "isDraft" ? false : "unrelated";
     return json(saved);
   });
   const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", {
@@ -85,7 +85,7 @@ async function runDraft(options: Options = {}) {
     graph, telemetry, signal: controller.signal, now: () => time,
   });
   expect(resultSchema.safeParse(result).success).toBe(true);
-  expect(result.steps.map(step => step.name)).toEqual(["authenticate", "create-draft", "update-draft", "read-draft", "cleanup"]);
+  expect(result.steps.map(step => step.name)).toEqual(["authenticate", "create-draft", "read-initial-draft", "update-draft", "read-draft", "delete-draft", "cleanup"]);
   return { result, calls, telemetry, credential, subject, editedContent, createdContent };
 }
 
@@ -132,21 +132,21 @@ describe("Exchange save/edit/reopen draft journey", () => {
       subject,
       internetMessageHeaders: [{ name: "x-ahm-correlation-id", value: result.correlationId }],
     });
-    expect(calls[1]?.body).toEqual({ body: { contentType: "Text", content: editedContent } });
-    expect(calls.map(call => call.method)).toEqual(["POST", "PATCH", "GET", "GET", "DELETE", "DELETE"]);
+    expect(calls[2]?.body).toEqual({ body: { contentType: "Text", content: editedContent } });
+    expect(calls.map(call => call.method)).toEqual(["POST", "GET", "PATCH", "GET", "DELETE", "GET"]);
     const messages = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages`;
     const ownedDraft = `${messages}/${encodeURIComponent(draftId)}`;
     expect(calls[0]?.url).toBe(messages);
-    expect(calls[1]?.url).toBe(ownedDraft);
-    const reopened = new URL(calls[2]!.url);
+    expect(calls[2]?.url).toBe(ownedDraft);
+    const reopened = new URL(calls[3]!.url);
     expect(reopened.origin + reopened.pathname).toBe(ownedDraft);
     expect([...reopened.searchParams]).toEqual([["$select", "id,subject,bodyPreview,isDraft"]]);
-    const cleanup = new URL(calls[3]!.url);
+    const cleanup = new URL(calls[5]!.url);
     expect(cleanup.origin + cleanup.pathname).toBe(messages);
     expect(Object.fromEntries(cleanup.searchParams)).toEqual({
       "$filter": `subject eq '${subject}'`, "$select": "id", "$top": "100",
     });
-    expect(calls.slice(4).map(call => call.url)).toEqual([ownedDraft, `${messages}/owned-copy`]);
+    expect(calls.filter(call => call.method === "DELETE").map(call => call.url)).toEqual([ownedDraft]);
     expect(calls.every(call => call.headers.get("prefer") === 'IdType="ImmutableId"')).toBe(true);
     expect(calls.every(call => call.headers.get("authorization") === "Bearer test-token")).toBe(true);
     expect(credential.getToken).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
@@ -157,23 +157,23 @@ describe("Exchange save/edit/reopen draft journey", () => {
   it.each(["id", "subject", "bodyPreview", "isDraft"] as const)("rejects saved draft %s mismatch", async mismatch => {
     const { result, calls } = await runDraft({ mismatch });
     expect(result).toMatchObject({ success: false, diagnosticCategory: "read-failure", diagnosticContext: { cleanupSucceeded: true } });
-    expect(result.steps[3]).toMatchObject({ status: "failed", diagnosticCategory: "read-failure" });
+    expect(result.steps[4]).toMatchObject({ status: "failed", diagnosticCategory: "read-failure" });
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(2);
   });
 
   it.each([
-    ["create", 403, "permission-failure", ["succeeded", "failed", "skipped", "skipped", "succeeded"]],
-    ["create", 503, "graph-unavailable", ["succeeded", "failed", "skipped", "skipped", "succeeded"]],
-    ["update", 503, "graph-unavailable", ["succeeded", "succeeded", "failed", "skipped", "succeeded"]],
-    ["read", 404, "read-failure", ["succeeded", "succeeded", "succeeded", "failed", "succeeded"]],
-    ["update", 429, "graph-throttling", ["succeeded", "succeeded", "failed", "skipped", "succeeded"]],
+    ["create", 403, "permission-failure", ["succeeded", "failed", "skipped", "skipped", "skipped", "skipped", "succeeded"]],
+    ["create", 503, "graph-unavailable", ["succeeded", "failed", "skipped", "skipped", "skipped", "skipped", "succeeded"]],
+    ["update", 503, "graph-unavailable", ["succeeded", "succeeded", "succeeded", "failed", "skipped", "skipped", "succeeded"]],
+    ["read", 404, "read-failure", ["succeeded", "succeeded", "succeeded", "succeeded", "failed", "skipped", "succeeded"]],
+    ["update", 429, "graph-throttling", ["succeeded", "succeeded", "succeeded", "failed", "skipped", "skipped", "succeeded"]],
   ] as const)("preserves %s API failure (%s) and skips dependent business actions", async (stage, status, category, statuses) => {
     const { result, calls } = await runDraft({ failure: { stage, status } });
     expect(result).toMatchObject({ success: false, diagnosticCategory: category, diagnosticContext: { httpStatus: status, cleanupSucceeded: true } });
     expect(result.steps.map(step => step.status)).toEqual(statuses);
     expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
     expect(calls.filter(call => call.method === "PATCH")).toHaveLength(stage === "create" ? 0 : 1);
-    if (stage !== "read") expect(calls.some(call => new URL(call.url).searchParams.get("$select")?.includes("bodyPreview"))).toBe(false);
+    if (stage === "create") expect(calls.some(call => new URL(call.url).searchParams.get("$select")?.includes("bodyPreview"))).toBe(false);
   });
 
   it.each(["create", "update"] as const)("does not retry an ambiguous %s and still cleans up the exact run marker", async ambiguous => {
@@ -181,7 +181,7 @@ describe("Exchange save/edit/reopen draft journey", () => {
     expect(result).toMatchObject({ success: false, diagnosticCategory: "graph-unavailable", diagnosticContext: { cleanupSucceeded: true } });
     expect(calls.filter(call => call.method === (ambiguous === "create" ? "POST" : "PATCH"))).toHaveLength(1);
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(2);
-    expect(result.steps[3]?.status).toBe("skipped");
+    expect(result.steps[4]?.status).toBe("skipped");
   });
 
   it.each(["create", "update", "read"] as const)("uses an independent cleanup budget after %s cancellation", async cancel => {
@@ -200,7 +200,7 @@ describe("Exchange save/edit/reopen draft journey", () => {
   it("bounds ambiguous-copy discovery and never follows another mailbox's continuation", async () => {
     const { result, calls } = await runDraft({ cleanupNextPage: true });
     expect(result).toMatchObject({ success: false, diagnosticCategory: "cleanup-failure", diagnosticContext: { cleanupSucceeded: false } });
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(6);
     expect(calls.some(call => call.url.includes("another"))).toBe(false);
   });
 
@@ -216,7 +216,7 @@ describe("Exchange save/edit/reopen draft journey", () => {
     const { result, calls } = await runDraft(options);
     expect(result.success).toBe(false);
     expect(calls).toEqual([]);
-    expect(result.steps.map(step => step.status)).toEqual(["failed", "skipped", "skipped", "skipped", "skipped"]);
-    expect(result.steps[4]).toMatchObject({ reason: "no-mutation" });
+    expect(result.steps.map(step => step.status)).toEqual(["failed", "skipped", "skipped", "skipped", "skipped", "skipped", "skipped"]);
+    expect(result.steps[6]).toMatchObject({ reason: "no-mutation" });
   });
 });

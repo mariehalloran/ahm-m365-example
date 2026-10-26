@@ -361,10 +361,24 @@ describe("Teams bot root / thread reply / Graph readback / owned cleanup", () =>
     `${graphBase}${repliesPath}?$top=50`,
   ])("never follows an unsafe or out-of-thread continuation: %s", async link => {
     const { result, calls } = await run({
-      onReplyRead: ({ marker }) => json({ value: [message(marker)], "@odata.nextLink": link }),
+      onReplyRead: () => json({ value: [], "@odata.nextLink": link }),
     });
     expect(result.diagnosticCategory).toBe("read-failure");
     expect(calls.filter(call => call.method === "GET")).toHaveLength(2);
+  });
+
+  it.each([
+    "https://attacker.invalid/unfollowed",
+    `${graphBase}${repliesPath}?$top=51&$skiptoken=unfollowed`,
+    `${graphBase}${repliesPath}?$skiptoken=${"x".repeat(4097)}`,
+  ])("confirms actual first-page reply evidence without following irrelevant continuation metadata: %s", async link => {
+    const { result, calls } = await run({
+      onReplyRead: ({ marker }) => json({ value: [message(marker)], "@odata.nextLink": link }),
+    });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.method === "GET").map(call => call.url)).toEqual([
+      `${graphBase}${messagesPath}?$top=50`, `${graphBase}${repliesPath}?$top=50`,
+    ]);
   });
 
   it.each([".", "..", " ", "\nunsafe"])("rejects a Graph root ID that could escape the replies path: %j", async id => {

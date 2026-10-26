@@ -16,6 +16,7 @@ param teamsCacheAccountUrl string = ''
 @secure()
 param m365CertificatePem string = ''
 param enableLiveProbes bool
+param enableBetaServiceActivity bool = false
 @secure()
 param applicationInsightsConnectionString string = ''
 
@@ -93,6 +94,7 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
               { name: 'AZURE_CLIENT_ID', value: identityClientId }
               { name: 'AZURE_TENANT_ID', value: tenantId }
               { name: 'ENABLE_LIVE_M365', value: enableLiveProbes ? 'true' : 'false' }
+              { name: 'ENABLE_BETA_SERVICE_ACTIVITY', value: enableBetaServiceActivity ? 'true' : 'false' }
             ],
             useM365Certificate ? [
               { name: 'M365_TENANT_ID', value: serviceAccess.m365TenantId }

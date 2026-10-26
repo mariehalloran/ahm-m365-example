@@ -29,6 +29,7 @@ interface CycleContext {
   cycleId: string;
   startedAt: number;
   signal: AbortSignal;
+  externalSignal?: AbortSignal | undefined;
 }
 
 function createCompletionDeadline(signal: AbortSignal, probeTimeoutMs: number, cycleStartedAt: number) {
@@ -66,9 +67,11 @@ async function runSingleProbe(
   cycle: CycleContext,
 ): Promise<SyntheticResult> {
   const { telemetry, now = Date.now } = dependencies;
+  const execution = new AbortController();
+  const executionTimer = setTimeout(() => execution.abort(), config.PROBE_TIMEOUT_MS);
   const probeSignal = AbortSignal.any([
     cycle.signal,
-    AbortSignal.timeout(config.PROBE_TIMEOUT_MS),
+    execution.signal,
   ]);
   const handler = config.EXECUTION_MODE === "simulation"
     ? simulate
@@ -95,6 +98,17 @@ async function runSingleProbe(
       }),
       deadline.promise,
     ]);
+    if (probeSignal.aborted) {
+      // A handler may finish cleanup after cancellation, but cannot turn a deadline into success.
+      const timedOut = resultSchema.safeParse(rawResult);
+      if (timedOut.success) {
+        return resultSchema.parse({
+          ...timedOut.data, success: false, diagnosticCategory: cycle.externalSignal?.aborted ? "cancelled" : "delivery-timeout",
+          durationMs: Math.max(0, now() - attemptStartedAt),
+        });
+      }
+      throw new IntegrationError("delivery-timeout");
+    }
     const parsedResult = resultSchema.safeParse(rawResult);
     if (!parsedResult.success) {
       throw new IntegrationError("malformed-response");
@@ -110,7 +124,8 @@ async function runSingleProbe(
   } catch (error) {
     const result = baseResult(probe, now());
     result.durationMs = Math.max(0, now() - attemptStartedAt);
-    result.diagnosticCategory = categoryOf(error);
+    result.diagnosticCategory = cycle.externalSignal?.aborted ? "cancelled"
+      : probeSignal.aborted ? "delivery-timeout" : categoryOf(error);
     result.diagnosticContext.testStage = "execution";
     telemetry.emit("probe-execution-failed", {
       cycleId: cycle.cycleId,
@@ -119,6 +134,7 @@ async function runSingleProbe(
     });
     return result;
   } finally {
+    clearTimeout(executionTimer);
     deadline?.dispose();
   }
 }
@@ -130,7 +146,7 @@ async function executeProbes(
   const telemetryErrors: unknown[] = [];
   let nextProbeIndex = 0;
   const runNextProbes = async () => {
-    while (nextProbeIndex < config.probes.length && !cycle.signal.aborted) {
+    while (nextProbeIndex < config.probes.length && !cycle.externalSignal?.aborted) {
       const probe = config.probes[nextProbeIndex++];
       if (!probe) break;
       const result = await runSingleProbe(probe, config, dependencies, cycle);
@@ -139,7 +155,6 @@ async function executeProbes(
       // Output errors must not be turned into a second, fabricated probe result.
       try { dependencies.results.record(result, config.EXECUTION_MODE); }
       catch (error) {
-        if (!dependencies.reportHealth) throw error;
         telemetryErrors.push(error);
         dependencies.telemetry.emit("result-output-failed", { cycleId: cycle.cycleId, category: categoryOf(error) });
       }
@@ -161,9 +176,9 @@ async function executeProbes(
 
 async function publishCycleResults(
   config: Config, dependencies: RunnerDependencies, cycle: CycleResults,
-  signal: AbortSignal, telemetryErrors: unknown[],
+  telemetryErrors: unknown[],
 ): Promise<void> {
-  const complete = cycle.results.length === config.probes.length && !signal.aborted;
+  const complete = cycle.results.length === config.probes.length;
   if (!complete && dependencies.reportHealth) {
     dependencies.telemetry.emit("health-report-skipped-incomplete-cycle", {
       cycleId: cycle.cycleId, probeCount: cycle.results.length,
@@ -182,9 +197,11 @@ export async function runCycle(
   const cycleId = randomUUID();
   const cycleStartedAt = performance.now();
   const stopOtherProbes = new AbortController();
+  const deadline = new AbortController();
+  const cycleTimer = setTimeout(() => deadline.abort(), CYCLE_TIMEOUT_MS);
   const cancellationSignals = [
     stopOtherProbes.signal,
-    AbortSignal.timeout(CYCLE_TIMEOUT_MS),
+    deadline.signal,
   ];
   if (externalSignal) {
     cancellationSignals.push(externalSignal);
@@ -200,11 +217,11 @@ export async function runCycle(
 
   try {
     cycleSignal.throwIfAborted();
-    const cycle = { cycleId, startedAt: cycleStartedAt, signal: cycleSignal };
+    const cycle = { cycleId, startedAt: cycleStartedAt, signal: cycleSignal, externalSignal };
     const { results, telemetryErrors } = await executeProbes(config, dependencies, cycle, stopOtherProbes);
 
     stage = "reporting";
-    await publishCycleResults(config, dependencies, { cycleId, results }, cycleSignal, telemetryErrors);
+    await publishCycleResults(config, dependencies, { cycleId, results }, telemetryErrors);
     telemetry.emit("service-execution-completed", {
       cycleId,
       probeCount: results.length,
@@ -219,5 +236,5 @@ export async function runCycle(
       errorType: error instanceof Error ? error.name : "unknown",
     });
     throw new Error(`Synthetic cycle failed (${category}); see correlation ${cycleId}`);
-  }
+  } finally { clearTimeout(cycleTimer); }
 }

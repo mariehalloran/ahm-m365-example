@@ -15,9 +15,21 @@
     "exchange": {
       "enabled": true,
       "configFile": "synthetic-tests/exchange/config.json",
-      "scenarios": { "send-receive-mail": true, "edit-reopen-draft": true },
+      "scenarios": {
+        "send-receive-mail": true, "edit-reopen-draft": true,
+        "attachment-reply-mail": true, "distribution-list-mail": true,
+        "recurring-calendar": true, "meeting-invitation": true
+      },
       "targets": [
-        { "id": "exchange-probe-001", "mailbox": "dedicated-synthetic@example.invalid" }
+        {
+          "id": "exchange-probe-001",
+          "mailbox": "dedicated-synthetic@example.invalid",
+          "recipientMailbox": "dedicated-recipient@example.invalid",
+          "distributionList": {
+            "address": "dedicated-list@example.invalid",
+            "expectedRecipients": ["dedicated-synthetic@example.invalid", "dedicated-recipient@example.invalid"]
+          }
+        }
       ]
     },
     "teams": {

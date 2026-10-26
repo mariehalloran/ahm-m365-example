@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyProjectConfig, parseProjectConfig, readProjectConfig, readProjectService } from "../src/project-config.js";
-import { parseServiceConfig } from "../src/service-config.js";
+import { parseServiceConfig, serviceProbes, serviceSettings } from "../src/service-config.js";
 import { parseWorkerArguments, runServiceWorker } from "../src/worker.js";
 import { baseResult } from "../src/probes.js";
 
@@ -19,12 +19,41 @@ const service = parseServiceConfig({
 });
 
 describe("project-root monitoring configuration", () => {
+  it("preserves legacy single-mailbox selection while expanding all explicit pairs independently", () => {
+    const project = structuredClone(checkedIn);
+    const old = {
+      ...project, services: { ...project.services, exchange: {
+        ...project.services.exchange,
+        scenarios: { "send-receive-mail": true, "edit-reopen-draft": true },
+        targets: [{ id: "legacy", mailbox: "legacy@example.invalid" }],
+      } },
+    };
+    const migrated = parseProjectConfig(old);
+    expect(migrated.services.exchange.scenarios["attachment-reply-mail"]).toBe(false);
+    expect(migrated.services.exchange.scenarios["meeting-invitation"]).toBe(false);
+    project.services.exchange.targets.push({
+      id: "second-pair", mailbox: "second@example.invalid", recipientMailbox: "third@example.invalid",
+    });
+    const selected = applyProjectConfig(project, service);
+    expect(selected.targets).toHaveLength(2);
+    expect(selected.targets[0]).toHaveProperty("distributionList");
+    expect(selected.targets[1]).toHaveProperty("recipientMailbox", "third@example.invalid");
+  });
+  it("supports all six journeys for thirty root-owned target sets", () => {
+    const project = structuredClone(checkedIn);
+    project.services.exchange.targets = Array.from({ length: 30 }, (_, index) => ({
+      ...project.services.exchange.targets[0]!, id: `exchange-pair-${index}`,
+    }));
+    const configured = applyProjectConfig(project, service);
+    expect(serviceProbes(configured, project.services.exchange.scenarios)).toHaveLength(180);
+    expect(serviceSettings(configured, {}, project.services.exchange.scenarios).probes).toHaveLength(180);
+  });
   it("enables every implemented service/scenario without enabling live I/O", async () => {
     expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "services"]);
     expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
     for (const type of ["exchange", "teams", "sharepoint"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
-      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(type === "teams" ? [true, true, true] : [true, true]);
+      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 6 : type === "teams" ? 3 : 2).fill(true));
       const selected = await readProjectService(type, "../monitoring.config.json");
       expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
@@ -51,8 +80,9 @@ describe("project-root monitoring configuration", () => {
     const project = structuredClone(checkedIn);
     if (gate === "service") project.services.exchange.enabled = false;
     if (gate === "scenario") {
-      project.services.exchange.scenarios["send-receive-mail"] = false;
-      project.services.exchange.scenarios["edit-reopen-draft"] = false;
+      for (const key of Object.keys(project.services.exchange.scenarios) as (keyof typeof project.services.exchange.scenarios)[]) {
+        project.services.exchange.scenarios[key] = false;
+      }
     }
     const createDependencies = vi.fn();
     await runServiceWorker(service, {
@@ -65,15 +95,17 @@ describe("project-root monitoring configuration", () => {
     const output = { emit: vi.fn() };
     await runServiceWorker(service, { project, once: true, env: {}, telemetry: output });
     const events = output.emit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event === "health-report-preview")).toHaveLength(16);
-    expect(events.filter(event => event === "synthetic-result")).toHaveLength(2);
+    expect(events.filter(event => event === "health-report-preview")).toHaveLength(62);
+    expect(events.filter(event => event === "synthetic-result")).toHaveLength(6);
     expect(events).not.toContain("probe-metrics");
     expect(events).not.toContain("health-report-published");
     expect(JSON.stringify(output.emit.mock.calls)).not.toContain("dedicated-synthetic@example.invalid");
   });
   it("wires a live worker from root selection through aggregation to direct reports", async () => {
     const project = structuredClone(checkedIn);
-    project.services.exchange.scenarios["edit-reopen-draft"] = false;
+    for (const key of Object.keys(project.services.exchange.scenarios) as (keyof typeof project.services.exchange.scenarios)[]) {
+      project.services.exchange.scenarios[key] = key === "send-receive-mail";
+    }
     project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
     const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetcher);
@@ -116,8 +148,9 @@ describe("project-root monitoring configuration", () => {
     expect(() => parseProjectConfig(project)).toThrow("unique");
     project.services.exchange.targets = [];
     expect(() => parseProjectConfig(project)).toThrow("at least one target");
-    project.services.exchange.scenarios["send-receive-mail"] = false;
-    project.services.exchange.scenarios["edit-reopen-draft"] = false;
+    for (const key of Object.keys(project.services.exchange.scenarios) as (keyof typeof project.services.exchange.scenarios)[]) {
+      project.services.exchange.scenarios[key] = false;
+    }
     expect(applyProjectConfig(parseProjectConfig(project), service)).toMatchObject({ enabled: false, targets: [] });
   });
   it("requires a real subscription and enough report TTL before live credentials or operations", () => {
@@ -127,11 +160,11 @@ describe("project-root monitoring configuration", () => {
     project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
     project.healthModel.reportTtlMinutes = 4;
     expect(() => applyProjectConfig(project, live)).toThrow("TTL");
-    project.healthModel.reportTtlMinutes = 5;
+    project.healthModel.reportTtlMinutes = 9;
     expect(applyProjectConfig(project, live).enabled).toBe(true);
     expect(applyProjectConfig(project, { ...live, intervalSeconds: 80 }).enabled).toBe(true);
     project.otel.enabled = true;
-    expect(() => applyProjectConfig(project, { ...live, intervalSeconds: 80 })).toThrow("224 seconds");
+    expect(() => applyProjectConfig(project, { ...live, intervalSeconds: 320 })).toThrow("224 seconds");
   });
   it("surfaces missing root configuration and supports a separate root-config CLI argument", async () => {
     await expect(readProjectConfig("utils/tests/missing-project.json")).rejects.toThrow("Cannot read the project config");

@@ -2,7 +2,7 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only that cycle's results by journey/action. It publishes success-percentage and mean-duration health reports to separate journey and business-step entities through **External Reports**, independently of optional OTEL export/query signals. **No journey history or cross-cycle health state is stored**; only optional delegated Teams persists protected authentication state. Seven journeys reuse three Container Apps; the full family has four models, 38 entities, 34 relationships and 21 business-step entities.
+Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports through **External Reports**, independently of optional OTEL. **No journey history or cross-cycle health state is stored**; only optional delegated Teams persists protected authentication state. Eleven journeys reuse three Container Apps; the full family has four models, 61 entities, 57 relationships and 40 business-step entities.
 
 Exchange, Teams, and SharePoint use separate configs/cadences and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
@@ -10,8 +10,9 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 ## Scheduling and shutdown
 
-- First run is immediate; each worker follows its own fixed-rate cadence.
-- Runs do not overlap within a process. Missed slots are skipped and logged, not replayed in bursts.
+- First run is immediate; reusable independent lanes follow fixed-rate cadence within each worker. Exchange mail defaults to 60 seconds and other Exchange journeys to 300 seconds.
+- Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
+- Lane reports update only observed journeys, not empty/Unknown reports for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
 - SIGINT/SIGTERM stop new runs, cancel current work, and allow bounded probe cleanup and report publication.
 - Restarting loses transient execution/report data, not a persisted health history; none exists.
@@ -22,7 +23,7 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 Do not enable live mode against real-user resources.
 
 1. Obtain dedicated approved targets and an owner. Use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) for Exchange.
-2. Scope Exchange `Application Mail.ReadWrite` and `Application Mail.Send` to only approved mailboxes using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access.
+2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access.
 3. For SharePoint, use `Sites.Selected` and an explicit write grant to the approved site. The handler verifies drive/site ownership.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
 5. Set the config to `mode: live` and independently opt in through `ENABLE_LIVE_M365=true`.
@@ -69,19 +70,19 @@ OTEL is disabled by default and configured only at root. If enabled, monitor `te
 
 ## Optional Microsoft provider context
 
-Simulation configs keep providers off; live examples enable stable Service Health, with beta still off. `serviceHealth: true` requires `ServiceHealth.Read.All` admin consent and reads v1.0 health overviews and issue/history data. Provider initialization is independent of missing journey targets/bot credentials and collection runs once per service cycle. Exact overview status reports directly to `${service}-service-health` as `microsoft-reported-service-status`: **100 healthy, 50 degraded, 0 interruption**. Failed, missing, or unknown overviews publish Unknown without a numeric value and include failure context. The existing trial observes Graph 403 pending consent. Stable Service Health has `impactSuppressed`, so it is supporting context, not journey evidence or Experience rollup.
+Simulation keeps providers off; live examples enable stable Service Health, with beta still separately gated. `serviceHealth: true` requires `ServiceHealth.Read.All` and reads v1.0 health overviews/issues. Its independent provider lane runs despite missing synthetic targets/bot credentials. Approved operational/degradation/interruption states report directly to suppressed `${service}-service-health`: **100 healthy, 50 degraded, 0 interruption**. Failed/missing/stale/unapproved states produce Unknown without a value. Supporting context never changes journey evidence or Experience rollup.
 
-Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_SERVICE_ACTIVITY=true` and separately approved `ServiceActivity-Exchange.Read.All`/`ServiceActivity-Teams.Read.All`. Beta is experimental, unsupported for production, and **diagnostic-only: never used for Experience/journey health**. Confirm tenant eligibility/enablement; an HTTP failure is not evidence of a service outage. SharePoint beta is rejected rather than silently skipped or mapped to an OfficeApps report.
+Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_SERVICE_ACTIVITY=true` and approved `ServiceActivity-Exchange.Read.All`/`ServiceActivity-Teams.Read.All`. Each supports five functions. Explicit customer thresholds report latest fresh buckets directly on suppressed Service Health; raw counts/QoE-coverage/UDP otherwise remain diagnostic, never automatic call quality or Experience/journey evidence. Beta remains unsupported for production; SharePoint supports stable collection only. See [provider setup and deployment approval](./provider-monitoring.md).
 
-Each configured source runs once per worker cycle, independently bounded to 30 seconds and five exact-origin/version/path pages. Check `m365-provider-collection-failed` console diagnostics and `service-cycle-summary.providers.failed`; successful journeys can coexist with provider failures. Simulation records skipped sources without Graph credentials/network or fabricated Microsoft health. Issue/history and all historical beta values remain console diagnostics; no provider value enters synthetic or step measurements.
+Each source runs per independent provider-lane cycle (`providerIntervalSeconds`, default 300), bounded to 30 seconds and five exact-origin/version/path pages. Check `m365-provider-collection-failed` and `service-provider-summary.providers.failed`; successful journeys can coexist with provider failures. Missing/invalid/stale provider samples report Unknown, distinct from synthetic timeout failure/Unhealthy. Simulation skips sources without fabricated Microsoft health. No provider value enters synthetic/step measurements.
 
 See the [strict schema, limits, diagnostics and first-party references](../synthetic-tests/utils/README.md#optional-provider-collectors). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply diagnostic retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
 
 ## Timing, retries, and cleanup
 
 - A cycle has a bounded execution budget; size target lists accordingly.
-- At most three probes execute concurrently. Graph requests time out at fifteen seconds, and safe operations retry within a bounded budget.
-- Configured probe timeouts cancel work. Cleanup receives its own ten-second budget.
+- At most three probes execute concurrently **per lane** (default Exchange has two lanes). Graph requests time out at fifteen seconds, and safe operations retry within a bounded budget.
+- Configured probe timeouts cancel work and count as failure/0/Unhealthy. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. An internal cycle deadline yields failure results for queued attempts; external shutdown does not start queued work.
 - Draft creation/send are not retried after ambiguous responses. Reads/idempotent deletes can retry; long Retry-After requests fail explicitly rather than retry too soon.
 - `durationMs` is total attempt time **through cleanup**, distinct from confirmed delivery time.
 - Exchange `sendDurationMs` measures the Graph draft-send request until response/error, excluding draft creation, polling, and cleanup. Failed sends retain timing; no attempted send means no send sample.

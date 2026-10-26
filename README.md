@@ -11,7 +11,7 @@ This example combines **synthetic user journeys** with **Azure Monitor Health Mo
 
 ![Exchange health model showing send-and-receive email and save-edit-reopen draft journeys, their business-step entities, and separate Service Health context.](./docs/images/exchange-health-model.png)
 
-*Exchange Experience: two journeys with business-step entities and separate, impact-suppressed Service Health context.*
+*Earlier Exchange view showing two journeys; the current catalog contains six, with separate, impact-suppressed Service Health context.*
 
 ## Why synthetic tests?
 
@@ -24,7 +24,7 @@ Synthetic tests repeatedly perform a small, controlled workflow against dedicate
 - **Identify the failing business action.** Draft creation, sending, and delivery confirmation have different failure modes; identity and cleanup errors remain journey diagnostics.
 - **Repeat the observation**, including success and duration, rather than relying on a single manual check.
 
-For example, an email journey creates a draft, sends it, confirms that it appears in the Inbox, and cleans up. If sending succeeds but delivery confirmation times out, the evidence should preserve that distinction instead of labeling every action as failed.
+For example, the core email journey creates a message, sends A→B, confirms actual recipient Inbox delivery, and cleans up. It runs every 60 seconds without reply or attachment work. If sending succeeds but delivery confirmation times out, the evidence preserves that distinction instead of labeling every action as failed.
 
 A failed test is **evidence to investigate, not automatic proof of a Microsoft outage**. Identity permissions, configuration, worker connectivity, and the monitoring system itself can also fail.
 
@@ -58,7 +58,11 @@ Root experience model
 |
 +-- Exchange model
 |   +-- Send/receive email journey -> business-step entities
-|   `-- Edit/reopen draft journey -> business-step entities
+|   +-- Edit/reopen draft journey -> business-step entities
+|   +-- Attachment/hash/reply journey -> business-step entities
+|   +-- Distribution-list fanout journey -> business-step entities
+|   +-- Recurring calendar journey -> business-step entities
+|   `-- Meeting invitation/accept/cancel journey -> business-step entities
 +-- Teams model
 |   +-- Publish channel message journey -> business-step entities
 |   +-- Reply in channel thread journey -> business-step entities
@@ -68,7 +72,7 @@ Root experience model
     `-- Rename/reopen file journey -> business-step entities
 ```
 
-Workers aggregate each cycle's journey/action results and submit health reports directly. Each journey and business-step entity has an **External Reports** signal group, plus an optional **OpenTelemetry** group when Azure Monitor export is enabled. With all seven journeys selected, the family has **four models, 38 entities, and 34 relationships**, including **21 business-step entities** and 59 worker-reported external signals. Microsoft-reported Service Health publishes to a separate, impact-suppressed entity under each service Experience. Token acquisition and failure cleanup remain internal; explicitly leaving a call is a business step.
+Workers aggregate each settled lane cycle's journey/action results and submit health reports directly. Each journey/business step has **External Reports**, plus optional **OpenTelemetry** when Azure export is enabled. All eleven journeys give **four models, 61 entities, 57 relationships and 40 business-step entities**: 102 synthetic external signals plus three stable provider signals and up to ten explicitly thresholded beta context signals. Microsoft-reported Service Health stays impact-suppressed under each Experience. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps.
 
 Reports replace the previous cycle's aggregates; they are not a full metrics store, percentile history, or arbitrary log-query interface. Workers retain no cross-cycle journey history or durable outbox; only optional delegated Teams persists sensitive authentication state in its protected Blob cache. Default bot mode needs no user cache. Console diagnostics remain available for investigation.
 
@@ -83,17 +87,16 @@ OTEL is **disabled by default** in [monitoring.config.json](./monitoring.config.
 
 OTEL export failures are explicit and do not prevent direct report attempts. Historical OTEL queries use a 15-minute window, while direct reports describe the current cycle. Enabling OTEL adds ingestion/storage/query costs and requires separate live ingestion validation. See the [export contract and limits](./synthetic-tests/utils/README.md#optional-opentelemetry).
 
-## What this example exercises
+## Journey catalog and current coverage
 
-| Service | Representative journey |
+The target catalog describes completed workflows, **not a promise that every family is implemented**. Five families do not mean five API calls. Detailed contracts and planned variants live in the linked guides.
+
+| Service | Target catalog and implemented boundary |
 | --- | --- |
-| [Exchange](./synthetic-tests/exchange/README.md) | Create an email, send it to the dedicated mailbox itself, confirm Inbox delivery, and clean up |
-| Exchange | Save a draft, edit its content, reopen and verify it, and clean up without sending |
-| [Teams](./synthetic-tests/teams/README.md) | Publish as an installed managed-identity bot, confirm marker and application author through Graph, and clean up the owned message |
-| Teams | Create a bot thread and reply, confirm the reply through Graph, and clean up the owned reply then parent |
-| Teams | Individually place calls to three root-configured test users, wait 10 seconds, hang up and confirm `terminated`/404; no answer/media required and no recipient-ringing proof |
-| [SharePoint](./synthetic-tests/sharepoint/README.md) | Upload synthetic content to an approved library, reopen and verify it, and remove it |
-| SharePoint | Upload a file, rename it, reopen and verify its name/content, and remove it |
+| [Exchange](./synthetic-tests/exchange/README.md#journeys-and-scheduling) | Six core journeys implemented: A→B delivery every **60 seconds**; draft, attachment/hash/reply, DL fanout, recurring calendar and meeting invitation/accept/cancel every **300 seconds**. Mail, draft, attachment/reply and DL verified Healthy live; calendar journeys currently blocked by scoped-authorization cache/403. |
+| [Teams](./synthetic-tests/teams/README.md#target-catalog-versus-current-implementation) | Five target families: two-bot conversation, answered audio, scheduled meeting, recipient file sharing, Adaptive Card workflow. Current implementation is narrower: one bot posts/replies with Graph observation and signaling-only calls to three configured accounts, every **120 seconds**. Those narrower flows are live verified, not second-bot receipt or media. |
+| [SharePoint](./synthetic-tests/sharepoint/README.md#target-catalog-versus-current-implementation) | Five target families: library/folder roundtrip, list CRUD, recipient sharing, versions, search. Current save/read/verify/delete and supporting rename/reopen run every **300 seconds**; approved live targets remain missing. |
+| [OneDrive](./synthetic-tests/README.md#onedrive-target-catalog-planned) | Five planned families: user-drive roundtrip, app folder, recipient sharing, versions, search. No worker, model, configured cadence or live verification yet. |
 
 These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, employee read receipts, Teams media tests, or SharePoint coauthoring tests. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
 
@@ -108,11 +111,18 @@ sign-in, or media quality. Actual API execution/report ingestion and human-obser
 notifications remain separate evidence. See the
 [calling setup and exact endpoints](./synthetic-tests/teams/README.md#individual-test-user-calls).
 
-The [recorded live baseline](./docs/deployment.md#deployment-status-and-order) verifies
-Exchange mail/draft and Teams bot messaging/reply/calling journeys, including actual
-health-report ingestion. SharePoint setup and production reliability gates remain
+The [recorded live baseline](./docs/deployment.md#deployment-status-and-order) contains
+execution and health-ingestion evidence and remaining deployment gaps. Implemented,
+live verified, and planned coverage are distinct; production reliability gates remain
 incomplete. Successful API journeys do not establish employee UI experience or
-end-to-end alert delivery.
+end-to-end alert delivery. OutlookWeb, TeamsWeb and browser file-upload variants remain planned.
+
+Provider lanes are separate from user journeys: stable Service Health and the five
+Exchange/five Teams beta activity functions use independently configured **300-second**
+provider cadence in existing workers. Direct provider reports are suppressed supporting
+context, counts stay diagnostic unless thresholds are configured, and OTEL is optional.
+Beta collection currently receives 403; unavailable data is never fabricated Healthy.
+See [provider monitoring](./docs/provider-monitoring.md).
 
 ## How to use this example
 
@@ -156,7 +166,9 @@ Keep that root scenario `false` for messaging-only rollout. No user tokens or
 runtime meeting-creation/admin rights are used for calls. Validate each deployment's
 actual API execution and report ingestion before relying on it.
 
-All selected journeys run in the same product worker on that service's cadence; enabling another journey does not add another Container App. The live service examples enable stable Service Health collection once per cycle, independently of journey setup. That read-only path needs separate `ServiceHealth.Read.All` admin consent. Exact overview status is reported to `${service}-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Failed, missing, or unknown status produces Unknown without a numeric value, with failure context. The existing trial observes Graph 403 until that consent is granted. Safe simulation profiles keep provider collection off; beta reports remain optional diagnostics only.
+All selected journeys run in the same product worker; enabling another journey does not add another Container App. Reusable independent execution lanes schedule Exchange mail every 60 seconds and its other five journey families every 300 seconds. Optional service-owned `executionLanes` sets lane cadence/deadlines; root Exchange targets explicitly name A/B participants and distribution-list expected recipients. See [Exchange setup, exact APIs and coverage](./synthetic-tests/exchange/README.md). Targets/journeys run concurrently, business steps sequentially; timeouts count as failed attempts, while dependent skipped actions do not. A slow lane cannot hold another lane's publication.
+
+The live service examples enable stable Service Health independently of journey setup. A separate provider lane inside each container defaults to 300 seconds (`providerIntervalSeconds`). Approved overview states report 100 healthy, 50 degraded, 0 interruption on suppressed Service Health context; failed/missing/unapproved states are Unknown. Optional beta collects all five approved Exchange/Teams functions; explicit customer thresholds may publish direct context reports, while counts and Teams percentages otherwise remain diagnostics. Neither alters synthetic or Experience health, and Log Analytics is not required. See [provider setup, permissions, endpoints and beta deployment flag](./docs/provider-monitoring.md).
 
 ### 3. Run a safe simulation
 

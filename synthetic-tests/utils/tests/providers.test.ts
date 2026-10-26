@@ -72,7 +72,7 @@ describe("strict optional provider configuration", () => {
     { lookbackMinutes: 0 }, { lookbackMinutes: 1441 }, { lookbackMinutes: 15.5 },
     { lookbackMinutes: 10, aggregationIntervalMinutes: 15 }, { lookbackMinutes: 31 },
     { functions: [] }, { functions: ["https://untrusted.invalid/function"] },
-    { functions: ["getMessageVolumeMetricsForEmailDelivery"] },
+    { functions: ["unsupportedFunction"] },
     { functions: ["getConnectivityMetricsForExchange", "getConnectivityMetricsForExchange"] },
   ])("rejects invalid/unknown beta fields %j", serviceActivity => {
     expect(() => parseServiceConfig({ ...rawConfig(), serviceActivity })).toThrow();
@@ -101,7 +101,7 @@ describe("strict optional provider configuration", () => {
   it.each([undefined, "false", "TRUE", "1"])("requires exact beta acknowledgement %s before all runtime creation", async acknowledgement => {
     const createDependencies = vi.fn();
     await expect(runServiceWorker(parseServiceConfig({
-      ...rawConfig(), serviceActivity: { enabled: true },
+      ...rawConfig(), serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
     }), { createDependencies, providers: exchangeProviders, env: { ENABLE_LIVE_M365: "true", ENABLE_BETA_SERVICE_ACTIVITY: acknowledgement } }))
       .rejects.toThrow("ENABLE_BETA_SERVICE_ACTIVITY=true");
     expect(createDependencies).not.toHaveBeenCalled();
@@ -309,14 +309,16 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     await vi.advanceTimersByTimeAsync(PROVIDER_SOURCE_TIMEOUT_MS);
     await pending;
     expect(events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic")).toHaveLength(1);
-    expect(events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+    expect(events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
       providers: { configured: 1, succeeded: 0, failed: 1, skipped: 0, records: 0 },
     }));
     expect(results.record.mock.calls.every(([attempt]) => attempt.success)).toBe(true);
   });
   it.each(["exchange", "teams", "sharepoint"] as const)("collects each %s source once with two targets and preserves journey counts", async type => {
     const service = parseServiceConfig({
-      ...rawConfig(type), serviceHealth: true, serviceActivity: { enabled: type !== "sharepoint" },
+      ...rawConfig(type), serviceHealth: true, serviceActivity: {
+        enabled: type !== "sharepoint", ...(type === "sharepoint" ? {} : { functions: [functionNames[type]] }),
+      },
     });
     const http = client(url => json({
       value: url.includes("healthOverviews") ? [overview(type), overview(type === "exchange" ? "teams" : "exchange")]
@@ -346,7 +348,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       expect(observations).toHaveLength(2);
       expect(observations.every(result => result.success && result.steps.length === 1)).toBe(true);
       expect(JSON.stringify(observations)).not.toContain("provider.");
-      expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+      expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
         providers: { configured: type === "sharepoint" ? 2 : 3, succeeded: type === "sharepoint" ? 2 : 3, failed: 0, skipped: 0, records: type === "sharepoint" ? 2 : 3 },
       }));
     } finally {
@@ -363,7 +365,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     const telemetry = memory();
     try {
       await runServiceWorker(parseServiceConfig({
-        ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true },
+        ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
       }), {
         once: true, env, providers: exchangeProviders, telemetry: telemetry.events,
         handler: async probe => ({ ...baseResult(probe, now()), success: true, durationMs: 100 }),
@@ -375,7 +377,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         "provider.http_status": status, "provider.api_version": "v1.0", "provider.mode": "live",
       });
       expect(records.filter(record => record.body === "m365-service-activity")).toHaveLength(1);
-      expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+      expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
         providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
       }));
       expect(JSON.stringify(records)).not.toMatch(/PRIVATE-ERROR-BODY|test-only-token|private@example/);
@@ -389,7 +391,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     }));
     const recordDiagnostic = vi.fn();
     const summary = await exchangeProviders({
-      service: parseServiceConfig({ ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true } }),
+      service: parseServiceConfig({ ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] } }),
       graph: http.graph, signal: signal(), results: { recordDiagnostic }, now,
     });
     expect(summary).toEqual({ configured: 3, succeeded: 1, failed: 2, skipped: 0, records: 0 });
@@ -408,7 +410,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       const telemetry = memory();
       try {
         await runServiceWorker(parseServiceConfig({
-          ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true },
+          ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
         }), {
           once: true, env, providers: exchangeProviders, telemetry: telemetry.events,
           handler: async probe => ({ ...baseResult(probe, now()), success: true, durationMs: 100 }),
@@ -423,7 +425,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         const results = telemetry.events.emit.mock.calls.filter(([event]) => event === "synthetic-result").map(([, data]) => data.result);
         expect(results).toHaveLength(2);
         expect(results.every(result => result.success)).toBe(true);
-        expect(telemetry.events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+        expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
           providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
         }));
         expect(JSON.stringify(logs)).not.toContain("PRIVATE-BETA-FAILURE");
@@ -439,7 +441,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       }],
     }));
     const recordDiagnostic = vi.fn();
-    const service = parseServiceConfig({ ...rawConfig(), serviceActivity: { enabled: true } });
+    const service = parseServiceConfig({ ...rawConfig(), serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] } });
     await exchangeProviders({ service, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now: () => clock });
     clock += 15 * 60_000;
     await exchangeProviders({ service, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now: () => clock });
@@ -466,7 +468,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     const http = client(() => { throw new Error("network forbidden"); });
     const recordDiagnostic = vi.fn();
     const config = parseServiceConfig({
-      ...rawConfig(), mode: "simulation", serviceHealth: true, serviceActivity: { enabled: true },
+      ...rawConfig(), mode: "simulation", serviceHealth: true, serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
     });
     expect(await exchangeProviders({ service: config, graph: http.graph, signal: signal(), results: { recordDiagnostic }, now }))
       .toEqual({ configured: 3, succeeded: 0, failed: 0, skipped: 3, records: 0 });
@@ -484,14 +486,14 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network forbidden"));
     const events = { emit: vi.fn() };
     await runServiceWorker(parseServiceConfig({
-      ...rawConfig(), mode: "simulation", serviceHealth: true, serviceActivity: { enabled: true },
+      ...rawConfig(), mode: "simulation", serviceHealth: true, serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
     }), { once: true, env, providers: exchangeProviders, telemetry: events });
     expect(createGraph).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
     const diagnostics = events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic");
     expect(diagnostics).toHaveLength(3);
     expect(JSON.stringify(diagnostics)).not.toMatch(/serviceOperational|provider.status/);
-    expect(events.emit).toHaveBeenCalledWith("service-cycle-summary", expect.objectContaining({
+    expect(events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
       providers: { configured: 3, succeeded: 0, failed: 0, skipped: 3, records: 0 },
     }));
   });

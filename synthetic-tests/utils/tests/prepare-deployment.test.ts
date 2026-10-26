@@ -25,13 +25,54 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe("deployment parameter preparation", () => {
+  it("requires explicit beta deployment approval and preserves the provider cadence/functions/thresholds", async () => {
+    await writeFile(join(directory, "profiles/exchange.json"), JSON.stringify({
+      ...await readServiceConfig("exchange/config.json"), providerIntervalSeconds: 300,
+      serviceActivity: {
+        enabled: true, maxAgeMinutes: 60,
+        thresholds: { getConnectivityMetricsForExchange: { degradedBelow: 99, unhealthyBelow: 95 } },
+      },
+    }));
+    await expect(prepareDeploymentParameters(projectFile, "image:test")).rejects.toThrow("--enable-beta-service-activity");
+    const parameters = await prepareDeploymentParameters(projectFile, "image:test", false, undefined, true);
+    expect(parameters.parameters.enableBetaServiceActivity.value).toBe(true);
+    expect(parameters.parameters.serviceConfigs.value.exchange).toMatchObject({
+      providerIntervalSeconds: 300,
+      serviceActivity: { enabled: true, thresholds: { getConnectivityMetricsForExchange: { degradedBelow: 99, unhealthyBelow: 95 } } },
+    });
+    expect(parseDeploymentArguments(["root.json", "out.json", "image:test", "--enable-live", "--enable-beta-service-activity"]))
+      .toMatchObject({ enableLiveProbes: true, enableBetaServiceActivity: true });
+  });
+  it("mounts execution lane settings and explicit Exchange participants without moving root-owned selection", async () => {
+    const executionLanes = [
+      { name: "mail", intervalSeconds: 60, timeoutSeconds: 45, journeys: ["send-receive-mail"] },
+      { name: "extended", intervalSeconds: 300, timeoutSeconds: 120, journeys: [
+        "edit-reopen-draft", "attachment-reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation",
+      ] },
+    ];
+    await writeFile(join(directory, "profiles/exchange.json"), JSON.stringify({
+      ...await readServiceConfig("exchange/config.json"), executionLanes,
+      providerClientId: "88888888-8888-4888-8888-888888888888",
+    }));
+    const prepared = await prepareDeploymentParameters(projectFile, "image:test");
+    expect(prepared.parameters.serviceConfigs.value.exchange.executionLanes).toEqual(executionLanes);
+    expect(prepared.parameters.serviceConfigs.value.exchange.providerClientId).toBe("88888888-8888-4888-8888-888888888888");
+    expect(prepared.parameters.projectConfig.value.services.exchange.targets[0]).toMatchObject({
+      recipientMailbox: "dedicated-recipient@example.invalid",
+      distributionList: { expectedRecipients: ["dedicated-synthetic@example.invalid", "dedicated-recipient@example.invalid"] },
+    });
+    expect(prepared.parameters.serviceConfigs.value.exchange).not.toHaveProperty("targets");
+    expect(prepared.parameters.projectConfig.value.services.exchange).not.toHaveProperty("executionLanes");
+  });
   it("preserves the explicit readback application in the mounted Teams service config without credentials", async () => {
     const teamsReadbackClientId = "77777777-7777-4777-8777-777777777777";
     await writeFile(join(directory, "profiles/teams.json"), JSON.stringify({
       ...await readServiceConfig("teams/config.live.example.json"), teamsReadbackClientId,
+      providerClientId: "88888888-8888-4888-8888-888888888888",
     }));
     const prepared = await prepareDeploymentParameters(projectFile, "image:test", true);
     expect(prepared.parameters.serviceConfigs.value.teams.teamsReadbackClientId).toBe(teamsReadbackClientId);
+    expect(prepared.parameters.serviceConfigs.value.teams.providerClientId).toBe("88888888-8888-4888-8888-888888888888");
     expect(prepared.parameters.projectConfig.value.services.teams).not.toHaveProperty("teamsReadbackClientId");
     expect(prepared.parameters.serviceAccess.value).toEqual({});
   });
@@ -130,7 +171,7 @@ describe("deployment parameter preparation", () => {
     expect(parameters.parameters.deployWorkers.value).toBe(false);
     expect(parameters.parameters.enableLiveProbes.value).toBe(false);
     expect(Object.keys(parameters.parameters).sort()).toEqual([
-      "deployWorkers", "enableLiveProbes", "projectConfig", "serviceAccess", "serviceConfigs", "workerImage",
+      "deployWorkers", "enableBetaServiceActivity", "enableLiveProbes", "projectConfig", "serviceAccess", "serviceConfigs", "workerImage",
     ]);
     for (const profile of Object.values(parameters.parameters.serviceConfigs.value)) {
       expect(profile.mode).toBe("simulation");
@@ -275,7 +316,7 @@ describe("deployment argument parsing", () => {
   it("accepts existing invocations and access metadata without enabling live execution implicitly", () => {
     expect(parseDeploymentArguments(["root.json", "out.json"])).toMatchObject({ enableLiveProbes: false, workerImage: undefined });
     expect(parseDeploymentArguments(["root.json", "out.json", "image:test", "--enable-live", "--access-config", "access.json"]))
-      .toEqual({ projectFile: "root.json", outputFile: "out.json", workerImage: "image:test", enableLiveProbes: true, accessFile: "access.json" });
+      .toEqual({ projectFile: "root.json", outputFile: "out.json", workerImage: "image:test", enableLiveProbes: true, enableBetaServiceActivity: false, accessFile: "access.json" });
     expect(parseDeploymentArguments(["root.json", "out.json", "--access-config", "access.json"])).toMatchObject({
       accessFile: "access.json", workerImage: undefined, enableLiveProbes: false,
     });

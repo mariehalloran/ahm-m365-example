@@ -2,7 +2,7 @@ import { ConfigurationError, type Config } from "./config.js";
 import type { Telemetry } from "./contracts.js";
 import type { RunnerDependencies } from "./runner.js";
 import type { ServiceConfig } from "./service-config.js";
-import { createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "./auth.js";
+import { createFederatedGraphClient, createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "./auth.js";
 import { createTeamsCallingVerifier } from "./teams-calling-auth.js";
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
 import { GraphClient } from "./graph.js";
@@ -24,7 +24,9 @@ export function providerGraphClient(service: ServiceConfig, env: NodeJS.ProcessE
   if (!service.enabled || (!service.serviceHealth && !service.serviceActivity.enabled)) return undefined;
   validateRuntimeConsent(service, env);
   if (service.mode === "simulation") return undefined;
-  return createLiveGraphClient(env, service.graphAuthentication);
+  return service.providerClientId
+    ? createFederatedGraphClient(env, service.providerClientId)
+    : createLiveGraphClient(env, service.graphAuthentication);
 }
 
 export async function serviceRuntime(

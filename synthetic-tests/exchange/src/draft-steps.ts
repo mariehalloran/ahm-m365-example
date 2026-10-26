@@ -29,12 +29,18 @@ export async function updateDraft(
 }
 
 export async function readDraft(
-  graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal,
+  graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal, edited = true,
 ): Promise<void> {
   const query = new URLSearchParams({ "$select": "id,subject,bodyPreview,isDraft" });
   const draft = await graph.json(`${draftPath(attempt, draftId)}?${query}`, savedDraftSchema, signal);
   if (draft.id !== draftId || draft.subject !== `AHM synthetic ${attempt.correlationId}` ||
-      !draft.isDraft || draft.bodyPreview !== editedDraftContent(attempt)) {
+      !draft.isDraft || draft.bodyPreview !== (edited ? editedDraftContent(attempt) : "Dedicated synthetic probe. Safe to delete.")) {
     throw new IntegrationError("read-failure");
   }
+
+}
+
+export async function deleteDraft(graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal): Promise<void> {
+  await graph.request(draftPath(attempt, draftId), signal, "DELETE");
+  attempt.ownedMessageIds.delete(draftId);
 }

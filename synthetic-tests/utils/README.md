@@ -37,19 +37,21 @@ Separate service processes do not block each other. Keep one authoritative insta
 | `type` | `exchange`, `sharepoint`, or `teams` |
 | `intervalSeconds` | Start-to-start cadence, 1-86,400 seconds |
 | `timeoutSeconds` | Probe execution timeout, up to 120 seconds; cleanup has a separate bounded budget |
+| `executionLanes` | Optional array of `{ name, intervalSeconds, timeoutSeconds, journeys }`; unique lanes assign every supported service journey exactly once. Exchange defaults to legacy-interval mail (60 seconds checked in) and 300-second extended lanes, both using legacy timeout; other services default to one lane |
 | `mode` | `simulation` or `live` |
 | `graphAuthentication` | `managed-identity` by default for same-tenant Graph; explicit `certificate` uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for hosted cross-tenant or local access |
 | `teamsAuthentication` | Default `bot`; `user-delegated` is explicitly opt-in and requires approved human bootstrap |
 | `botAuthentication` | Independently defaults to `managed-identity`, explicitly selecting `BOT_CLIENT_ID` and same-tenant `BOT_TENANT_ID`; optional `certificate` requires `BOT_CLIENT_CERTIFICATE_PATH` |
 | `teamsReadbackClientId` | Optional same-tenant Entra application for bot Graph readback through worker-UAMI federation; requires Teams bot mode and managed-identity Graph authentication |
 | `healthReportAuthentication` | Independently defaults to `managed-identity` using `AZURE_CLIENT_ID`; explicit local `certificate` uses `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH` |
-| `exchangeCleanupEnabled` | Default `true`; set `false` in the Exchange service file to retain Inbox/Sent Items copies and draft-journey artifacts for inspection |
+| `exchangeCleanupEnabled` | Default `true`; `false` retains mail/drafts and skips draft deletion; owned calendar deletion/cancellation stays mandatory |
 | `teamsCleanupEnabled` | Default `true`; set `false` in the Teams service file to retain channel posts and replies for inspection |
 | `teamsCallingCallbackUrl` | Required for selected live calls: real public HTTPS URL with exact `/api/calls` path; only the Teams app gets ingress |
 | `teamsCallingPort` | Callback listener port, default 8080 |
 | `teamsCallingWaitSeconds` | Dwell after individual call placement, default 10 seconds (1–30); does not prove ringing/receipt, and hang-up is never disabled by message retention |
 | `serviceHealth` | Optional boolean, default `false`; stable Microsoft service health context only |
-| `serviceActivity` | Optional strict beta diagnostic settings, default disabled; see below |
+| `providerIntervalSeconds` | Independent provider lane start-to-start cadence, default 300 seconds (1–86,400); no extra container |
+| `serviceActivity` | Optional strict beta settings, default disabled; all five approved service functions, optional explicit direct-report thresholds; see [provider setup](../../docs/provider-monitoring.md) |
 | `scenario` | Optional deterministic simulation scenario |
 | `cohort` | Configured grouping label for results; not a worker health policy |
 
@@ -59,7 +61,11 @@ The obsolete per-service `reportToHealthModel` field remains rejected: live work
 
 ## Per-cycle health reports
 
-For each complete cycle, report each selected journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of the optional OpenTelemetry group. Success counts only executed samples and duration includes executed failures. Token acquisition and cleanup remain internal; the publication projection excludes their steps and private timing/status fields from console results, reports and OTEL. Operational failures still explain unsuccessful journeys, and enabled cleanup still executes safely. Retention instead records internal skipped cleanup (`cleanup-disabled`) and an explicit service cleanup-disabled diagnostic; it never claims successful cleanup. Restoring cleanup affects future attempts, not previously retained content. All seven journeys produce 21 business-step entities within a family of four models, 38 entities and 34 relationships. Calls use the same schedule with three independent root call-user attempts aggregated into one journey and three business steps.
+For each settled lane cycle, report each observed journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of the optional OpenTelemetry group. Success counts only executed samples and duration includes executed failures. Token acquisition and generic cleanup remain internal; explicit delete-draft/delete-event/cancel-meeting are business steps. Retention records skipped cleanup (`cleanup-disabled`) and a diagnostic, never successful cleanup. Restoring cleanup affects future attempts, not previously retained content. All eleven journeys produce 40 business-step entities within four models, 61 entities and 57 relationships. Multiple account attempts aggregate into shared journey/step entities.
+
+Independent lanes execute concurrently; at most three attempts per lane run at once, with dependent actions sequential. Each lane waits for completed/deadline results before aggregation/publication, never overlaps itself, and emits `service-slots-skipped` instead of replaying missed slots. Slow-lane execution/reporting does not hold the fast lane. A fast-lane report contains **only observed journeys**, not empty reports overwriting slow-lane entities. Provider reports remain a separate suppressed branch with their own independent provider lane. A rejected attempt does not cancel siblings.
+
+Per-attempt timeouts actively cancel work and count as failed **0** samples/Unhealthy, not Unknown/unexecutable. Cleanup has ten seconds, runner settlement grace twelve seconds; late completion cannot overwrite a settled result. A 170-second internal lane cycle deadline produces failed results even for selected queued attempts; skipped dependent actions remain unexecuted. On external shutdown queued work is not started.
 
 No executed samples means Unknown without a numeric value, not 100% success or zero duration. Skipped actions are excluded rather than failed. Cleanup failures affect cleanup and the whole journey, not earlier successful actions. The default policy uses below 99/95% success and above 15,000/60,000 ms mean duration; threshold equality does not breach. There is no rolling window, sample minimum, cross-cycle smoothing, or persisted state.
 
@@ -67,7 +73,7 @@ Simulation logs previews only and acquires no report credential. Live reports us
 
 Graph certificate mode previously read `AZURE_*`; migrate it to `M365_*` explicitly. No credential fallback occurs. Providers always use the explicitly selected **application** Graph credential. Teams defaults to an installed bot with independent `botAuthentication: "managed-identity"` and `https://api.botframework.com/.default`; bot/target/observer share a tenant, and bot MI additionally matches `AZURE_TENANT_ID`. Certificate Graph uses `M365_TENANT_ID`; MI Graph uses explicit `M365_TENANT_ID` when supplied, otherwise `AZURE_TENANT_ID`. Optional delegated journeys use account-bound public-client tokens and never pass them to providers or ARM; per-account encrypted-at-rest Blob caches are provisioned only for selected live delegated mode. Missing/expired auth for one account does not block healthy users. See [bot setup](../teams/README.md#primary-setup-unattended-bot) or the [optional bootstrap guide](../../docs/teams-user-bootstrap.md).
 
-Console diagnostics accompany execution and publication failures. Incomplete/cancelled cycles explicitly skip synthetic health publication instead of presenting a healthy partial aggregate. Stable provider reporting remains a separate, impact-suppressed branch.
+Console diagnostics accompany execution and publication failures. Incomplete externally cancelled cycles skip synthetic health publication rather than present healthy partial aggregates; deadline-complete cycles publish all failed/successful attempts. Stable provider reporting remains a separate, impact-suppressed branch.
 
 Each report replaces the same entity/signal with a TTL (default 15 minutes). Live config requires TTL to exceed cadence plus the bounded execution/report budget: 212 seconds with OTEL off, or 224 seconds including optional export lifecycle work. Expiry removes the signal, **not a guaranteed Unhealthy state or alert**. Independent execution/report-freshness monitoring is required. Model references, permissions and migration are documented in the [model guide](../../health-model/README.md).
 
@@ -124,30 +130,33 @@ See the [model query contract](../../health-model/README.md#optional-otel-signal
 
 ## Optional provider collectors
 
-The service entry supplies journey dispatch and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Exchange, Teams and SharePoint collect independently at their existing per-type cadence, once per cycle regardless of selected journey/target count. Read-only provider initialization and sources run independently of synthetic journey initialization: missing targets or bot credentials do not prevent the provider Graph attempt. Both branches settle before the cycle summary. Live examples enable stable Service Health; safe simulation configs keep it off. Provider reports are separate from synthetic aggregation and introduce no persisted watermark, last-seen cache, or extra process. Diagnostics remain structured console output.
+The service entry supplies journey dispatch and its [service-owned provider wrapper](../exchange/src/providers.ts); shared worker/runtime code does not import service implementations. Each container has an independent `provider-context` lane (`providerIntervalSeconds`, default 300). Missing synthetic targets/bot credentials do not prevent provider Graph access, and a slow provider cannot block synthetic cadence/publication. Providers introduce no persisted watermark, last-seen cache, extra container or mandatory Log Analytics dependency. See the [short provider setup and all ten exact beta endpoints](../../docs/provider-monitoring.md).
 
 All fields are optional and default to:
 
 ```json
 {
   "serviceHealth": false,
+  "providerIntervalSeconds": 300,
   "serviceActivity": {
     "enabled": false,
     "aggregationIntervalMinutes": 15,
-    "lookbackMinutes": 30
+    "lookbackMinutes": 30,
+    "maxAgeMinutes": 60,
+    "thresholds": {}
   }
 }
 ```
 
-`serviceHealth` must be boolean. `serviceActivity` is a strict object: `enabled` is boolean; aggregation is **5, 10, 15, or 30 minutes**; lookback is an integer multiple of aggregation, at least one aggregation interval and at most **1,440 minutes**. An omitted nested field uses the shown default. An optional `functions` array must contain exactly one verified identifier for that service:
+`serviceHealth` must be boolean. `serviceActivity` is strict: aggregation is **5, 10, 15, or 30 minutes**; lookback is an integer multiple up to **1,440 minutes**. Optional `functions` selects 1–5 unique approved identifiers; omission selects all five for that service. `maxAgeMinutes` (5–1,440, default 60) controls source-bucket freshness independently of polling. Optional `thresholds.<function>: { degradedBelow, unhealthyBelow }` enables direct suppressed context reports only for explicitly configured functions:
 
-| Service | Default/only beta function | Value and additional application permission |
+| Service | Beta coverage | Additional application permission |
 | --- | --- | --- |
-| Exchange | `getConnectivityMetricsForExchange` | Provider percentage 0–100; `ServiceActivity-Exchange.Read.All` |
-| Teams | `getMessageVolumeMetricsForTeamsChat` | Nonnegative safe-integer count; `ServiceActivity-Teams.Read.All` |
+| Exchange | Connectivity percentage, delivered-message count, web-read/app-opening/modern-authentication active-user counts | `ServiceActivity-Exchange.Read.All` |
+| Teams | Meeting-join/launch/chat counts, QoE telemetry-coverage and UDP percentages (not call quality) | `ServiceActivity-Teams.Read.All` |
 | SharePoint | None | `enabled: true` or any nonempty `functions` is rejected |
 
-Unknown functions, URLs, fields, duplicates, wrong-service functions, unsafe Int64 values and invalid windows are rejected; no unverified optional reports are exposed. `functions` can be omitted to select the one verified default. Enabling beta requires **`ENABLE_BETA_SERVICE_ACTIVITY=true` before runtime/credentials/mutations**, including simulation; live execution independently requires `ENABLE_LIVE_M365=true`. A disabled service does not create a runtime. Microsoft marks beta APIs unsupported for production; confirm tenant eligibility/enablement and licensing with the administrator.
+Unknown functions, URLs, fields, duplicates, wrong-service functions, unsafe Int64 values and invalid windows are rejected. Beta requires **`ENABLE_BETA_SERVICE_ACTIVITY=true` before runtime/credentials/mutations**, including simulation; hosted parameter preparation requires `--enable-beta-service-activity` and mounts that environment setting. Live execution independently requires `ENABLE_LIVE_M365=true`. Beta APIs remain unsupported for production under their beta contract; confirm actual tenant eligibility and returned data.
 
 **Business Basic versus enterprise:** API-backed synthetics and stable Service Health can use Basic when the required subscribed service/Teams SKU and approved administrator access exist. The beta API pages specify application permissions but do **not** explicitly establish Basic entitlement; do not promise beta availability. Microsoft's separate [advanced Microsoft 365 monitoring eligibility](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) is at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses plus 50 monthly active users for a core service. Do not automatically apply that UI feature's threshold as a verified beta API entitlement rule; confirm actual report enablement/availability for the tenant.
 
@@ -159,7 +168,7 @@ GET https://graph.microsoft.com/beta/reports/serviceActivity/getConnectivityMetr
 
 Stable collection uses [service-health.ts](./src/service-health.ts) and needs separately approved **`ServiceHealth.Read.All`** admin consent. It filters exact subscribed names: `Exchange Online`, `Microsoft Teams`, `SharePoint Online`; no guessed aliases or empty-service healthy default. Discovery/administrator verification of the tenant's actual subscribed names remains a prerequisite. Exact overview status reports directly to `${service}-service-health` as `microsoft-reported-service-status` in **External Reports**, with `impactSuppressed`: **100 healthy, 50 degraded, 0 interruption**. Failed collection, missing overview, or unknown status publishes Unknown without a numeric value and includes failure context. The existing trial observes Graph 403 pending consent. An empty valid issue list is zero issue records, not a healthy status; issues never drive the overview signal.
 
-Each source has an independent **30-second budget**, uses existing bounded Graph HTTP retries, and follows at most **five pages**, each bounded to **2 MB**, on the exact same Graph HTTPS origin/version/collection or report-function path. Stable pages request at most 100 items; beta pages allow up to the requested window's bucket count (maximum 288), rejecting duplicate/out-of-window/unaligned intervals. Escaped, cyclic or over-budget continuation fails the source instead of publishing a partial snapshot. Graph redirects do not forward bearer tokens. Journey requests remain v1.0; report requests explicitly select beta. Source failures do not prevent other configured sources or successful journeys from reporting. `service-cycle-summary.providers` records `configured`, `succeeded`, `failed`, `skipped`, and emitted `records`; it never claims failed/skipped sources succeeded.
+Each source has an independent **30-second budget**, bounded retries and at most **five pages**, each bounded to **2 MB**, on the exact Graph HTTPS origin/version/collection or function path. Stable pages allow 100 items; beta pages allow the requested bucket count (maximum 288), rejecting duplicate/out-of-window/unaligned intervals. Escaped/cyclic/over-budget continuation fails the source, never a partial healthy snapshot. Source failures do not stop siblings or successful journeys. `service-provider-summary.providers` records `configured`, `succeeded`, `failed`, `skipped`, and emitted `records`.
 
 Provider console diagnostics are allowlisted and validated. They cannot add provider observations to synthetic/step aggregates:
 
@@ -173,7 +182,7 @@ Provider console diagnostics are allowlisted and validated. They cannot add prov
 
 Log timestamp is collection time, not historical report time. Approved issue JSON preserves id, service, classification, status, title, impact description, feature/group, start/end/modified times, resolution flag and posts (created time/type/content type/content). It retains at most 10 posts and bounds strings/serialized JSON to 6,000 characters; both `provider.truncated` and JSON `truncated` explicitly flag reductions, with `postsTotal` preserving original post count. Unknown fields are discarded; raw HTTP failures and mailbox content are never logged. This provider metadata can still be tenant-sensitive: restrict console access and any external diagnostic retention accordingly.
 
-Overlapping historical beta samples are snapshots, not newly occurring events—never sum them as new requests or derive synthetic success rates. Stable context remains impact-suppressed and uses overview status directly, not a log query. Issues and beta never populate Experience/journey health signals. Provider diagnostics are not proof of successful live tenant access.
+Overlapping historical beta samples are snapshots: never sum active-user counts as distinct users or manufacture availability denominators. Stable context maps only approved operational/degradation/interruption states; investigation/recovery/unknown states are Unknown. Explicit beta thresholds report the latest complete fresh bucket as `microsoft-activity-<function>` on the same suppressed Service Health entity. Missing/invalid/stale data replaces prior health with Unknown without a value. Counts and Teams percentages stay diagnostic without explicit customer thresholds. Neither path populates synthetic or Experience health; no mandatory KQL path is introduced.
 
 First-party references: [stable health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0), [stable issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0), [Exchange connectivity beta](https://learn.microsoft.com/graph/api/serviceactivity-getconnectivitymetricsforexchange?view=graph-rest-beta), [Teams chat volume beta](https://learn.microsoft.com/graph/api/serviceactivity-getmessagevolumemetricsforteamschat?view=graph-rest-beta), [serviceActivity catalog](https://learn.microsoft.com/graph/api/resources/serviceactivity?view=graph-rest-beta).
 

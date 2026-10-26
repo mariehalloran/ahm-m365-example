@@ -43,10 +43,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       id: "exchange-probe-001", type: "exchange-mail-flow", cohort: "exchange-global",
     }];
   } catch { throw new ConfigurationError("PROBES_JSON must contain a valid JSON array"); }
-  // Teams supports two message journeys for 30 targets plus 30 individual calls.
-  const parsedProbes = z.array(probeSchema).min(1).max(90).safeParse(rawProbes);
+  // Exchange supports six journeys for each of 30 explicit target sets.
+  const parsedProbes = z.array(probeSchema).min(1).max(180).safeParse(rawProbes);
   if (!parsedProbes.success) throw new ConfigurationError(`Invalid PROBES_JSON fields: ${parsedProbes.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const probes = parsedProbes.data;
+  if (["exchange", "teams", "sharepoint"].some(service =>
+    probes.filter(probe => probeServices[probe.type].service === service).length >
+      (service === "exchange" ? 180 : service === "teams" ? 90 : 60))) {
+    throw new ConfigurationError("Invalid PROBES_JSON: service probe inventory exceeded");
+  }
   if (new Set(probes.map(probe => `${probe.type}:${probe.id}`)).size !== probes.length) {
     throw new ConfigurationError("Probe IDs must be unique within each journey type");
   }

@@ -13,6 +13,26 @@ verify real posting, authorship, readback, cleanup and report ingestion. See the
 [recorded live baseline](../../docs/deployment.md#deployment-status-and-order) separately
 from these reusable setup instructions.
 
+## Target catalog versus current implementation
+
+The target is **five complete journey families**, not five API calls. Only the
+narrower messaging and call-signaling operations below are currently implemented.
+
+| Target family | Completed-workflow target | Current implementation / live boundary |
+| --- | --- | --- |
+| Two-bot channel conversation | Bot A sends → Bot B receives → B replies → A receives the correlated response, plus persisted readback | One installed bot posts and replies; a separate Graph observer verifies persisted content and author. This narrower flow is live verified; **Bot B delivery/receipt is not implemented**. Future bot-to-bot permissions/scopes require validation. |
+| Answered two-party audio | Answer call; exchange known audio bidirectionally; verify continuity, delay and distortion; hang up | Place call, configured wait, verified hang-up to three root-configured accounts is live verified. No answer or media verification; signaling success is not recipient receipt or audio health. |
+| Scheduled meeting | Join scheduled meeting, verify roster, exchange bidirectional media, leave | Planned; not implemented |
+| Recipient file sharing | Share file, retrieve as recipient identity, verify hash | Planned; not implemented; owner/observer readback would not prove recipient access |
+| Adaptive Card workflow | Publish card, invoke action, verify workflow/callback completion | Planned; not implemented |
+
+Current publication, reply and call scenarios run every **120 seconds** by default;
+service config owns cadence/deadlines, root config owns scenario selection and
+targets/accounts. Planned families have no implemented schedules. Optional
+**TeamsWeb messaging and meeting browser variants** are planned, not implemented.
+Bot APIs do not measure employee identity/client/UI experience. Media requires a
+separate supported-host design; current Container App signaling is not that design.
+
 ## Primary setup: unattended bot
 
 1. Deploy the foundation and identify the Teams worker UAMI. Register an approved
@@ -275,6 +295,10 @@ the exact marker, expected application author and nondeleted state; Connector
 activity IDs are not assumed to be Graph IDs. Opt-in delegated readback also requires
 the exact created Graph ID and authenticated user object ID. Every POST is attempted once: uncertain creation
 is never retried or reconciled into permission to delete some other message.
+Bot collection reads accept matching evidence on the current page before inspecting
+unused continuation metadata. If another page is needed, its continuation must pass
+the same-origin, exact-collection and bounded-query checks before any request; scans
+remain limited to five pages of 50 messages.
 
 Internal authentication/cleanup remain unreported as business steps. Skipped actions
 are not failed requests. Each complete attempt contributes binary success (1/0),
@@ -407,7 +431,12 @@ selected **application** Graph credentials (`graphAuthentication` MI/certificate
 never the delegated user token. Stable Service Health requires `ServiceHealth.Read.All`
 and publishes impact-suppressed supporting context under the Teams Experience.
 Beta activity additionally requires `ENABLE_BETA_SERVICE_ACTIVITY=true` and approved
-`ServiceActivity-Teams.Read.All`; it is diagnostic-only, not journey evidence.
+`ServiceActivity-Teams.Read.All`; all five approved functions run in an independent
+provider lane (default 300 seconds). Counts, QoE telemetry coverage and UDP percentage
+remain diagnostic unless explicit customer thresholds publish suppressed Service Health
+context; none is automatic call quality or journey evidence.
 Provider failures do not change synthetic success, business steps or rollup.
+Beta collection currently receives 403; missing/unauthorized observations never
+become fabricated Healthy context. Provider lanes remain separate from user journeys.
 ARM health reports independently use `healthReportAuthentication`, hosted UAMI.
-See [provider contracts](../utils/README.md#optional-provider-collectors).
+See [provider setup, direct-report thresholds and exact functions](../../docs/provider-monitoring.md).

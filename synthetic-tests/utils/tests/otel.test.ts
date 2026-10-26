@@ -200,7 +200,7 @@ describe("worker health-report independence", () => {
     const events = output();
     await runServiceWorker(service, { project, once: true, env: {}, telemetry: events, createOtel });
     expect(createOtel).not.toHaveBeenCalled();
-    expect(events.emit.mock.calls.filter(([event]) => event === "health-report-preview")).toHaveLength(16);
+    expect(events.emit.mock.calls.filter(([event]) => event === "health-report-preview")).toHaveLength(62);
   });
   it("keeps existing console results and direct-report previews when console OTEL is enabled", async () => {
     const events = output();
@@ -209,8 +209,8 @@ describe("worker health-report independence", () => {
       once: true, env: {}, telemetry: events,
     });
     const names = events.emit.mock.calls.map(([event]) => event);
-    expect(names.filter(name => name === "synthetic-result")).toHaveLength(2);
-    expect(names.filter(name => name === "health-report-preview")).toHaveLength(16);
+    expect(names.filter(name => name === "synthetic-result")).toHaveLength(6);
+    expect(names.filter(name => name === "health-report-preview")).toHaveLength(62);
     expect(names).toContain("otel-log");
     expect(names).toContain("probe-metrics");
   });
@@ -239,8 +239,8 @@ describe("worker health-report independence", () => {
         telemetry: events, createOtel,
         handler: async probe => ({ ...baseResult(probe, Date.now()), success: true, durationMs: 1 }),
       })).rejects.toThrow();
-      expect(fetcher).toHaveBeenCalledTimes(16);
-      expect(events.emit.mock.calls.filter(([event]) => event === "health-report-published")).toHaveLength(16);
+      expect(fetcher).toHaveBeenCalledTimes(62);
+      expect(events.emit.mock.calls.filter(([event]) => event === "health-report-published")).toHaveLength(62);
       if (failure !== "initialization") expect(telemetry.shutdown).toHaveBeenCalledOnce();
     },
   );
@@ -258,7 +258,7 @@ describe("worker health-report independence", () => {
       handler: async probe => ({ ...baseResult(probe, Date.now()), success: true, durationMs: 1 }),
       providers: async context => {
         context.results.recordDiagnostic({
-          kind: "overview", service: "exchange", collectedAt: stamp,
+          kind: "overview", service: "exchange", collectedAt: new Date().toISOString(),
           serviceId: "Exchange", serviceName: "Exchange Online", status: "serviceOperational",
         });
         return { configured: 1, succeeded: 1, failed: 0, skipped: 0, records: 1 };
@@ -270,7 +270,7 @@ describe("worker health-report independence", () => {
         shutdown: async () => {},
       }),
     })).rejects.toThrow(TelemetryExportError);
-    expect(fetcher).toHaveBeenCalledTimes(17);
+    expect(fetcher).toHaveBeenCalledTimes(63);
     const providerReport = fetcher.mock.calls.find(([url]) => String(url).includes("/entities/exchange-service-health/"));
     expect(JSON.parse(String(providerReport?.[1]?.body))).toMatchObject({ healthState: "Healthy", value: 100 });
     expect(events.emit).toHaveBeenCalledWith("telemetry-output-failed", expect.any(Object));

@@ -4,10 +4,10 @@
 
 This directory is the self-contained Node project. For why synthetic journeys complement Microsoft-reported health and how Azure Monitor Health Models exposes experience gaps, see the [repository overview](../README.md).
 
-Start with the service-owned journey guides: [Exchange mail/draft](./exchange/README.md), [Teams publication/reply and individual call placement/hang-up](./teams/README.md), and [SharePoint save/rename](./sharepoint/README.md). Each documents its exact endpoints, reusable actions, config and tests. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no successful tenant journey or employee receipt is established by those tests. Calling health does not prove that each recipient rang.
+Start with the service-owned journey guides: [Exchange six core mail/calendar journeys](./exchange/README.md), [Teams target families and current bot/signaling coverage](./teams/README.md#target-catalog-versus-current-implementation), and [SharePoint target families and current save/rename coverage](./sharepoint/README.md#target-catalog-versus-current-implementation). Each separates implemented operations from the target catalog and live evidence. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no successful tenant journey or employee receipt is established by those tests. Calling health does not prove that each recipient rang.
 
 ```text
-Exchange Container App   [test + aggregation, every 60 seconds]  --+
+Exchange Container App   [mail 60s; five other journeys 300s]    --+
 Teams Container App      [test + aggregation, every 120 seconds] --+
 SharePoint Container App [test + aggregation, every 300 seconds] --+
                                                                 |
@@ -17,9 +17,43 @@ SharePoint Container App [test + aggregation, every 300 seconds] --+
 
 ```
 
-The [health model templates](../health-model/README.md) create a root model referencing separate enabled service models. Each of seven journeys has its own entity and business-step child entities: **21 business steps, four models, 38 entities and 34 relationships** in the full source family. The new individual-user calling journey aggregates three test accounts without per-user signal inventories; existing deployed journey IDs stay unchanged. Each journey/step has **External Reports**, plus an optional **OpenTelemetry** group for Azure Monitor export. Token acquisition and cleanup remain internal, with no entities or published step data. Use the [shared worker deployment](./infra/README.md) for rollout and the [migration procedure](../health-model/README.md#apply-and-migrate) when changing telemetry modes while preserving model entities/root.
+The [health model templates](../health-model/README.md) create a root referencing separate enabled service models. Eleven journeys have business-step children: **40 business steps, four models, 61 entities and 57 relationships** in the full family. Target attempts aggregate without per-user signal inventories; existing journey IDs stay unchanged. Each journey/step has **External Reports**, plus optional **OpenTelemetry** for Azure export. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps. Use the [shared worker deployment](./infra/README.md) and [model migration](../health-model/README.md#apply-and-migrate).
 
 Each service has its own Container App and cadence. Console diagnostics remain in that same process; no separate telemetry service or Kubernetes requirement is introduced.
+
+## Catalog, implementation and live evidence
+
+A journey family is a completed workflow, not a fixed number of API calls. Exchange
+implements six core families; Teams and SharePoint each have five target families
+but only narrower implemented coverage, detailed in their service guides. Live
+Exchange mail, draft, attachment/reply and DL fanout are verified Healthy; its two
+calendar journeys currently fail with 403 pending scoped-authorization cache propagation.
+Teams live verification covers one-bot publication/reply with a Graph observer and
+signaling-only calls to three accounts, not a second bot receiving or answered audio.
+SharePoint save/rename handlers exist but approved live targets are missing.
+See [live evidence](../docs/deployment.md#deployment-status-and-order), not unit tests,
+for execution and ingestion acceptance.
+
+Graph persisted readback is not Bot B receipt; owner access is not recipient access;
+call signaling is not media; APIs are not browser experience. Future families and
+optional variants below and in service guides are **not implemented or selectable**
+unless explicitly listed as current root scenarios.
+
+### OneDrive target catalog (planned)
+
+There is no OneDrive worker, health model, root scenario selection or live verification
+yet. Keep this catalog here until implementation exists; no empty service folder is needed.
+
+| Planned family | Completed-workflow target |
+| --- | --- |
+| User-drive roundtrip | Create folder/file in an approved user's drive, reopen/download, verify hash, delete owned artifacts |
+| App-folder lifecycle | Write, read, update, verify and delete app-folder data; exact authentication/authorization model pending validation |
+| Recipient sharing | Create sharing link/grant, read as the intended recipient, verify content, revoke and verify access removal |
+| Document versions | Update, enumerate history, retrieve/verify an earlier version; restore is optional |
+| Search and retrieve | Wait for indexing, find the owned file, retrieve it and verify content |
+
+An optional browser variant is also planned. Cadences, permissions and host design
+are not yet implemented; SharePoint API coverage must not be relabeled as OneDrive coverage.
 
 ## Run locally
 
@@ -48,14 +82,14 @@ All remaining npm and compiled-worker commands in this guide run from `synthetic
 | Root setting | Meaning |
 | --- | --- |
 | `services.<service>.enabled` | Enable Exchange, Teams, or SharePoint; all default to `true` |
-| `services.<service>.scenarios` | Select journeys independently: Exchange `send-receive-mail`/`edit-reopen-draft`, Teams `publish-channel-message`/`reply-channel-message`/`call-test-user`, SharePoint `save-reopen-file`/`rename-reopen-file`; all default to `true` |
+| `services.<service>.scenarios` | Select journeys independently: Exchange `send-receive-mail`/`edit-reopen-draft`/`attachment-reply-mail`/`distribution-list-mail`/`recurring-calendar`/`meeting-invitation`, Teams `publish-channel-message`/`reply-channel-message`/`call-test-user`, SharePoint `save-reopen-file`/`rename-reopen-file`; checked-in root selects all |
 | `services.<service>.targets` | Account email addresses or approved site/team/channel IDs, never credentials |
 | `services.teams.callTargets` | Separate individual user allowlist: `id`, `tenantId`, `callUserId` (object UUID), three users in the sample; no channel metadata |
 | `services.<service>.configFile` | Service-owned file for independent cadence, timeout, mode, authentication and provider settings; relative to the root config's directory |
 | `healthModel` | Root model name, subscription/resource group, report TTL, and success/mean-duration thresholds |
 | `otel` | Optional export: `enabled: false` by default; destination `console` or `azure-monitor` |
 
-Service/scenario selection, targets, and report policy are configured **only in the root file**. The service-file parser rejects duplicate `enabled`, `targets`, and obsolete `telemetry` keys instead of silently ignoring them. Root service/scenario switches disable execution before credentials are initialized. No generic all-service scheduler is introduced: run each selected worker independently. Live execution and beta/provider permissions remain separate safety gates.
+Service/scenario selection, targets, and report policy are configured **only in the root file**. The service-file parser rejects duplicate `enabled`, `targets`, and obsolete `telemetry` keys instead of silently ignoring them. Root service/scenario switches disable execution before credentials are initialized. A reusable lane engine runs within each service worker, not across services. Exchange defaults to independent 60-second mail and 300-second extended lanes; service-owned `executionLanes` can set cadence/deadlines. Root Exchange targets add explicit `recipientMailbox` and `distributionList: { address, expectedRecipients }`; see [Exchange migration](./exchange/README.md). Omitted new scenario keys in older profiles default off; missing setup for a selected live journey fails observably. Live execution and beta/provider permissions remain separate safety gates.
 
 Each service accepts up to 30 configured targets; Teams separately accepts up to
 30 call targets. Selected journeys expand targets into independent attempts:
@@ -64,7 +98,7 @@ attempts in one cycle, aggregated into fixed journey/action signals.
 
 | Config | Cadence | Default |
 | --- | --- | --- |
-| [Exchange](./exchange/config.json) | 60 seconds | Simulated mail-flow result |
+| [Exchange](./exchange/config.json) | Mail 60 seconds; five other core journeys 300 seconds | Simulated mail/calendar results |
 | [SharePoint](./sharepoint/config.json) | 300 seconds | Simulated file result |
 | [Teams](./teams/config.json) | 120 seconds | Simulation; live defaults to an installed same-tenant managed-identity bot |
 
@@ -79,15 +113,18 @@ attempts in one cycle, aggregated into fixed journey/action signals.
 }
 ```
 
-Restart a worker after editing its file. Separate services do not share a scheduler. A worker never overlaps its own cycles; missed slots are skipped, not queued into catch-up bursts. Run one instance per target set until distributed ownership is implemented.
+Restart a worker after editing its file. Separate services do not share a scheduler.
+The reusable asynchronous lane runner executes independent journeys/targets concurrently
+and reports settled results. Each lane never overlaps itself; missed slots are skipped,
+not queued into catch-up bursts. Run one instance per target set until distributed ownership is implemented.
 
 Each command reads the root config (default `../monitoring.config.json` from this Node project), then the selected `configFile`. Use `--project-config <file>` for a private/mounted root config and `--config <file>` to override only the service file. The latter path is relative to the process working directory; root `configFile` paths are relative to the project config. A service entry rejects another service's config before credentials or operations are initialized.
 
 ### Per-cycle health reports
 
-After each complete cycle, aggregate actual attempts separately for each journey and business action. Send `synthetic-success-percentage`/`synthetic-mean-duration` to that journey's entity and each journey-scoped business-step entity in `<root-model-name>-<service>`. All selected journeys use the same product worker and cadence. Defaults remain below 99%/95% success and above 15/60 seconds mean duration for Degraded/Unhealthy; these are demo thresholds, **not per-action SLOs or p95 latency**.
+After each settled lane cycle, aggregate actual attempts separately for each journey and business action. Send `synthetic-success-percentage`/`synthetic-mean-duration` to that journey's entity and each journey-scoped business-step entity in `<root-model-name>-<service>`. Selected journeys share a product worker, not necessarily a cadence; service-owned lanes set cadence/deadlines while root config selects scenarios and targets. Defaults remain below 99%/95% success and above 15/60 seconds mean duration for Degraded/Unhealthy; these are demo thresholds, **not per-action SLOs or p95 latency**.
 
-Executed failures count as zero success. Skipped/unobserved actions have no artificial samples and receive Unknown reports without a numeric value. No aggregation history is retained across cycles. Simulation only prints `health-report-preview`; live mode publishes direct ARM health reports and console diagnostics. Publication failures remain explicit.
+Executed failures and execution timeouts count as zero success; timeouts report Unhealthy, not Unknown. Unexecuted dependent steps are not failed requests: skipped/unobserved actions have no artificial samples and receive Unknown reports without a numeric value. No aggregation history is retained across cycles. Simulation only prints `health-report-preview`; live mode publishes direct ARM health reports and console diagnostics. Publication failures remain explicit.
 
 Reports default to a 15-minute TTL and are replaced each cycle. An incomplete/cancelled cycle explicitly skips synthetic reports rather than publishing a healthy partial aggregate. Expiry **removes** external signals; it does not guarantee Unhealthy or an alert. Independently detect stopped/stalled execution and broken publication. Reports are current-cycle aggregates, not a full metrics store, percentile history, or arbitrary logs query interface; means alone cannot reconstruct weighted historical statistics.
 
@@ -259,9 +296,9 @@ uses explicit `certificate` mode and `M365_*`; it does not change Azure reportin
 
 | Surface | Current state |
 | --- | --- |
-| Exchange, Teams, SharePoint journeys and named steps | Seven implemented journeys, safe simulation defaults and HTTP-mocked tests; Exchange/Teams have recorded successful live acceptance; SharePoint setup remains incomplete |
+| Exchange, Teams, SharePoint journeys and named steps | Eleven implemented journeys, safe simulation defaults and HTTP-mocked tests; original Exchange/Teams have recorded successful live acceptance; expanded Exchange requires tenant acceptance; SharePoint setup remains incomplete |
 | Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
-| Root model of service models and journey/step entities | Four models, 38 entities, 34 relationships, seven journeys and 21 business steps; External Reports always, OTEL optional |
+| Root model of service models and journey/step entities | Four models, 61 entities, 57 relationships, eleven journeys and 40 business steps; External Reports always, OTEL optional |
 | Stable provider context / beta diagnostics | All three context signals verified Unknown with Graph 403/permission-failure diagnostics and suppressed impact; issues and beta remain diagnostics only, never synthetic success samples |
 | Worker hosting and packaging | Separate Container Apps reuse one immutable image; see the dated [live baseline](../docs/deployment.md#deployment-status-and-order) rather than treating sample settings as deployed state |
 | Tenant authorization and runtime settings | Mailbox-scoped Exchange and team-scoped Teams readback verified in the baseline; each new deployment must validate its own allowed/denied grants, targets and ingestion |

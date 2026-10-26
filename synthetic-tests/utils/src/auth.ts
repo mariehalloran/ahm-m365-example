@@ -54,6 +54,20 @@ export function createLiveGraphClient(
   return new GraphClient(new AuthenticatedHttp(createServiceCredential(env, authentication), "https://graph.microsoft.com/.default"));
 }
 
+export function createFederatedGraphClient(env: NodeJS.ProcessEnv, clientId: string): GraphClient {
+  const parsed = z.object({
+    AZURE_TENANT_ID: z.string().uuid(), clientId: z.string().uuid(),
+  }).safeParse({ ...env, clientId });
+  if (!parsed.success) throw new ConfigurationError("Graph federation requires valid AZURE_TENANT_ID and application client ID");
+  const identity = createServiceCredential(env, "managed-identity");
+  const credential = new ClientAssertionCredential(parsed.data.AZURE_TENANT_ID, parsed.data.clientId, async () => {
+    const assertion = await identity.getToken("api://AzureADTokenExchange/.default");
+    if (!assertion) throw new IntegrationError("authentication-failure");
+    return assertion.token;
+  });
+  return new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default"));
+}
+
 export function createTeamsReadbackGraph(env: NodeJS.ProcessEnv, clientId: string): GraphClient {
   const parsed = z.object({
     AZURE_TENANT_ID: z.string().uuid(), BOT_TENANT_ID: z.string().uuid(), clientId: z.string().uuid(),
@@ -61,13 +75,7 @@ export function createTeamsReadbackGraph(env: NodeJS.ProcessEnv, clientId: strin
   if (!parsed.success || parsed.data.AZURE_TENANT_ID.toLowerCase() !== parsed.data.BOT_TENANT_ID.toLowerCase()) {
     throw new ConfigurationError("Teams readback federation requires a valid application ID and matching Azure/bot tenants");
   }
-  const identity = createServiceCredential(env, "managed-identity");
-  const credential = new ClientAssertionCredential(parsed.data.BOT_TENANT_ID, parsed.data.clientId, async () => {
-    const assertion = await identity.getToken("api://AzureADTokenExchange/.default");
-    if (!assertion) throw new IntegrationError("authentication-failure");
-    return assertion.token;
-  });
-  return new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default"));
+  return createFederatedGraphClient(env, clientId);
 }
 
 export function createLiveTeamsBot(

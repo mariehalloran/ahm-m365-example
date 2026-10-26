@@ -1,83 +1,103 @@
-# Exchange: send email and confirm arrival
+# Exchange: completed mail and calendar journeys
 
-The employee goal is **send an email and have it arrive**, not merely receive an HTTP success response.
+One Exchange worker runs six independent API-backed journey families. Business steps remain sequential within an attempt; targets and journeys run concurrently (three attempts per lane). Nothing measures Outlook UI, employee sign-in/MFA, external delivery, or tenant-wide availability.
 
-The [journey](./src/journey.ts) orchestrates separately exported [actions](./src/steps.ts): `authenticate`, `createDraft`, `sendMessage`, `confirmDelivery`, and `cleanup`. It creates a draft in one dedicated mailbox, sends it to itself, waits for the exact message in its Inbox, and by default cleans up only that test's copies. A distinct sender/recipient pair and Outlook UI testing are not implemented.
+**Implementation versus live evidence:** all six core journeys below are implemented.
+Mail, draft, attachment/hash/correlated reply and distribution-list fanout have been
+verified Healthy live. Recurring calendar and meeting invitation currently receive
+403, blocked by scoped-authorization cache propagation; they are implemented, not
+live-successful. See [recorded acceptance](../../docs/deployment.md#deployment-status-and-order)
+for execution and report-ingestion evidence.
 
-Journey `send-receive-mail` has business-step entities `create-draft`, `send`, and `confirm-delivery`. A second journey, `edit-reopen-draft`, uses `create-draft`, `update-draft`, and `read-draft` beneath its separate `exchange-draft` entity. Step IDs are prefixed with the journey entity ID. Each journey/step always receives direct success/duration reports in **External Reports**; optional Azure OTEL adds a separate query-backed group. Token acquisition and cleanup are internal, with no published steps or standalone health signals. Failed prerequisites skip downstream operations; enabled cleanup still runs after an attempted mutation with its own ten-second budget. Its failures remain journey diagnostics without rewriting prior business-action successes or delivery timing.
+## Primary setup
 
-The [draft journey](./src/draft-journey.ts) reuses draft creation, then [edits and reopens](./src/draft-steps.ts) the same owned draft to verify its marker, edited content and draft state. It never sends mail. Both journeys are enabled independently at the root and share this worker, target mailboxes and cadence.
+1. Select journeys and approved participants **only in the root project config**. The checked-in root selects all six; its `.invalid` addresses are simulation placeholders, not live resources.
+2. Approve dedicated, licensed mailboxes and scope `Application Mail.Send`, `Application Mail.ReadWrite`, and (for calendar journeys) `Application Calendars.ReadWrite` through Exchange RBAC for Applications to just those participants. Verify both allowed participants and a denied control mailbox. Do not add tenant-wide Entra mail/calendar grants.
+3. Set service `mode: "live"`, explicitly selected managed identity, live consent `ENABLE_LIVE_M365=true`, approved model destination, and deploy models before workers. See [access request](../../MAILBOX-SYNTHETIC-ACCESS.md), [identity details](../../docs/cross-tenant-access.md), and [deployment](../../docs/deployment.md).
+4. Run `npm run exchange -- --once --project-config /absolute/path/monitoring.private.json` from `synthetic-tests/`; verify actual journey execution **and accepted health ingestion**.
 
-For temporary manual inspection, set `"exchangeCleanupEnabled": false` in the
-Exchange service file selected by the private root profile and redeploy. Both
-journeys then skip cleanup and emit `exchange-cleanup-disabled`: delivered Inbox
-mail, Sent Items copies and draft-only artifacts remain, including artifacts from
-failed attempts. Search the configured mailbox for subjects beginning
-`AHM synthetic`; the mail-flow journey sends to that same mailbox, not every Teams
-test account. Cleanup remains enabled by default. At a one-minute cadence, each
-successful cycle adds one Inbox message, one sent copy and one edited draft.
-Restore `true` and redeploy after inspection; that affects future attempts only,
-not previously retained mail. A retained successful journey verifies business
-actions, not cleanup.
+Root Exchange target shape (repeat the object for additional independent target sets):
 
-Each attempt contributes success as **1 or 0** to cycle aggregation. Console observations separately measure **send request time**, **confirmed delivery time**, and **total attempt time**. Request acceptance is not delivery. Failed send requests still retain their elapsed time.
-
-- [Config and independent cadence](./config.json)
-- [Administrator resource/permission request](../../MAILBOX-SYNTHETIC-ACCESS.md)
-- [HTTP tests](./tests/probe.test.ts)
-
-Start safely from the `synthetic-tests/` project directory:
-
-```sh
-npm run exchange -- --once
-# Compiled equivalent after npm run build:
-node dist/exchange/src/worker.js --once
+```json
+{
+  "id": "exchange-pair-001",
+  "mailbox": "sender@example.invalid",
+  "recipientMailbox": "recipient@example.invalid",
+  "distributionList": {
+    "address": "synthetic-list@example.invalid",
+    "expectedRecipients": ["sender@example.invalid", "recipient@example.invalid"]
+  }
+}
 ```
 
-The checked-in config simulates results without sending email or initializing credentials. Simulation is deterministic and labeled modeled, including failures, timeout steps, and stale timestamps. The [live settings example](./config.live.example.json) selects live mode, but requires approved root mailbox targets/model destination, root service/scenario selection, scoped permissions, and explicit `ENABLE_LIVE_M365=true`.
+`mailbox` is A; `recipientMailbox` is B. Attachment/reply and meeting journeys require distinct explicit A/B participants. Distribution-list delivery verifies **every** listed expected recipient; it does not discover members or infer tenant accounts. Recurring events and drafts use A. Each selected journey runs for every configured target; do not duplicate a group/participant set unless duplicate traffic is intended.
 
-## API operations
+Older root profiles omitting the four new scenario keys keep those journeys disabled for compatibility. The checked-in root explicitly selects all six. Selected live journeys with missing prerequisites report observed `configuration-failure`/Unhealthy, never simulation or an invented A→A flow. The original mail journey alone retains its single-mailbox self-delivery fallback when B is omitted.
 
-All paths are relative to `https://graph.microsoft.com/v1.0`; identifiers and query parameters are URL-encoded.
+## Journeys and scheduling
 
-| Action | Method and endpoint | Verification |
-| --- | --- | --- |
-| Create draft | `POST /users/{mailbox}/messages` | Fixed synthetic body, UUID subject/header, same dedicated recipient; no retry after ambiguous creation |
-| Edit owned draft | `PATCH /users/{mailbox}/messages/{draftId}` | Update only this run's known draft with correlated synthetic content |
-| Reopen draft | `GET /users/{mailbox}/messages/{draftId}` | Verify the expected owned draft and edited content; acceptance of PATCH alone is not success |
-| Send | `POST /users/{mailbox}/messages/{draftId}/send` | Acceptance only, not delivery; ambiguous send is not retried |
-| Confirm delivery | `GET /users/{mailbox}/mailFolders/inbox/messages?$filter=subject eq '{uniqueSubject}'&$select=id&$top=100` | Exact run marker appears in Inbox within timeout |
-| Locate owned copies | `GET /users/{mailbox}/messages?$filter=subject eq '{uniqueSubject}'&$select=id&$top=100` | Exact marker only; incomplete cleanup pagination fails |
-| Cleanup | `DELETE /users/{mailbox}/messages/{messageId}` | Only known/correlated draft, sent, or received IDs; never purge the mailbox |
+| Root scenario | Journey entity | Sequential business steps | Default cadence |
+| --- | --- | --- | --- |
+| `send-receive-mail` | `exchange-global` | Create mail, send A→B, verify actual B Inbox delivery | 60 seconds |
+| `edit-reopen-draft` | `exchange-draft` | Create, initial read, update, reopen/verify, delete owned draft | 300 seconds |
+| `attachment-reply-mail` | `exchange-attachment` | Send attachment A→B, verify downloaded SHA-256, reply B→A, verify transport reply headers/sender/body marker | 300 seconds |
+| `distribution-list-mail` | `exchange-distribution` | Send to explicit list, verify every expected Inbox | 300 seconds |
+| `recurring-calendar` | `exchange-recurring` | Create daily series, read occurrence, update series, verify series/occurrence, delete series | 300 seconds |
+| `meeting-invitation` | `exchange-meeting` | Create invitation, B receives, verify B calendar by iCalUId, B accepts, A observes accepted attendee, A cancels | 300 seconds |
 
-`sendDurationMs` excludes authentication/draft/polling/cleanup. `deliveryDurationMs` includes send initiation and polling, not exact transport latency; it is absent when unconfirmed. `durationMs` includes cleanup. Late delivery can leave a retained artifact requiring ownership-checked review. Normal deletion can leave Deleted Items/compliance copies.
+The 60-second mail flow stays simple: no attachment or reply is required. Draft
+deletion may be disabled explicitly for trial retention as described below.
+An optional seventh **mailbox search/organize** journey, external inbound/outbound
+variants and an **OutlookWeb browser** variant are planned, not implemented.
+They are not additional enabled root scenarios or part of current live acceptance.
 
-## Identity
+Service-owned optional settings:
 
-Same-tenant hosted Graph uses `graphAuthentication: "managed-identity"` (the default) and requires a valid explicit `AZURE_CLIENT_ID`. Only `ManagedIdentityCredential({ clientId })` is constructed, for `https://graph.microsoft.com/.default`; there is no CLI, default credential, system-identity guess, client-secret or certificate fallback.
+```json
+"executionLanes": [
+  { "name": "mail", "intervalSeconds": 60, "timeoutSeconds": 45, "journeys": ["send-receive-mail"] },
+  { "name": "extended", "intervalSeconds": 300, "timeoutSeconds": 120,
+    "journeys": ["edit-reopen-draft", "attachment-reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation"] }
+]
+```
 
-For hosted cross-tenant access or local live development, explicitly choose `graphAuthentication: "certificate"` and provide `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for an application in the mailbox tenant. Scope `Application Mail.ReadWrite` and `Application Mail.Send` through Exchange RBAC for Applications to dedicated mailboxes only; **do not grant tenant-wide Entra Graph mail application permissions**. Health reporting independently defaults to `healthReportAuthentication: "managed-identity"` with the Azure UAMI. Graph certificate mode no longer reads `AZURE_*`. Follow the [cross-tenant administrator handoff and PEM mounting guide](../../docs/cross-tenant-access.md).
+Explicit lane settings must assign every supported service journey exactly once, even when disabled at the root. Without them, `mail` inherits legacy service `intervalSeconds`/`timeoutSeconds` (checked-in 60/45); `extended` uses 300 seconds and the legacy timeout. Both start immediately. Slow extended execution/reporting cannot block mail. A lane never overlaps itself; missed slots emit `service-slots-skipped` with lane, first slot, and count, without catch-up bursts. `--once` settles both selected lanes before exiting.
 
-This proves neither employee login/MFA, Outlook rendering, external delivery, nor tenant-wide availability. The [root config](../../monitoring.config.json) selects both journeys and their mailbox targets. The shared worker aggregates this cycle's journey/actions and publishes direct health reports to separate journey/business-step entities in the Exchange model. No history is persisted; reports replace cycle aggregates rather than providing a full metrics store or percentiles. See [reporting/configuration](../utils/README.md#per-cycle-health-reports).
+Execution deadlines cancel work; cleanup gets ten seconds (runner settlement grace twelve seconds). Completed/deadline results aggregate and publish only their observed journeys, never empty reports for another lane. A timeout is success **0**, counted in the denominator and reported Unhealthy; dependent unexecuted steps remain skipped, not failed requests. Internal cycle deadline is 170 seconds; queued attempts cancelled by that deadline still produce failed journey results. External shutdown does not start queued attempts. Reports contain no per-target signal inventories or persisted cycle history.
 
-## Microsoft references
+## Exact Graph operations
 
-- [Create a draft](https://learn.microsoft.com/en-us/graph/api/user-post-messages?view=graph-rest-1.0)
-- [Send a draft](https://learn.microsoft.com/en-us/graph/api/message-send?view=graph-rest-1.0)
-- [List messages](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0)
-- [Delete a message](https://learn.microsoft.com/en-us/graph/api/message-delete?view=graph-rest-1.0)
+All endpoints use `https://graph.microsoft.com/v1.0`; mailbox and artifact IDs/query parameters are encoded.
 
-## Optional provider context and diagnostics
+| Operation | Endpoint |
+| --- | --- |
+| Create mail/draft/attachment mail | `POST /users/{A}/messages` (UUID subject/header; attachment is a small `fileAttachment`) |
+| Initial read and reopen draft | `GET /users/{A}/messages/{ownedDraftId}?$select=id,subject,bodyPreview,isDraft` |
+| Edit/delete draft | `PATCH`, `DELETE /users/{A}/messages/{ownedDraftId}` |
+| Send draft/mail | `POST /users/{A}/messages/{ownedDraftId}/send` |
+| Recipient delivery | `GET /users/{recipient}/mailFolders/inbox/messages?$filter=subject eq '{UUID-subject}'` |
+| Attachment metadata/content | `GET /users/{B}/messages/{receivedId}/attachments`, then `GET .../attachments/{attachmentId}`; decoded bytes must match SHA-256 |
+| Correlated reply | `POST /users/{B}/messages/{receivedId}/createReply`; `PATCH` owned reply body without changing its inherited subject/conversation; `POST .../{replyId}/send`; explicitly select `internetMessageHeaders` at readback: A's reply must have `In-Reply-To` equal to the original transport `internetMessageId`, a distinct reply Message-ID, B sender and correlated reply body. Conversation IDs are compared only within B, not across mailboxes |
+| Distribution list | Same create/send APIs, with only explicit DL address in `toRecipients`; poll each explicit expected recipient |
+| Create recurring series/invite | `POST /users/{A}/events` with `transactionId`; recurring daily numbered series or explicit B attendee |
+| Read occurrences | `GET /users/{A}/events/{ownedSeriesId}/instances?startDateTime=...&endDateTime=...` |
+| Update/verify/delete series | `PATCH`, `GET`, `DELETE /users/{A}/events/{ownedSeriesId}`; verify updated occurrence as well |
+| Verify attendee calendar | `GET /users/{B}/calendarView?startDateTime=...&endDateTime=...`; match organizer `iCalUId` and UUID subject |
+| Accept/observe/cancel | `POST /users/{B}/events/{ownedAttendeeId}/accept` (`sendResponse: true`); `GET /users/{A}/events/{ownedOrganizerId}` (B status accepted); `POST .../{ownedOrganizerId}/cancel` |
+| Cleanup mail | Exact UUID subject discovery `GET /users/{participant}/messages?$filter=subject eq '...'`; `DELETE /users/{participant}/messages/{ownedId}` |
+| Mandatory calendar cleanup | `DELETE /users/{participant}/events/{ownedReturnedId}`; never delete an unrelated search match |
 
-[exchangeProviders](./src/providers.ts) is injected into the same worker and collects once per cycle, not per mailbox or journey. Simulation defaults off; the live example enables stable Service Health independently of journey initialization:
+Mail/draft retention opt-out `exchangeCleanupEnabled: false` suppresses mail discovery/deletion and draft's delete business step; it emits a retention diagnostic. **Calendar deletion/cancellation remains mandatory** even with mail retention disabled. Failed prerequisites still run bounded owned-ID cleanup. Ambiguous mutation responses are not retried; a create that succeeds server-side without returning an ID, or late delivery after cleanup, can leave an artifact requiring ownership-checked operator reconciliation. Deleted Items/compliance retention may retain copies; cleanup is not a purge.
 
-- `serviceHealth: true` reads `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues`, filtering exact `Exchange Online`. Separate `ServiceHealth.Read.All` admin consent is required. Overview status reports directly to `exchange-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption, with `impactSuppressed`. Failed/missing/unknown overview status reports Unknown without a value and with failure context. The existing trial receives Graph 403 pending consent. Issue metadata/history never supplies journey health.
-- `serviceActivity.enabled: true` requires `ENABLE_BETA_SERVICE_ACTIVITY=true` plus separately approved `ServiceActivity-Exchange.Read.All`. Its only/default function is `getConnectivityMetricsForExchange`, returning Microsoft-estimated connectivity percentages. The beta API is experimental/unsupported for production and **diagnostic-only, never bubbles into Experience/journey health**.
+`sendDurationMs`/`deliveryDurationMs` are retained for the simple mail journey; total duration includes cleanup. Token acquisition and generic cleanup are internal, not business-step entities. Explicit delete-draft/delete-event/cancel-meeting operations are business steps. Each journey and business step has External Reports; optional root OTEL adds query signals without affecting synthetic success.
 
-Defaults are 15-minute aggregation and 30-minute lookback. Allowed aggregation is 5/10/15/30; lookback must be a multiple, at most one day. The UTC-floored beta historical window contains console diagnostic snapshots, never synthetic/step samples or request counters. Simulation skips sources without Graph credentials/network, and provider failures cannot change a successful mail journey's 1/0.
+## Provider context and coverage limits
 
-See the [strict config and console diagnostic contract](../utils/README.md#optional-provider-collectors) and [mocked collector tests](../utils/tests/providers.test.ts). No provider permission or successful live tenant access is established by those tests.
+Stable `serviceHealth: true` collects Exchange health overviews/issues in an independent provider lane (`providerIntervalSeconds`, default 300), requiring separate `ServiceHealth.Read.All`. Approved overview status feeds only suppressed `exchange-service-health`; unavailable/unapproved data is Unknown. `serviceActivity.enabled` separately gates all five approved Exchange beta functions (`ENABLE_BETA_SERVICE_ACTIVITY=true`, `ServiceActivity-Exchange.Read.All`). Explicit customer thresholds can report latest fresh activity directly to Service Health; otherwise activity remains diagnostic. No provider changes synthetic samples, steps or Experience rollup. See [provider setup and deployment opt-in](../../docs/provider-monitoring.md).
 
-- [List health overviews](https://learn.microsoft.com/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0)
-- [List issues](https://learn.microsoft.com/graph/api/serviceannouncement-list-issues?view=graph-rest-1.0)
-- [Exchange connectivity beta report](https://learn.microsoft.com/graph/api/serviceactivity-getconnectivitymetricsforexchange?view=graph-rest-beta)
+Unit tests use HTTP mocks and do not certify live access; the observed live status
+above is separate evidence. Validate participant permissions, Exchange propagation,
+actual distribution delivery, calendar processing, and accepted model ingestion in
+each chosen tenant. Beta activity currently receives 403; unavailable data is not
+Healthy. Browser/mobile behavior, arbitrary distribution membership, external mail
+and media quality remain outside current coverage.

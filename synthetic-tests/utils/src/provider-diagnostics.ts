@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { categories } from "./contracts.js";
+import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 
 export const providerServices = ["exchange", "teams", "sharepoint"] as const;
 export const providerSources = [
   "serviceAnnouncement.healthOverviews", "serviceAnnouncement.issues",
-  "getConnectivityMetricsForExchange", "getMessageVolumeMetricsForTeamsChat",
+  ...activityFunctionNames,
 ] as const;
 const service = z.enum(providerServices);
 const source = z.enum(providerSources);
@@ -23,7 +24,7 @@ export const providerDiagnosticSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({
     ...base, kind: z.literal("activity"),
-    function: z.enum(["getConnectivityMetricsForExchange", "getMessageVolumeMetricsForTeamsChat"]),
+    function: z.enum(activityFunctionNames),
     intervalStart: collectedAt, intervalEnd: collectedAt,
     aggregationIntervalMinutes: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(30)]),
     percentage: z.number().finite().min(0).max(100).optional(),
@@ -67,10 +68,10 @@ export function providerLog(raw: ProviderDiagnostic): { body: string; timestamp:
       });
       break;
     case "activity":
-      if ((record.function === "getConnectivityMetricsForExchange" &&
-          (record.service !== "exchange" || record.percentage === undefined || record.value !== undefined)) ||
-          (record.function === "getMessageVolumeMetricsForTeamsChat" &&
-          (record.service !== "teams" || record.value === undefined || record.percentage !== undefined))) {
+      if (!(activityFunctions[record.service] as readonly string[]).includes(record.function) ||
+          (isPercentageActivity(record.function)
+            ? record.percentage === undefined || record.value !== undefined
+            : record.value === undefined || record.percentage !== undefined)) {
         throw new Error("Invalid provider diagnostic");
       }
       body = "m365-service-activity";

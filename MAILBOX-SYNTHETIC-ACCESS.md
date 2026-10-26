@@ -10,7 +10,7 @@ The [shared Container Apps setup](./synthetic-tests/infra/README.md) separates i
 
 | Request | Why |
 | --- | --- |
-| One dedicated shared/test mailbox in an approved Exchange accepted SMTP domain | Keep business data and real-user mailboxes outside the test |
+| Dedicated A/B shared/test mailboxes and an explicit synthetic distribution list with expected recipients | Complete cross-mailbox attachment/reply, list delivery and meeting journeys; keep business mailboxes outside the test |
 | The Microsoft 365 tenant ID, primary SMTP address, mailbox object ID, and owner | Confirm the correct tenant/target and define a narrow scope |
 | Approval for the Exchange worker's managed identity | Azure creates its service principal; Exchange must separately authorize it |
 | Exchange RBAC application roles scoped only to the test mailbox | Permit draft creation, send, Inbox checks, and owned-message cleanup |
@@ -41,10 +41,11 @@ Use **Exchange Online RBAC for Applications only**, scoped to the dedicated mail
 | --- | --- |
 | `Application Mail.ReadWrite` | Create draft, look for Inbox delivery, find/delete this run's copies |
 | `Application Mail.Send` | Submit the test draft as that mailbox |
+| `Application Calendars.ReadWrite` | Create/read/update/delete recurring events, invite/accept/observe/cancel meetings; needed only for selected calendar journeys |
 
-The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles using that scope.
+The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles only to approved A/B participants. Configure root `mailbox`, `recipientMailbox`, and `distributionList: { address, expectedRecipients }`; the worker neither discovers members nor adds grants. Verify actual Graph access as well as RBAC diagnostics after propagation, including denial of an unrelated control account. See [six journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
 
-**Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite` or `Mail.Send` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
+**Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite`, `Mail.Send`, or `Calendars.ReadWrite` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
 
 Mailbox-scoped `Mail.ReadWrite` permits access to every message in the approved mailbox, not just synthetic messages. Keep the mailbox dedicated. `Mail.Send` restricts who the app can send **as**, not which addresses it can send **to**; apply an approved narrowly targeted mail-flow policy if that boundary also needs enforcement.
 

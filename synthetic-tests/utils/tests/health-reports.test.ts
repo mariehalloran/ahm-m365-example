@@ -24,6 +24,17 @@ const sample = (): SyntheticResult => ({
 const cycle = (results = [sample()]): CycleResults => ({ cycleId: "cycle-001", results });
 
 describe("single-cycle journey/action health aggregation", () => {
+  it("publishes only the observed lane without overwriting other journey entities", () => {
+    const mail = aggregateHealthReports("exchange", cycle([sample()]), project.healthModel);
+    expect(mail.every(report => report.entityName.startsWith("exchange-global"))).toBe(true);
+    const draft: SyntheticResult = {
+      ...baseResult({ id: "draft-target", type: "exchange-draft", cohort: "exchange-global" }, Date.now()),
+      success: false, diagnosticCategory: "delivery-timeout",
+    };
+    const extended = aggregateHealthReports("exchange", cycle([draft]), project.healthModel);
+    expect(extended.every(report => report.entityName.startsWith("exchange-draft"))).toBe(true);
+    expect(extended[0]?.body).toMatchObject({ healthState: "Unhealthy", value: 0 });
+  });
   it("aggregates attempts per action without a per-target inventory or skipped failures", () => {
     const failed = sample();
     failed.success = false;
@@ -194,26 +205,35 @@ describe("independent reporting failure paths", () => {
 
   describe("observed stable Microsoft Service Health reports", () => {
     const diagnostic = (status: string): ProviderDiagnostic => ({
-      kind: "overview", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
+      kind: "overview", service: "exchange", collectedAt: new Date().toISOString(),
       serviceId: "Exchange", serviceName: "Exchange Online", status,
     });
     const report = (providerDiagnostics: ProviderDiagnostic[]) => serviceHealthReport("exchange", {
       cycleId: "provider-cycle", providerDiagnostics,
     }, project.healthModel.reportTtlMinutes);
+    it("replaces stale/future or malformed overview observations with Unknown", () => {
+      for (const record of [
+        { ...diagnostic("serviceOperational"), collectedAt: new Date(Date.now() - 61 * 60000).toISOString() },
+        { ...diagnostic("serviceOperational"), collectedAt: new Date(Date.now() + 60000).toISOString() },
+        { ...diagnostic("serviceOperational"), status: "" },
+      ]) {
+        const observed = report([record]);
+        expect(observed.body.healthState).toBe("Unknown");
+        expect(observed.body).not.toHaveProperty("value");
+      }
+    });
     it.each([
-      ...["serviceOperational", "serviceRestored", "resolved", "resolvedExternal", "falsePositive", "postIncidentReviewPublished"]
-        .map(status => [status, 100, "Healthy"] as const),
+      ["serviceOperational", 100, "Healthy"] as const,
       ["serviceInterruption", 0, "Unhealthy"] as const,
-      ...["serviceDegradation", "investigating", "restoringService", "verifyingService", "extendedRecovery",
-        "investigationSuspended", "mitigated", "mitigatedExternal", "confirmed", "reported"]
-        .map(status => [status, 50, "Degraded"] as const),
+      ["serviceDegradation", 50, "Degraded"] as const,
     ])("maps observed overview %s to %s (%s)", (status, value, healthState) => {
       expect(report([diagnostic(String(status))])).toMatchObject({
         entityName: "exchange-service-health",
         body: { signalName: "microsoft-reported-service-status", value, healthState, expiresInMinutes: 15 },
       });
     });
-    it.each([{ records: [] }, { records: [diagnostic("unknownFutureStatus")] }])("reports missing/unrecognized observations as Unknown without a score", ({ records }) => {
+    it.each(["unknownFutureStatus", "investigating", "restoringService", "serviceRestored", "resolved"]
+      .map(status => ({ records: [diagnostic(status)] })).concat([{ records: [] }]))("reports missing/unrecognized observations as Unknown without a score", ({ records }) => {
       const observed = report(records);
       expect(observed.body.healthState).toBe("Unknown");
       expect(observed.body).not.toHaveProperty("value");

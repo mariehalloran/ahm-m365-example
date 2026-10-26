@@ -33,6 +33,13 @@ class WorkerTemplateContracts(unittest.TestCase):
         self.assertFalse(self.template["parameters"]["deployWorkers"]["defaultValue"])
         self.assertEqual(self.module["condition"], "[parameters('deployWorkers')]")
 
+    def test_explicit_beta_approval_is_mounted_without_hidden_profile_settings(self):
+        self.assertFalse(self.template["parameters"]["enableBetaServiceActivity"]["defaultValue"])
+        self.assertEqual(self.module["properties"]["parameters"]["enableBetaServiceActivity"]["value"],
+                         "[parameters('enableBetaServiceActivity')]")
+        environment = self.app["properties"]["template"]["containers"][0]["env"]
+        self.assertIn("'ENABLE_BETA_SERVICE_ACTIVITY', 'value', if(parameters('enableBetaServiceActivity'), 'true', 'false')", environment)
+
     def test_real_worker_image_and_private_identity_pull_without_web_ingress(self):
         properties = self.app["properties"]
         self.assertIn("useTeamsCalling", properties["configuration"]["ingress"])

@@ -10,7 +10,8 @@ export const categories = [
 export type DiagnosticCategory = (typeof categories)[number];
 
 export const testTypes = [
-  "exchange-mail-flow", "exchange-draft", "sharepoint-file", "sharepoint-rename",
+  "exchange-mail-flow", "exchange-draft", "exchange-attachment-reply", "exchange-distribution-list",
+  "exchange-recurring-calendar", "exchange-meeting", "sharepoint-file", "sharepoint-rename",
   "teams-channel-message", "teams-channel-reply", "teams-call",
 ] as const;
 export type TestType = (typeof testTypes)[number];
@@ -30,7 +31,23 @@ export const probeServices = {
   },
   "exchange-draft": {
     service: "exchange", target: "Exchange Online", journey: "edit-reopen-draft", entityName: "exchange-draft",
-    steps: ["authenticate", "create-draft", "update-draft", "read-draft", "cleanup"],
+    steps: ["authenticate", "create-draft", "read-initial-draft", "update-draft", "read-draft", "delete-draft", "cleanup"],
+  },
+  "exchange-attachment-reply": {
+    service: "exchange", target: "Exchange Online", journey: "attachment-reply-mail", entityName: "exchange-attachment",
+    steps: ["authenticate", "send-attachment", "verify-attachment", "reply-mail", "confirm-reply-mail", "cleanup"],
+  },
+  "exchange-distribution-list": {
+    service: "exchange", target: "Exchange Online", journey: "distribution-list-mail", entityName: "exchange-distribution",
+    steps: ["authenticate", "send-group-mail", "confirm-group-delivery", "cleanup"],
+  },
+  "exchange-recurring-calendar": {
+    service: "exchange", target: "Exchange Online", journey: "recurring-calendar", entityName: "exchange-recurring",
+    steps: ["authenticate", "create-event", "read-occurrence", "update-event", "verify-event", "delete-event", "cleanup"],
+  },
+  "exchange-meeting": {
+    service: "exchange", target: "Exchange Online", journey: "meeting-invitation", entityName: "exchange-meeting",
+    steps: ["authenticate", "create-meeting", "confirm-invitation", "verify-attendee-calendar", "accept-meeting", "confirm-acceptance", "cancel-meeting", "cleanup"],
   },
   "teams-channel-reply": {
     service: "teams", target: "Microsoft Teams", journey: "reply-channel-message", entityName: "teams-reply",
@@ -52,6 +69,9 @@ export const stepNames = [
   "post-message", "confirm-publication", "verify-drive", "upload-file", "read-file",
   "update-draft", "read-draft", "post-reply", "confirm-reply", "rename-file",
   "place-call", "wait-before-hangup", "end-call",
+  "read-initial-draft", "delete-draft", "send-attachment", "verify-attachment", "reply-mail", "confirm-reply-mail",
+  "send-group-mail", "confirm-group-delivery", "create-event", "read-occurrence", "update-event", "verify-event", "delete-event",
+  "create-meeting", "confirm-invitation", "verify-attendee-calendar", "accept-meeting", "confirm-acceptance", "cancel-meeting",
 ] as const;
 export type StepName = (typeof stepNames)[number];
 export type ReportedStepName = Exclude<StepName, "authenticate" | "cleanup">;
@@ -88,7 +108,7 @@ export const resultSchema = z.object({
   readDurationMs: z.number().finite().nonnegative().optional(),
   observedAt: isoDate,
   correlationId: z.string().uuid(),
-  steps: z.array(stepResultSchema).max(6).default([]),
+  steps: z.array(stepResultSchema).max(12).default([]),
   diagnosticCategory: z.enum(categories).nullable().default(null),
   diagnosticContext: z.object({
     region: z.string().max(80).optional(),
@@ -101,7 +121,7 @@ export const resultSchema = z.object({
   const allowedSteps: readonly string[] = probeServices[value.testType].steps;
   if (new Set(value.steps.map(step => step.name)).size !== value.steps.length ||
       value.steps.some(step => step.status === "skipped" && step.reason === "cleanup-disabled" &&
-        (step.name !== "cleanup" || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
+        (!["cleanup", "delete-draft"].includes(step.name) || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
       value.steps.some((step, index) => !allowedSteps.includes(step.name) ||
         (index > 0 && allowedSteps.indexOf(step.name) <= allowedSteps.indexOf(value.steps[index - 1]!.name))) ||
       (value.success && value.steps.some(step => step.status === "failed"))) {
@@ -149,6 +169,11 @@ export const probeSchema = z.object({
   type: z.enum(testTypes),
   cohort: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,78}[a-zA-Z0-9]$/),
   mailbox: z.string().email().optional(),
+  recipientMailbox: z.string().email().optional(),
+  distributionList: z.object({
+    address: z.string().email(),
+    expectedRecipients: z.array(z.string().email()).min(1).max(30),
+  }).strict().optional(),
   siteId: z.string().min(1).optional(),
   driveId: z.string().min(1).optional(),
   folderId: z.string().min(1).optional(),

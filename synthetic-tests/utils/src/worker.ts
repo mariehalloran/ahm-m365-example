@@ -13,6 +13,8 @@ import { createHealthReporter, type HealthReporter } from "./health-reports.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import type { ResultTelemetry } from "./otel.js";
+import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
+import { probeServices } from "./contracts.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
   let config: string | undefined;
@@ -128,68 +130,59 @@ async function collectServiceProviders(
   return providers;
 }
 
-async function executeServiceCycle(
-  service: ServiceConfig, initialization: Promise<InitializedService>,
+export async function collectAndReportServiceProviders(
+  service: ServiceConfig,
   options: WorkerOptions, signal: AbortSignal, telemetry: Telemetry,
   env: NodeJS.ProcessEnv, results: ResultOutput, reportHealth: HealthReporter | undefined,
-  initializationFailed: (error: unknown) => Promise<void>,
-): Promise<void> {
-  const providerCollection = (options.providers || service.serviceHealth) ? Promise.resolve().then(async () => {
-    const cycleId = randomUUID();
-    const providerDiagnostics: ProviderDiagnostic[] = [];
-    const providerOutput: ResultOutput = {
-      record: results.record.bind(results),
-      recordDiagnostic(raw) {
-        const record = providerDiagnosticSchema.parse(raw);
-        providerDiagnostics.push(record);
-        results.recordDiagnostic(record);
-      },
-    };
-    const errors: unknown[] = [];
-    let summary: ProviderCollectionSummary | undefined;
-    try {
-      if (!options.providers) throw new ConfigurationError("Configured provider sources require the service-owned collector");
-      summary = await collectServiceProviders(service, options, providerOutput, signal, telemetry, env);
-    } catch (error) {
-      errors.push(error);
-      try {
-        providerOutput.recordDiagnostic({
-          kind: "failure", service: service.type, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
-          collectedAt: new Date().toISOString(), category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
-          ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
-        });
-      } catch (outputError) { errors.push(outputError); }
-    }
-    try { await reportHealth?.({ cycleId, providerDiagnostics }); }
-    catch (error) { errors.push(error); }
-    throwFailures(errors);
-    return summary;
-  }) : Promise.resolve(undefined);
-  const execute = options.execute ?? runCycle;
-  const [journeyExecution, providerExecution] = await Promise.allSettled([
-    initialization.then(
-      ({ config, dependencies }) => execute(config, dependencies, signal),
-      async error => {
-        try { await initializationFailed(error); }
-        catch (publicationError) {
-          throw new AggregateError([error, publicationError], "Multiple service worker operations failed");
-        }
-        throw error;
-      },
-    ),
-    providerCollection,
-  ]);
+): Promise<ProviderCollectionSummary | undefined> {
+  const cycleId = randomUUID();
+  const providerDiagnostics: ProviderDiagnostic[] = [];
+  const providerOutput: ResultOutput = {
+    record: results.record.bind(results),
+    recordDiagnostic(raw) {
+      const record = providerDiagnosticSchema.parse(raw);
+      providerDiagnostics.push(record);
+      results.recordDiagnostic(record);
+    },
+  };
   const errors: unknown[] = [];
-  for (const execution of [journeyExecution, providerExecution]) {
-    if (execution.status === "rejected") errors.push(execution.reason);
+  let summary: ProviderCollectionSummary | undefined;
+  try {
+    if (!options.providers) throw new ConfigurationError("Configured provider sources require the service-owned collector");
+    summary = await collectServiceProviders(service, options, providerOutput, signal, telemetry, env);
+  } catch (error) {
+    errors.push(error);
+    try {
+      providerOutput.recordDiagnostic({
+        kind: "failure", service: service.type, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
+        collectedAt: new Date().toISOString(), category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
+        ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
+      });
+    } catch (outputError) { errors.push(outputError); }
   }
+  try { await reportHealth?.({ cycleId, providerDiagnostics }); }
+  catch (error) { errors.push(error); }
   throwFailures(errors);
-  if (journeyExecution.status !== "fulfilled" || providerExecution.status !== "fulfilled") return;
-  const cycle = journeyExecution.value;
-  const providers = providerExecution.value;
+  return summary;
+}
+
+async function executeServiceCycle(
+  initialization: Promise<InitializedService>, options: WorkerOptions,
+  signal: AbortSignal, telemetry: Telemetry, initializationFailed: (error: unknown) => Promise<void>,
+): Promise<void> {
+  const execute = options.execute ?? runCycle;
+  const cycle = await initialization.then(
+    ({ config, dependencies }) => execute(config, dependencies, signal),
+    async error => {
+      try { await initializationFailed(error); }
+      catch (publicationError) {
+        throw new AggregateError([error, publicationError], "Multiple service worker operations failed");
+      }
+      throw error;
+    },
+  );
   telemetry.emit("service-cycle-summary", {
     cycleId: cycle.cycleId, probeCount: cycle.results.length,
-    ...(providers ? { providers } : {}),
   });
 }
 
@@ -249,39 +242,59 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   let initialized: InitializedService | undefined;
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
-  const interval = service.intervalSeconds * 1000;
-  let origin = 0;
-  let slot = 0;
   const workerErrors: unknown[] = [];
   try {
     if ((!reportHealth || service.mode !== "live") && !service.serviceHealth && !service.serviceActivity.enabled) {
       initialized = await initializeService(service, options, telemetry, env, reportHealth, results);
     }
-    origin = now();
     telemetry.emit("service-worker-started", {
       intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, once: options.once ?? false,
       probeCount: configuredProbes.length,
     });
-    while (!signal.aborted) {
+    let initialization: Promise<InitializedService> | undefined;
+    const lanes = executionLanes(service).filter(lane =>
+      configuredProbes.some(probe => lane.journeys.includes(probeServices[probe.type].journey)));
+    const providerLane = {
+      name: "provider-context", intervalSeconds: service.providerIntervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys: [],
+    };
+    if (options.providers || service.serviceHealth || service.serviceActivity.enabled) lanes.push(providerLane);
+    await runExecutionLanes(lanes, async lane => {
       try {
+        if (lane === providerLane) {
+          const errors: unknown[] = [];
+          try { await collectAndReportServiceProviders(service, options, signal, telemetry, env, results, reportHealth); }
+          catch (error) { errors.push(error); }
+          try { await otel?.forceFlush(); }
+          catch (error) { errors.push(error); }
+          errors.push(...otelDiagnosticErrors.splice(0));
+          if (otelInitializationError) errors.push(otelInitializationError);
+          throwFailures(errors);
+          return;
+        }
         const startedAt = Date.now();
+        const laneProbes = configuredProbes.filter(probe => lane.journeys.includes(probeServices[probe.type].journey));
         const initializationFailed = async (error: unknown) => {
           if (!signal.aborted) {
             await reportInitializationFailure(
-              service, configuredProbes, reportHealth, telemetry, error, startedAt, results,
+              service, laneProbes, reportHealth, telemetry, error, startedAt, results,
             );
           }
         };
-        const initialization = initialized ? Promise.resolve(initialized)
+        initialization ??= initialized ? Promise.resolve(initialized)
           : initializeService(service, options, telemetry, env, reportHealth, results).then(value => {
             initialized = value;
             return value;
+          }).catch(error => {
+            initialization = undefined;
+            throw error;
           });
+        const laneInitialization = initialization.then(value => ({
+          ...value, config: { ...value.config, probes: laneProbes, PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000 },
+        }));
         const publicationErrors: unknown[] = [];
         try {
           await executeServiceCycle(
-            service, initialization, options, signal, telemetry, env,
-            results, reportHealth, initializationFailed,
+            laneInitialization, options, signal, telemetry, initializationFailed,
           );
         } catch (error) { publicationErrors.push(error); }
         try { await otel?.forceFlush(); }
@@ -290,23 +303,14 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
         if (otelInitializationError) publicationErrors.push(otelInitializationError);
         throwFailures(publicationErrors);
       } catch (error) {
-        if (signal.aborted && !options.once) break;
+        if (signal.aborted && !options.once) return;
         telemetry.emit("service-cycle-failed", {
           category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
           probeCount: configuredProbes.length,
         });
         if (options.once) throw error;
       }
-      if (options.once || signal.aborted) break;
-      slot++;
-      const due = origin + slot * interval;
-      const skipped = Math.max(0, Math.ceil((now() - due) / interval));
-      if (skipped) {
-        slot += skipped;
-        telemetry.emit("service-slots-skipped", { skipped, intervalSeconds: service.intervalSeconds });
-      }
-      await sleep(Math.max(0, origin + slot * interval - now()), signal);
-    }
+    }, { signal, telemetry, once: options.once ?? false, now, sleep });
   } catch (error) {
     if (options.once || !signal.aborted) workerErrors.push(error);
   } finally {

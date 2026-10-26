@@ -10,6 +10,25 @@ The [rename journey](./src/rename-journey.ts) uses [rename/readback operations](
 
 [HTTP tests](./tests/probe.test.ts) cover both the journey and direct action calls.
 
+## Target catalog versus current implementation
+
+Five target families describe completed workflows, not five API calls. Both current
+save/reopen and supporting rename/reopen scenarios run every **300 seconds** by
+default; root config owns selection/targets and service config owns cadence/deadlines.
+Approved live targets are still missing, so neither scenario is verified Healthy live.
+
+| Target family | Completed-workflow target | Current coverage |
+| --- | --- | --- |
+| Site/library and folder/file roundtrip | Verify site/library metadata, create nested folders, upload, enumerate, download/hash, delete owned artifacts | Core approved-library check, upload/read exact-content verification/delete and supporting rename/reopen implemented. Full metadata/nested-folder/enumeration/hash family remains planned; exact payload comparison is current verification, not a separate hash assertion. |
+| List-item lifecycle | Create, read, update, reread and delete a dedicated list item | Planned; not implemented |
+| Recipient-specific sharing | Grant access, retrieve as the intended recipient, revoke, verify access removal | Planned; not implemented. Current owner's access does not establish recipient access. |
+| Document versions | Update document, inspect history, retrieve/verify earlier version; optionally restore | Planned; not implemented. Check-in/out is an optional planned variant. |
+| Search and indexing | Wait for indexing, find owned content, retrieve the search result and verify it | Planned; not implemented |
+
+An optional **browser upload** variant is planned, not implemented. These API flows
+do not test SharePoint UI, Office rendering or coauthoring. Planned families are not
+current root scenario switches, and retain no claim of successful live execution.
+
 ## Optional Microsoft-reported context
 
 [sharepointProviders](./src/providers.ts) optionally reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues`, once per cycle in the same process—not per site/target or journey. Simulation keeps `serviceHealth: false`; the live example enables it independently of journey initialization. It requires separate `ServiceHealth.Read.All` admin consent and exact subscribed service name `SharePoint Online`. Overview status reports directly to `sharepoint-service-health` as `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption, with `impactSuppressed`. Failed/missing/unknown overview status reports Unknown without a value and with failure context. The existing trial receives Graph 403 pending consent. Issue/history records do not supply journey health, and source failures never change successful file-operation 1/0.
