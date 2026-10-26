@@ -25,7 +25,7 @@ const issueSchema = z.object({
 export type ServiceHealthOverview = z.infer<typeof overviewSchema>;
 export type ServiceHealthIssue = z.infer<typeof issueSchema>;
 export const serviceHealthNames = {
-  exchange: "Exchange Online", teams: "Microsoft Teams", sharepoint: "SharePoint Online",
+  exchange: "Exchange Online", teams: "Microsoft Teams", onedrive: "Microsoft OneDrive",
 } as const;
 
 export function getServiceHealthOverviews(graph: GraphClient, signal: AbortSignal): Promise<ServiceHealthOverview[]> {
@@ -36,7 +36,7 @@ export function getServiceHealthIssues(graph: GraphClient, signal: AbortSignal):
 }
 
 export function normalizeServiceHealthIssue(
-  issue: ServiceHealthIssue, service: Exclude<ServiceConfig["type"], "onedrive">, collectedAt: string,
+  issue: ServiceHealthIssue, service: ServiceConfig["type"], collectedAt: string,
 ): ProviderDiagnostic {
   let truncated = false;
   const clip = (value: string, length: number) => {
@@ -74,13 +74,13 @@ export function normalizeServiceHealthIssue(
 }
 
 export function serviceHealthSources(service: ServiceConfig["type"]): ProviderSourceDefinition[] {
-  if (service === "onedrive") return [];
   const name = serviceHealthNames[service];
   return [
     {
       source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
       async collect(graph, signal, collectedAt) {
-        const records = (await getServiceHealthOverviews(graph, signal)).filter(item => item.service === name);
+        const records = (await getServiceHealthOverviews(graph, signal)).filter(item =>
+          item.service === name && (service !== "onedrive" || item.id === "OneDriveForBusiness"));
         if (!records.length) throw new ProviderCollectionError("no-data");
         return records.map(item => ({
           kind: "overview" as const, service, collectedAt,

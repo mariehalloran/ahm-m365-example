@@ -162,6 +162,86 @@ describe("Exchange send/poll/cleanup", () => {
     expect(calls).toEqual([]);
     expect(result.steps.map(step => step.status)).toEqual(["failed", "skipped", "skipped", "skipped", "skipped"]);
   });
+  it("reports missing selected mailbox setup as configuration failure without Graph calls", async () => {
+    const graph = { authenticate: vi.fn(), json: vi.fn(), request: vi.fn() } as unknown as GraphClient;
+    const { mailbox: _mailbox, ...missingMailbox } = exchange;
+    const result = await exchangeProbe(missingMailbox, { config, graph, telemetry, signal: new AbortController().signal });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "configuration-failure" });
+    expect(graph.authenticate).not.toHaveBeenCalled();
+    expect(graph.json).not.toHaveBeenCalled();
+    expect(graph.request).not.toHaveBeenCalled();
+  });
+  it.each(["sender-discovery", "recipient-discovery", "sender-delete", "recipient-delete"] as const)(
+    "continues independent discovery and all known owned-copy deletions after %s fails", async failure => {
+      const recipientMailbox = "recipient@example.invalid";
+      const calls: { path: string; method: string }[] = [];
+      const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", {
+        attempts: 1, fetch: async (url, init) => {
+          const path = new URL(String(url));
+          const method = init?.method ?? "GET";
+          calls.push({ path: path.pathname, method });
+          const participant = path.pathname.includes(encodeURIComponent(recipientMailbox)) ? "recipient" : "sender";
+          if (method === "GET") {
+            if (failure === `${participant}-discovery`) return new Response(null, { status: 403 });
+            return json({ value: [{ id: `${participant}-copy` }] });
+          }
+          if (failure === `${participant}-delete`) return new Response(null, { status: 403 });
+          return new Response(null, { status: 204 });
+        },
+      }));
+      await expect(cleanup(graph, {
+        mailbox, recipientMailbox, correlationId: "11111111-1111-4111-8111-111111111111",
+        mutationAttempted: true, ownedMessageIds: new Set(["known-draft"]), deliveredMessageIds: new Set(["known-delivery"]),
+      }, new AbortController().signal)).rejects.toMatchObject({ category: "cleanup-failure" });
+      expect(calls.filter(call => call.method === "GET")).toHaveLength(2);
+      const deletions = calls.filter(call => call.method === "DELETE").map(call => call.path);
+      expect(deletions).toContain(`/v1.0/users/${encodeURIComponent(mailbox)}/messages/known-draft`);
+      expect(deletions).toContain(`/v1.0/users/${encodeURIComponent(recipientMailbox)}/messages/known-delivery`);
+      if (failure !== "sender-discovery") expect(deletions.some(path => path.endsWith("/sender-copy"))).toBe(true);
+      if (failure !== "recipient-discovery") expect(deletions.some(path => path.endsWith("/recipient-copy"))).toBe(true);
+    },
+  );
+  it("cleans known first-page copies but reports incomplete discovery without following continuation", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => init?.method === "DELETE"
+      ? new Response(null, { status: 204 })
+      : json({ value: [{ id: "owned-copy" }], "@odata.nextLink": "https://graph.microsoft.com/v1.0/users/unapproved/messages" }));
+    const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", { attempts: 1, fetch: fetcher }));
+    await expect(cleanup(graph, {
+      mailbox, correlationId: "11111111-1111-4111-8111-111111111111",
+      mutationAttempted: true, ownedMessageIds: new Set(["known-draft"]),
+    }, new AbortController().signal)).rejects.toMatchObject({ category: "cleanup-failure" });
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url).split("/").at(-1), init?.method])).toEqual([
+      [expect.stringContaining("messages?"), "GET"], ["known-draft", "DELETE"], ["owned-copy", "DELETE"],
+    ]);
+  });
+  it("tracks and cleans self-delivery once when recipient casing differs", async () => {
+    const graph = {
+      json: vi.fn().mockResolvedValue({ value: [{ id: "owned-delivery" }] }),
+      request: vi.fn().mockResolvedValue(new Response(null, { status: 204 })),
+    } as unknown as GraphClient;
+    const attempt: MailAttempt = {
+      mailbox, recipientMailbox: mailbox.toUpperCase(), correlationId: "11111111-1111-4111-8111-111111111111",
+      mutationAttempted: true, ownedMessageIds: new Set(),
+    };
+    const signal = new AbortController().signal;
+    await confirmDelivery(graph, attempt, signal, 2000, 10, () => 1000);
+    expect(attempt.ownedMessageIds).toEqual(new Set(["owned-delivery"]));
+    expect(attempt.deliveredMessageIds).toBeUndefined();
+    await cleanup(graph, attempt, signal);
+    expect(graph.json).toHaveBeenCalledTimes(2);
+    expect(graph.request).toHaveBeenCalledTimes(1);
+  });
+  it("starts every attempt with a fresh run marker and no cycle history", async () => {
+    const first = await exchangeRun();
+    const second = await exchangeRun();
+    expect(first.result.success).toBe(true);
+    expect(second.result.success).toBe(true);
+    expect(first.result.correlationId).not.toBe(second.result.correlationId);
+    expect(first.sentSubject).not.toBe(second.sentSubject);
+    const queries = second.calls.map(call => new URL(call.url)).filter(url => url.searchParams.has("$filter"));
+    expect(queries).toHaveLength(2);
+    expect(queries.every(url => url.searchParams.get("$filter") === `subject eq '${second.sentSubject}'`)).toBe(true);
+  });
   it.each([false, true])("excludes authentication/draft/cleanup from delivery, includes cleanup in total (cleanup failure=%s)", async cleanupFails => {
     let clock = 1000;
     const graph = {
@@ -186,7 +266,7 @@ describe("Exchange send/poll/cleanup", () => {
     expect(result.deliveryDurationMs).toBe(700);
     expect(result.sendDurationMs).toBe(300);
     expect(result.diagnosticContext.authenticationDurationMs).toBe(100);
-    expect(result.durationMs).toBe(cleanupFails ? 1550 : 1650);
+    expect(result.durationMs).toBe(1650);
     expect(result.observedAt).toBe(new Date(clock).toISOString());
     expect(result.success).toBe(!cleanupFails);
     expect(result.diagnosticCategory).toBe(cleanupFails ? "cleanup-failure" : null);

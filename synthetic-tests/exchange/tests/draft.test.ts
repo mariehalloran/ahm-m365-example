@@ -215,6 +215,7 @@ describe("Exchange save/edit/reopen draft journey", () => {
   it.each([{ authFail: true }, { missingMailbox: true }])("does not query or mutate when authentication prerequisites fail: %j", async options => {
     const { result, calls } = await runDraft(options);
     expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("missingMailbox" in options ? "configuration-failure" : "authentication-failure");
     expect(calls).toEqual([]);
     expect(result.steps.map(step => step.status)).toEqual(["failed", "skipped", "skipped", "skipped", "skipped", "skipped", "skipped"]);
     expect(result.steps[6]).toMatchObject({ reason: "no-mutation" });

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage } from "node:http";
-import { callingAuthenticationDiagnostic, type CallingAuthenticationDiagnostic } from "./teams-calling-auth.js";
+import { callingAuthenticationDiagnostic, type CallingAuthenticationDiagnostic, type CallingIdentity } from "./teams-calling-auth.js";
 import { createTestTone, testTonePath } from "./teams-call-media.js";
 
 const about = "Internal monitoring lab. Dedicated test resources only. Operators configure message retention and diagnostics. Bot runtime uses managed identity and no user token cache. Not for production or customer-content use.\n";
@@ -22,8 +22,8 @@ async function readNotification(request: IncomingMessage): Promise<unknown> {
 export async function startTeamsCallingCallback(options: {
   port: number;
   host?: string;
-  verify: (token: string) => Promise<void>;
-  onNotification?: (notification: unknown) => void;
+  verify: (token: string) => Promise<CallingIdentity>;
+  onNotification?: (notification: unknown, identity: CallingIdentity) => void;
   onMediaServed?: () => void;
   onAccepted?: () => void;
   onRejected?: (status: number, stage: "headers" | "verification" | "body" | "timeout" | "handler",
@@ -94,8 +94,9 @@ export async function startTeamsCallingCallback(options: {
     void (async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const verificationTimeout = new Error("Verification timeout");
+      let identity: CallingIdentity;
       try {
-        await Promise.race([
+        identity = await Promise.race([
           options.verify(authorization.slice(7)),
           new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(verificationTimeout), 3500); }),
         ]);
@@ -110,7 +111,7 @@ export async function startTeamsCallingCallback(options: {
       try { notification = await readNotification(request); }
       catch { reject(400, "body"); return; }
       if (response.destroyed || response.headersSent) return;
-      options.onNotification?.(notification);
+      options.onNotification?.(notification, identity);
       response.writeHead(200).end();
       refreshDiagnosticWindow();
       if (acceptedDiagnostics++ < 10) options.onAccepted?.();

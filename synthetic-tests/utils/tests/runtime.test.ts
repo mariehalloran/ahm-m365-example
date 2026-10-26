@@ -5,7 +5,6 @@ import { createHealthReporter } from "../src/health-reports.js";
 import { readProjectConfig } from "../src/project-config.js";
 import { providerGraphClient, serviceRuntime } from "../src/runtime.js";
 import { TeamsBotClient } from "../src/teams.js";
-import { TeamsUserClient } from "../src/teams-user.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
 
 const credentials = vi.hoisted(() => ({
@@ -14,7 +13,8 @@ const credentials = vi.hoisted(() => ({
 }));
 const calling = vi.hoisted(() => {
   const shutdown = vi.fn(async () => undefined);
-  return { verify: vi.fn(async () => undefined), shutdown, start: vi.fn(async () => ({ shutdown, port: 8080 })) };
+  return { verify: vi.fn(async () => ({ botClientId: "66666666-6666-4666-8666-666666666666" })),
+    shutdown, start: vi.fn(async () => ({ shutdown, port: 8080 })) };
 });
 vi.mock("../src/teams-calling-auth.js", () => ({ createTeamsCallingVerifier: async () => calling.verify }));
 vi.mock("../src/teams-calling-callback.js", async importOriginal => ({
@@ -52,7 +52,7 @@ describe("independent Graph and health-report identities", () => {
         peerBotClientId: certificate.M365_CLIENT_ID,
       }],
     });
-    const config = serviceSettings(service, {}, { "call-test-user": true });
+    const config = serviceSettings(service, {}, { "scheduled-meeting": true });
     config.probes[0]![field] = field === "meetingThreadId" ? "19:meeting_unapproved@thread.v2" : certificate.AZURE_CLIENT_ID;
     await expect(serviceRuntime(service, config, output, {})).rejects.toThrow("root-configured dedicated meetings");
     expect(credentials.managed).not.toHaveBeenCalled();
@@ -74,7 +74,7 @@ describe("independent Graph and health-report identities", () => {
       id: "meeting", tenantId: certificate.AZURE_TENANT_ID, meetingThreadId: "19:meeting_test@thread.v2",
       organizerUserId: certificate.M365_TENANT_ID, peerBotClientId: certificate.AZURE_CLIENT_ID,
     }] });
-    const config = serviceSettings(service, env, { "call-test-user": true });
+    const config = serviceSettings(service, env, { "scheduled-meeting": true });
     expect(() => createTeamsCallingGraph(config, { ...certificate, ...env, ...overrides }, true)).toThrow();
     expect(credentials.managed).not.toHaveBeenCalled();
     expect(credentials.certificate).not.toHaveBeenCalled();
@@ -83,7 +83,7 @@ describe("independent Graph and health-report identities", () => {
   });
   it("uses only BOT identity for call-only Graph access and closes its authenticated callback on shutdown", async () => {
     const service = parseServiceConfig({
-      ...raw, type: "teams", mode: "live", teamsAuthentication: "user-delegated",
+      ...raw, type: "teams", mode: "live",
       graphAuthentication: "certificate", teamsCallingCallbackUrl: "https://approved.example.invalid/api/calls",
       teamsCallingPlaybackEnabled: true,
       targets: [],
@@ -100,12 +100,12 @@ describe("independent Graph and health-report identities", () => {
       TEAMS_CALLING_PEER_CLIENT_ID: certificate.AZURE_CLIENT_ID,
     };
     const config = serviceSettings(service, env, {
-      "publish-channel-message": false, "reply-channel-message": false, "call-test-user": true,
+      "channel-conversation": false, "scheduled-meeting": true,
     });
     const runtime = await serviceRuntime(service, config, output, env);
     expect(runtime.graph).toBeUndefined();
     expect(runtime.teamsBot).toBeUndefined();
-    expect(runtime.clientsForProbe).toBeUndefined();
+    expect(runtime).not.toHaveProperty("clientsForProbe");
     await runtime.teamsCalling!.authenticate(new AbortController().signal);
     expect(credentials.managed.mock.calls).toEqual([
       [{ clientId: env.BOT_CLIENT_ID }], [{ clientId: env.TEAMS_CALLING_PEER_CLIENT_ID }],
@@ -244,7 +244,7 @@ describe("independent Graph and health-report identities", () => {
       ...botEnv, BOT_CLIENT_CERTIFICATE_PATH: "", BOT_CLIENT_SECRET: "never-use",
     });
     expect(runtime.teamsBot).toBeInstanceOf(TeamsBotClient);
-    expect(runtime.clientsForProbe).toBeUndefined();
+    expect(runtime).not.toHaveProperty("clientsForProbe");
     expect(credentials.managed.mock.calls).toEqual([
       [{ clientId: botEnv.AZURE_CLIENT_ID }], [{ clientId: botEnv.BOT_CLIENT_ID }],
     ]);
@@ -300,12 +300,6 @@ describe("independent Graph and health-report identities", () => {
     expect(credentials.certificate).not.toHaveBeenCalled();
     expect(credentials.default).not.toHaveBeenCalled();
   });
-  it("requires explicit bot certificate mode and path, never switching to MI for missing certificate settings", () => {
-    const config = serviceSettings(botService({ botAuthentication: "certificate" }), { ENABLE_LIVE_M365: "true" });
-    expect(() => createLiveTeamsBot(config, botEnv)).toThrow("BOT_CLIENT_CERTIFICATE_PATH");
-    expect(credentials.managed).not.toHaveBeenCalled();
-    expect(credentials.certificate).not.toHaveBeenCalled();
-  });
   it("keeps default bot simulation completely credential-free and preserves both retention selections", async () => {
     const service = botService({ mode: "simulation", teamsCleanupEnabled: false, exchangeCleanupEnabled: false });
     const config = serviceSettings(service, { BOT_AUTHENTICATION: "certificate" });
@@ -313,35 +307,6 @@ describe("independent Graph and health-report identities", () => {
     const runtime = await serviceRuntime(service, config, output, {});
     expect(Object.keys(runtime).sort()).toEqual(["results", "telemetry"]);
     for (const credential of Object.values(credentials)) expect(credential).not.toHaveBeenCalled();
-  });
-  it("never reuses the delegated user client for application providers or ARM reports", async () => {
-    const service = parseServiceConfig({
-      ...raw, type: "teams", mode: "live", teamsAuthentication: "user-delegated", serviceHealth: true,
-      targets: [{
-        id: "teams-001", tenantId: certificate.AZURE_TENANT_ID, userPrincipalName: "test@example.invalid",
-        teamId: "33333333-3333-4333-8333-333333333333", channelId: "standard-channel",
-      }],
-    });
-    const env = {
-      ...certificate, ENABLE_LIVE_M365: "true",
-      TEAMS_PUBLIC_CLIENT_ID: "44444444-4444-4444-8444-444444444444",
-      TEAMS_CACHE_ACCOUNT_URL: "https://approvedcache.blob.core.windows.net",
-    };
-    const runtime = await serviceRuntime(service, serviceSettings(service, env), output, env);
-    const selected = runtime.clientsForProbe!(serviceSettings(service, env).probes[0]!);
-    expect(selected.teamsBot).toBeInstanceOf(TeamsUserClient);
-    expect(runtime.graph).toBeUndefined();
-    expect(runtime.teamsBot).toBeUndefined();
-    const provider = providerGraphClient(service, env)!;
-    expect(provider).not.toBe(selected.graph);
-    await provider.authenticate(new AbortController().signal);
-    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
-    await createHealthReporter(project, service, output, env, { fetch: fetcher })({ cycleId: "delegated", results: [] });
-    expect(credentials.managed).toHaveBeenCalledTimes(3);
-    expect(credentials.certificate).not.toHaveBeenCalled();
-    expect(credentials.default).not.toHaveBeenCalled();
-    expect(credentials.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
-    expect(credentials.token).toHaveBeenCalledWith("https://management.azure.com/.default", expect.anything());
   });
   it("publishes ARM reports with Azure MI while Graph observes a different tenant with its certificate", async () => {
     const service = parseServiceConfig({
@@ -429,7 +394,7 @@ describe("stateless service runtime", () => {
   it("creates a provider-only Graph client with the selected MI despite missing Teams journey/bot settings", () => {
     const service = parseServiceConfig({
       ...raw, type: "teams", mode: "live", serviceHealth: true,
-      targets: [{ id: "teams-001", tenantId: certificate.AZURE_TENANT_ID, userPrincipalName: "test@example.invalid" }],
+      targets: [{ id: "teams-001", tenantId: certificate.AZURE_TENANT_ID }],
     });
     const graph = providerGraphClient(service, { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: certificate.AZURE_CLIENT_ID });
     expect(graph).toBeInstanceOf(GraphClient);
@@ -500,32 +465,6 @@ describe("stateless service runtime", () => {
     expect(() => createLiveGraphClient({ M365_TENANT_ID: "private-value", M365_CLIENT_ID: "private-value", M365_CLIENT_CERTIFICATE_PATH: " " }, "certificate"))
       .toThrow("M365_TENANT_ID, M365_CLIENT_ID, M365_CLIENT_CERTIFICATE_PATH");
   });
-  it("uses separate app-certificate clients for Teams Bot Connector and Graph observation", async () => {
-    const service = parseServiceConfig({
-      ...raw, type: "teams", mode: "live", teamsAuthentication: "bot", botAuthentication: "certificate", graphAuthentication: "certificate", cohort: "teams-global",
-      targets: [{
-        id: "teams-001", tenantId: certificate.M365_TENANT_ID,
-        teamId: "33333333-3333-4333-8333-333333333333",
-        channelId: "approved-channel", serviceUrl: "https://smba.trafficmanager.net/teams/",
-      }],
-    });
-    const runtime = await serviceRuntime(service, serviceSettings(service, { ENABLE_LIVE_M365: "true" }), output, {
-      ...certificate,
-      BOT_TENANT_ID: certificate.M365_TENANT_ID,
-      BOT_CLIENT_ID: "44444444-4444-4444-8444-444444444444",
-      BOT_CLIENT_CERTIFICATE_PATH: "bot-certificate.pem",
-    });
-    expect(runtime.graph).toBeInstanceOf(GraphClient);
-    expect(runtime.teamsBot).toBeInstanceOf(TeamsBotClient);
-    expect(credentials.certificate).toHaveBeenCalledTimes(2);
-    expect(credentials.certificate).toHaveBeenNthCalledWith(
-      1, certificate.M365_TENANT_ID, certificate.M365_CLIENT_ID, certificate.M365_CLIENT_CERTIFICATE_PATH,
-    );
-    expect(credentials.certificate).toHaveBeenNthCalledWith(
-      2, certificate.M365_TENANT_ID, "44444444-4444-4444-8444-444444444444", "bot-certificate.pem",
-    );
-    expect(credentials.default).not.toHaveBeenCalled();
-  });
   it("rejects missing bot credentials and mismatched tenants without acquiring tokens", () => {
     const config = serviceSettings(parseServiceConfig({ ...raw, type: "teams" }), {});
     expect(() => createLiveTeamsBot(config, certificate)).toThrow("BOT_TENANT_ID");
@@ -568,38 +507,14 @@ describe("stateless service runtime", () => {
     expect(credentials.managed).not.toHaveBeenCalled();
     expect(credentials.certificate).not.toHaveBeenCalled();
   });
-  it("keeps Teams MI Graph observation separate from certificate Bot Connector authentication", async () => {
-    const service = parseServiceConfig({
-      ...raw, type: "teams", mode: "live", teamsAuthentication: "bot", botAuthentication: "certificate",
-      targets: [{
-        id: "teams-001", tenantId: certificate.AZURE_TENANT_ID,
-        teamId: "33333333-3333-4333-8333-333333333333",
-        channelId: "approved-channel", serviceUrl: "https://smba.trafficmanager.net/teams/",
-      }],
-    });
-    await serviceRuntime(service, serviceSettings(service, { ENABLE_LIVE_M365: "true" }), output, {
-      AZURE_TENANT_ID: certificate.AZURE_TENANT_ID, AZURE_CLIENT_ID: certificate.AZURE_CLIENT_ID,
-      BOT_TENANT_ID: certificate.AZURE_TENANT_ID,
-      BOT_CLIENT_ID: "44444444-4444-4444-8444-444444444444",
-      BOT_CLIENT_CERTIFICATE_PATH: "bot.pem",
-    });
-    expect(credentials.managed).toHaveBeenCalledExactlyOnceWith({ clientId: certificate.AZURE_CLIENT_ID });
-    expect(credentials.certificate).toHaveBeenCalledExactlyOnceWith(
-      certificate.AZURE_TENANT_ID, "44444444-4444-4444-8444-444444444444", "bot.pem",
-    );
-    expect(() => createLiveTeamsBot(serviceSettings(service, { ENABLE_LIVE_M365: "true" }), {
-      BOT_TENANT_ID: certificate.AZURE_TENANT_ID,
-      BOT_CLIENT_ID: certificate.AZURE_CLIENT_ID, BOT_CLIENT_CERTIFICATE_PATH: "bot.pem",
-    })).toThrow("AZURE_TENANT_ID");
-  });
   it.each(["certificate", "managed-identity"] as const)(
     "checks every Teams target against the selected M365 observer tenant with %s", authentication => {
       const env = {
-        ...certificate, BOT_TENANT_ID: certificate.M365_TENANT_ID,
-        BOT_CLIENT_ID: "44444444-4444-4444-8444-444444444444", BOT_CLIENT_CERTIFICATE_PATH: "bot.pem",
+        ...certificate, AZURE_TENANT_ID: certificate.M365_TENANT_ID, BOT_TENANT_ID: certificate.M365_TENANT_ID,
+        BOT_CLIENT_ID: "44444444-4444-4444-8444-444444444444",
       };
       const service = parseServiceConfig({
-        ...raw, type: "teams", botAuthentication: "certificate", targets: [
+        ...raw, type: "teams", targets: [
           { id: "teams-001", tenantId: certificate.M365_TENANT_ID },
           { id: "teams-002", tenantId: certificate.M365_TENANT_ID },
         ],

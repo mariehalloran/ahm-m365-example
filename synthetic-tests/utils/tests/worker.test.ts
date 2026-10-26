@@ -78,7 +78,7 @@ describe("stateless per-attempt execution", () => {
 });
 
 describe("one config, one report-only fixed-rate worker", () => {
-  it.each(["teams", "sharepoint"] as const)("rejects %s config in an Exchange worker before credentials or execution", async type => {
+  it.each(["teams", "onedrive"] as const)("rejects %s config in an Exchange worker before credentials or execution", async type => {
     const createDependencies = vi.fn();
     const execute = vi.fn();
     await expect(runServiceWorker(parseServiceConfig({ ...service, type }), {
@@ -143,7 +143,7 @@ describe("one config, one report-only fixed-rate worker", () => {
     });
     expect(starts).toEqual([0, 60000, 120000]);
   });
-  it("does not let a blocked Exchange worker delay an independent SharePoint worker", async () => {
+  it("does not let a blocked Exchange worker delay an independent OneDrive worker", async () => {
     const exchangeStop = new AbortController();
     let release!: () => void;
     const blocked = new Promise<void>(resolve => { release = resolve; });
@@ -154,7 +154,7 @@ describe("one config, one report-only fixed-rate worker", () => {
     const stop = new AbortController();
     let clock = 0;
     const starts: number[] = [];
-    await runServiceWorker(parseServiceConfig({ ...service, type: "sharepoint", cohort: "sharepoint-global", intervalSeconds: 300 }), {
+    await runServiceWorker(parseServiceConfig({ ...service, type: "onedrive", cohort: "onedrive-global", intervalSeconds: 300 }), {
       env: {}, signal: stop.signal, telemetry: telemetry(), now: () => clock, createDependencies: () => dependencies(),
       execute: async (...args) => {
         starts.push(clock);
@@ -250,7 +250,7 @@ describe("one config, one report-only fixed-rate worker", () => {
     expect(deps.results.record).toHaveBeenCalledTimes(3);
     expect(deps.results.record.mock.calls.every(([attempt]) => attempt.durationMs >= 12000)).toBe(true);
   });
-  it.each(["teams", "exchange", "sharepoint"])("does not initialize credentials or execution for disabled %s", async type => {
+  it.each(["teams", "exchange", "onedrive"])("does not initialize credentials or execution for disabled %s", async type => {
     const createDependencies = vi.fn();
     const execute = vi.fn();
     await runServiceWorker(parseServiceConfig({ ...service, type, enabled: false, targets: [] }), {

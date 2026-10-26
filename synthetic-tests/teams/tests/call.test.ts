@@ -24,11 +24,14 @@ function fixture(options: {
   peerCreateFailure?: boolean; peerUnanswered?: boolean; peerDeleteFailure?: boolean;
   missingRoster?: boolean; wrongRoster?: boolean; emptyPeerRoster?: boolean; lobbyPeer?: boolean;
   duplicateCallId?: boolean; mismatchedChains?: boolean; peerRosterFailure?: boolean;
+  primaryCreateForbidden?: boolean; peerCreateUncertain?: boolean; abortAfterPrimaryCreate?: boolean;
+  failedAuthentication?: "primary" | "peer"; missingPlayback?: "primary" | "peer"; wrongAudience?: boolean;
+  wrongMeeting?: "thread" | "organizer" | "tenant" | "organizer-tenant"; primaryDeleteFailure?: boolean;
 } = {}) {
   let clock = 0, playing = false;
   const deletedCalls = new Set<string>();
   let deleteAttempts = 0;
-  let notify: (() => void) | undefined;
+  const pendingNotifications = new Map<string, () => void>();
   const controller = new AbortController();
   const operations = new TeamsCallOperations(() => clock);
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
@@ -48,8 +51,14 @@ function fixture(options: {
     if (init?.method === "POST" && path.endsWith("/playPrompt")) {
       playing = true;
       const body = JSON.parse(String(init.body)) as { clientContext: string };
-      notify = () => {
-        const resource = `/communications/calls/${options.wrongCall ? "other-call" : "owned-call"}/operations/${options.wrongOperation ? "other-operation" : operationId}`;
+      // Each leg gets its own notify keyed by its own clientContext; a single shared callback would
+      // let the second leg's POST silently overwrite the first leg's pending completion.
+      const notify = () => {
+        // Use this leg's own call id (owned-call or peer-call); a wrong/hardcoded id here would make
+        // the peer leg's accept() correlation silently miss (entry.callId mismatch) and time out.
+        const resource = `/communications/calls/${options.wrongCall ? "other-call" : id}/operations/${options.wrongOperation ? "other-operation" : operationId}`;
+        const botClientId = peer ? probe.peerBotClientId! : primaryClientId;
+        const otherBotClientId = peer ? primaryClientId : probe.peerBotClientId!;
         operations.accept({ value: [{
           changeType: "deleted", resourceUrl: resource,
           resourceData: {
@@ -58,17 +67,23 @@ function fixture(options: {
             status: options.failedPlayback ? "failed" : "completed",
             resultInfo: { code: options.failedPlayback ? 500 : 200 },
           },
-        }] });
+        }] }, { botClientId: options.wrongAudience ? otherBotClientId : botClientId });
       };
-      if (!options.acceptedOnly && !options.delayedCompletion && !options.completedResponseOnly) notify();
+      pendingNotifications.set(body.clientContext, notify);
+      if (!options.acceptedOnly && !options.delayedCompletion && !options.completedResponseOnly &&
+          options.missingPlayback !== (peer ? "peer" : "primary")) notify();
       return Response.json({
         "@odata.type": "#microsoft.graph.playPromptOperation", id: operationId,
-        status: options.completedResponseOnly ? "completed" : "running", clientContext: body.clientContext,
+        status: options.completedResponseOnly ? "completed" : "running", clientContext: body.clientContext, resultInfo: null,
       });
     }
     expect(path).toMatch(/^\/v1\.0\/communications\/calls(?:\/(?:owned-call|peer-call))?$/);
     if (init?.method === "POST") {
       if (options.uncertainCreate) throw new Error("ambiguous network outcome");
+      if (!peer && options.primaryCreateForbidden) return Response.json({
+        error: { code: "7504", message: "Insufficient enterprise application permissions." },
+      }, { status: 403 });
+      if (peer && options.peerCreateUncertain) throw new Error("ambiguous peer network outcome");
       if (peer && options.peerCreateFailure) return new Response(null, { status: 403 });
       return Response.json({
         id: peer && options.duplicateCallId ? "owned-call" : id,
@@ -78,7 +93,8 @@ function fixture(options: {
     if (init?.method === "DELETE") {
       deleteAttempts++;
       expect(init.signal?.aborted).toBe(false);
-      if (options.deleteFailure || (peer && options.peerDeleteFailure) || (options.failFirstDelete && deleteAttempts === 1)) return new Response(null, { status: 403 });
+      if (options.deleteFailure || (peer && options.peerDeleteFailure) || (!peer && options.primaryDeleteFailure) ||
+          (options.failFirstDelete && deleteAttempts === 1)) return new Response(null, { status: 403 });
       deletedCalls.add(id);
       return new Response(null, { status: 204 });
     }
@@ -88,13 +104,28 @@ function fixture(options: {
       state: deleted ? options.terminateFailure ? "established" : "terminated"
         : options.earlyTermination || (playing && options.terminateDuringPlayback) ? "terminated"
         : options.unanswered || (peer && options.peerUnanswered) ? "establishing" : "established",
+      chatInfo: { threadId: options.wrongMeeting === "thread" ? "19:meeting_foreign@thread.v2" : probe.meetingThreadId },
+      meetingInfo: {
+        "@odata.type": "#microsoft.graph.organizerMeetingInfo",
+        organizer: { user: {
+          id: options.wrongMeeting === "organizer" ? operationId : probe.organizerUserId,
+          tenantId: options.wrongMeeting === "organizer-tenant" ? operationId : probe.tenantId,
+        } },
+      },
+      tenantId: options.wrongMeeting === "tenant" ? operationId : probe.tenantId,
     });
   });
   const graph = new GraphClient(new AuthenticatedHttp({
-    getToken: async () => ({ token: "fake-bot-token", expiresOnTimestamp: Date.now() + 60000 }),
+    getToken: async () => {
+      if (options.failedAuthentication === "primary") throw new Error("primary managed identity token unavailable");
+      return { token: "fake-bot-token", expiresOnTimestamp: Date.now() + 60000 };
+    },
   }, "https://graph.microsoft.com/.default", { fetch: fetcher, attempts: 1 }));
   const peerGraph = new GraphClient(new AuthenticatedHttp({
-    getToken: async () => ({ token: "fake-peer-token", expiresOnTimestamp: Date.now() + 60000 }),
+    getToken: async () => {
+      if (options.failedAuthentication === "peer") throw new Error("peer managed identity token unavailable");
+      return { token: "fake-peer-token", expiresOnTimestamp: Date.now() + 60000 };
+    },
   }, "https://graph.microsoft.com/.default", { fetch: fetcher, attempts: 1 }));
   const context = {
     config: {
@@ -104,13 +135,100 @@ function fixture(options: {
       BOT_CLIENT_ID: primaryClientId, TEAMS_CALLING_PEER_CLIENT_ID: probe.peerBotClientId!,
       TEAMS_CLEANUP_ENABLED: "false" as const, TEAMS_CALLING_CALLBACK_URL: "https://approved.example.invalid/api/calls",
     },
-    teamsCalling: graph, teamsCallingPeer: peerGraph, teamsCallOperations: operations, signal: controller.signal, telemetry: { emit: vi.fn() },
-    now: () => clock, sleep: async (ms: number) => { clock += ms; if (options.delayedCompletion) notify?.(); },
+    teamsCalling: graph, teamsCallingPeer: peerGraph, teamsCallOperations: operations, signal: controller.signal,
+    telemetry: { emit: vi.fn((event: string) => {
+      if (options.abortAfterPrimaryCreate && event === "teams-call-created") controller.abort();
+    }) },
+    now: () => clock, sleep: async (ms: number) => {
+      clock += ms;
+      if (options.delayedCompletion) for (const notify of pendingNotifications.values()) notify();
+    },
   };
   return { context, fetcher };
 }
 
 describe("answered service-hosted audio playback and verified disconnection", () => {
+  it.each(["primary", "peer"] as const)("requires real %s authentication before attempting either meeting mutation", async leg => {
+    const { context, fetcher } = fixture({ failedAuthentication: leg });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("authentication-failure");
+    expect(result.steps.find(step => step.name === "place-call")?.status).toBe("skipped");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("reports a primary 403 as unhealthy permission evidence without retrying, aliasing scope or inventing a call", async () => {
+    const { context, fetcher } = fixture({ primaryCreateForbidden: true });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("permission-failure");
+    expect(result.diagnosticContext.httpStatus).toBe(403);
+    expect(result.steps.find(step => step.name === "place-call")?.status).toBe("failed");
+    expect(result.steps.find(step => step.name === "end-call")?.status).toBe("skipped");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(context.telemetry.emit).not.toHaveBeenCalledWith("teams-call-created", expect.anything());
+  });
+  it("keeps an ambiguous peer join unresolved while independently deleting and verifying the known primary", async () => {
+    const { context, fetcher } = fixture({ peerCreateUncertain: true });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(false);
+    expect(result.steps.find(step => step.name === "end-call")?.status).toBe("succeeded");
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE").map(([url]) => String(url))).toEqual([
+      "https://graph.microsoft.com/v1.0/communications/calls/owned-call",
+    ]);
+    expect(context.telemetry.emit).toHaveBeenCalledWith("teams-call-unknown-creation-outcome", expect.anything());
+  });
+  it("persists the primary's owned ID before diagnostics/cancellation and tears it down on a fresh signal", async () => {
+    const { context, fetcher } = fixture({ abortAfterPrimaryCreate: true });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("cancelled");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+    expect(fetcher.mock.calls.map(([, init]) => init?.method)).toEqual(["POST", "DELETE", "GET"]);
+    expect(context.telemetry.emit).toHaveBeenCalledWith("teams-call-created", expect.objectContaining({
+      leg: "primary", ownedCallId: "owned-call",
+    }));
+    expect(context.telemetry.emit).toHaveBeenCalledWith("teams-call-disconnected", expect.objectContaining({
+      leg: "primary", ownedCallId: "owned-call",
+    }));
+  });
+  it.each(["thread", "organizer", "tenant", "organizer-tenant"] as const)(
+    "never substitutes wrong %s metadata for evidence of the dedicated meeting, and still ends both calls", async field => {
+      const { context, fetcher } = fixture({ wrongMeeting: field });
+      const result = resultSchema.parse(await teamsCallProbe(probe, context));
+      expect(result.success).toBe(false);
+      expect(result.steps.find(step => step.name === "verify-meeting-metadata")?.status).toBe("failed");
+      expect(result.steps.find(step => step.name === "verify-participants")?.status).toBe("skipped");
+      expect(result.steps.find(step => step.name === "play-audio")?.status).toBe("skipped");
+      expect(result.steps.find(step => step.name === "end-call")?.status).toBe("succeeded");
+      expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+      expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(2);
+    },
+  );
+  it.each(["primary", "peer"] as const)("does not call playback complete when only the other leg completes (%s missing)", async leg => {
+    const { context, fetcher } = fixture({ missingPlayback: leg });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.steps.find(step => step.name === "play-audio")).toMatchObject({
+      status: "failed", diagnosticCategory: "delivery-timeout",
+    });
+    expect(result.steps.find(step => step.name === "end-call")?.status).toBe("succeeded");
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(2);
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+  });
+  it("rejects otherwise correlated playback callbacks authenticated for the other bot's leg", async () => {
+    const { context } = fixture({ wrongAudience: true });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.steps.find(step => step.name === "play-audio")).toMatchObject({
+      status: "failed", diagnosticCategory: "delivery-timeout",
+    });
+    expect(result.steps.find(step => step.name === "end-call")?.status).toBe("succeeded");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+  });
   it.each(["missingRoster", "wrongRoster", "emptyPeerRoster", "lobbyPeer", "peerRosterFailure"] as const)(
     "never plays with %s; both independently owned calls are disconnected", async failure => {
       const { context, fetcher } = fixture({ [failure]: true });
@@ -152,6 +270,15 @@ describe("answered service-hosted audio playback and verified disconnection", ()
     const deletes = fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE");
     expect(deletes.map(([url]) => String(url).split("/").at(-1))).toEqual(["owned-call", "peer-call", "peer-call"]);
   });
+  it("still verifies peer termination independently when primary teardown fails twice", async () => {
+    const { context, fetcher } = fixture({ primaryDeleteFailure: true });
+    const result = resultSchema.parse(await teamsCallProbe(probe, context));
+    expect(result.success).toBe(false);
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(false);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")
+      .map(([url]) => String(url).split("/").at(-1))).toEqual(["owned-call", "peer-call", "owned-call"]);
+    expect(context.telemetry.emit).toHaveBeenCalledWith("teams-call-disconnected", expect.objectContaining({ leg: "peer" }));
+  });
   it.each(["missing", "primary", "different"] as const)("requires the exact distinct peer selection: %s", async selection => {
     const { context, fetcher } = fixture();
     const config = { ...context.config, TEAMS_CALLING_PEER_CLIENT_ID:
@@ -164,11 +291,12 @@ describe("answered service-hosted audio playback and verified disconnection", ()
     const { context, fetcher } = fixture({ delayedCompletion: true });
     const result = resultSchema.parse(await teamsCallProbe(probe, context));
     expect(result.success).toBe(true);
-    expect(reportedResult(result).steps.map(step => step.name)).toEqual(["place-call", "wait-for-answer", "verify-participants", "play-audio", "end-call"]);
+    expect(reportedResult(result).steps.map(step => step.name)).toEqual(["place-call", "wait-for-answer", "verify-meeting-metadata", "verify-participants", "play-audio", "end-call"]);
     expect(result.durationMs).toBe(250);
     expect(result.sendDurationMs).toBeUndefined();
     expect(result.publicationDurationMs).toBeUndefined();
-    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(3);
+    // 2 joins (one per leg) + 2 playback POSTs (both legs independently play the tone).
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(4);
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(2);
     expect(fetcher.mock.calls.at(-1)?.[1]?.method).toBe("GET");
     const joins = fetcher.mock.calls.filter(([input, init]) =>

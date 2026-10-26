@@ -20,8 +20,8 @@ const envSchema = z.object({
   PROBE_TIMEOUT_MS: number(90000, 100, 120000, true),
   POLL_INTERVAL_MS: number(2000, 10, 10000, true),
   ENABLE_LIVE_M365: z.enum(["true", "false"]).default("false"),
-  TEAMS_AUTHENTICATION: z.enum(["user-delegated", "bot"]).default("bot"),
-  BOT_AUTHENTICATION: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
+  TEAMS_AUTHENTICATION: z.literal("bot").default("bot"),
+  BOT_AUTHENTICATION: z.literal("managed-identity").default("managed-identity"),
   BOT_CLIENT_ID: z.string().uuid().optional(),
   TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid().optional(),
   TEAMS_CALLING_CALLBACK_URL: teamsCallingCallbackUrlSchema.optional(),
@@ -57,9 +57,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsedProbes = z.array(probeSchema).min(1).max(180).safeParse(rawProbes);
   if (!parsedProbes.success) throw new ConfigurationError(`Invalid PROBES_JSON fields: ${parsedProbes.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const probes = parsedProbes.data;
-  if (["exchange", "teams", "sharepoint", "onedrive"].some(service =>
+  if (["exchange", "teams", "onedrive"].some(service =>
     probes.filter(probe => probeServices[probe.type].service === service).length >
-      (service === "exchange" ? 180 : service === "teams" || service === "onedrive" ? 90 : 60))) {
+      (service === "exchange" ? 180 : service === "teams" ? 60 : 90))) {
     throw new ConfigurationError("Invalid PROBES_JSON: service probe inventory exceeded");
   }
   if (new Set(probes.map(probe => `${probe.type}:${probe.id}`)).size !== probes.length) {
@@ -75,26 +75,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     if (config.EXECUTION_MODE === "live") {
       const hasDedicatedResources = service === "exchange"
         ? Boolean(probe.mailbox)
-        : service === "sharepoint"
-          ? Boolean(probe.siteId && probe.driveId && probe.folderId)
-          : service === "onedrive"
-            ? Boolean(probe.userId && probe.userPrincipalName && probe.folderName)
+        : service === "onedrive"
+          ? Boolean(probe.userId && probe.userPrincipalName && probe.folderName)
           : probe.type === "teams-call"
             ? Boolean(probe.tenantId && probe.meetingThreadId && probe.organizerUserId && probe.peerBotClientId &&
               config.TEAMS_CALLING_CALLBACK_URL)
-            : Boolean(probe.tenantId && probe.teamId && probe.channelId &&
-            (config.TEAMS_AUTHENTICATION !== "bot" || probe.serviceUrl));
+            : Boolean(probe.tenantId && probe.teamId && probe.channelId && probe.serviceUrl);
       if (!hasDedicatedResources) {
         throw new ConfigurationError(`Missing dedicated resources for probe ${probe.id}`);
       }
       if (probe.type === "teams-call" && config.TEAMS_CALLING_PLAYBACK_ENABLED !== "true") {
         throw new ConfigurationError("Meeting playback requires explicit TEAMS_CALLING_PLAYBACK_ENABLED=true approval");
       }
-      if (probe.type === "teams-call" && (config.BOT_AUTHENTICATION !== "managed-identity" ||
+      if (probe.type === "teams-call" && (
           !config.BOT_CLIENT_ID || !config.TEAMS_CALLING_PEER_CLIENT_ID ||
           config.BOT_CLIENT_ID.toLowerCase() === config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
           config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() !== probe.peerBotClientId?.toLowerCase())) {
-        throw new ConfigurationError("Meeting calling requires two distinct explicit managed identities: BOT_CLIENT_ID and TEAMS_CALLING_PEER_CLIENT_ID matching root peerBotClientId");
+        throw new ConfigurationError("Teams peer journeys require two distinct explicit managed identities: BOT_CLIENT_ID and TEAMS_CALLING_PEER_CLIENT_ID matching root peerBotClientId");
       }
       if (probe.type === "teams-call" && config.PROBE_TIMEOUT_MS <
           (config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS + config.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS) * 1000 + 5000) {

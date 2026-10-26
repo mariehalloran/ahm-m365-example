@@ -19,10 +19,13 @@ async function run(type: keyof typeof handlers, options: {
   cleanup?: boolean; failStage?: string; createFails?: boolean;
   badReplySender?: boolean; badReplyBody?: boolean; missingReplyHeader?: boolean; duplicateReplyHeader?: boolean;
   occurrenceCount?: number; duplicateOccurrence?: boolean; staleOccurrenceUpdate?: boolean;
+  seriesDeletionPending?: boolean; seriesDeletionReadDenied?: boolean;
   cancellationPending?: boolean; cancelledEventMissing?: boolean; cancellationReadDenied?: boolean;
   cancellationReadAborted?: boolean; attendeeCleanupStatus?: number;
   malformedCreatedEvent?: boolean;
   attendeeOnSecondPage?: boolean; calendarNextLink?: string; calendarPaginationLoop?: boolean;
+  recipientReadFailure?: { category: "permission-failure" | "graph-throttling" | "read-failure"; status: number };
+  unrelatedMail?: boolean;
 } = {}) {
   const probe: Probe = {
     id: "exchange-one", cohort: "exchange-global", type, mailbox: sender,
@@ -39,6 +42,7 @@ async function run(type: keyof typeof handlers, options: {
   let replyBody = "";
   let accepted = false;
   let cancelled = false;
+  let seriesDeleted = false;
   const calls: { path: string; method: string; body?: unknown }[] = [];
   const signal = new AbortController();
   const graph = {
@@ -84,10 +88,14 @@ async function run(type: keyof typeof handlers, options: {
           } : {}),
         });
       }
-      if (path.endsWith("/events/organizer")) return schema.parse({
-        id: "organizer", subject: updatedSubject || subject,
-        attendees: [{ emailAddress: { address: recipient }, status: { response: accepted ? "accepted" : "notResponded" } }],
-      });
+      if (path.endsWith("/events/organizer")) {
+        if (seriesDeleted && options.seriesDeletionReadDenied) throw new IntegrationError("permission-failure", 403);
+        if (seriesDeleted && !options.seriesDeletionPending) throw new IntegrationError("read-failure", 404);
+        return schema.parse({
+          id: "organizer", subject: updatedSubject || subject,
+          attendees: [{ emailAddress: { address: recipient }, status: { response: accepted ? "accepted" : "notResponded" } }],
+        });
+      }
       if (path.endsWith("/events/attendee")) {
         if (cancelled && options.cancellationReadAborted) {
           signal.abort(new DOMException("Execution deadline", "AbortError"));
@@ -100,11 +108,20 @@ async function run(type: keyof typeof handlers, options: {
       }
       if (path.includes("/messages?")) {
         const querySubject = new URLSearchParams(path.split("?")[1]).get("$filter") ?? "";
-        if (!path.includes("/inbox/")) return schema.parse({ value: [] });
+        if (!path.includes("/inbox/")) return schema.parse({
+          value: options.unrelatedMail ? [
+            { id: "unrelated-mail-copy", subject: "Not owned by this attempt" },
+            { id: querySubject.includes("RE:") ? "reply-owned-copy" : "original-owned-copy",
+              subject: querySubject.includes("RE:") ? replySubject : subject },
+          ] : [],
+        });
+        if (options.recipientReadFailure && path.includes(encodeURIComponent(recipient))) {
+          throw new IntegrationError(options.recipientReadFailure.category, options.recipientReadFailure.status);
+        }
         if (options.missingRecipient && path.includes(encodeURIComponent(recipient))) return schema.parse({ value: [] });
         const reply = querySubject.includes("RE:");
         return schema.parse({
-          value: [{
+          value: [...(options.unrelatedMail ? [{ id: "unrelated-inbox-mail", subject: "Not owned by this attempt" }] : []), {
             id: reply ? "received-reply" : "received", subject: reply ? replySubject : subject,
             conversationId: reply ? "sender-conversation" : "recipient-conversation",
             internetMessageId: reply ? "<reply@example.invalid>" : "<original@example.invalid>",
@@ -126,6 +143,7 @@ async function run(type: keyof typeof handlers, options: {
       if (method === "DELETE" && cancelled && path.endsWith("/events/organizer")) {
         throw new IntegrationError("graph-unavailable", 400);
       }
+      if (method === "DELETE" && type === "exchange-recurring-calendar" && path.endsWith("/events/organizer")) seriesDeleted = true;
       if (method === "DELETE" && path.endsWith("/events/attendee")) {
         if (options.attendeeCleanupStatus) throw new IntegrationError("graph-unavailable", options.attendeeCleanupStatus);
         if (cancelled && options.cancelledEventMissing) return new Response(null, { status: 404 });
@@ -146,7 +164,7 @@ async function run(type: keyof typeof handlers, options: {
   return { result, calls, graph };
 }
 
-describe("Exchange expanded completed journeys", () => {
+describe("Exchange consolidated attachment, distribution and calendar journeys", () => {
   it.each(Object.keys(handlers) as (keyof typeof handlers)[])("completes %s in business-step order", async type => {
     const { result } = await run(type);
     expect(result.success).toBe(true);
@@ -180,6 +198,27 @@ describe("Exchange expanded completed journeys", () => {
     expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
     expect(result.steps.find(step => step.name === "confirm-group-delivery")).toMatchObject({ status: "failed" });
   });
+  it.each([
+    { category: "permission-failure", status: 403 },
+    { category: "graph-throttling", status: 429 },
+    { category: "read-failure", status: 503 },
+  ] as const)("preserves recipient API evidence instead of inventing a delivery timeout ($status)", async recipientReadFailure => {
+    const { result, calls } = await run("exchange-distribution-list", { recipientReadFailure });
+    expect(result).toMatchObject({
+      success: false, diagnosticCategory: recipientReadFailure.category,
+      diagnosticContext: { httpStatus: recipientReadFailure.status, cleanupSucceeded: true },
+    });
+    expect(calls.filter(call => call.path.includes("/mailFolders/inbox/messages"))).toHaveLength(2);
+    expect(calls.some(call => call.method === "DELETE" && call.path.endsWith("/received"))).toBe(true);
+  });
+  it.each(["exchange-attachment-reply", "exchange-distribution-list"] as const)(
+    "never claims unrelated Inbox or cleanup-discovery records for %s", async type => {
+      const { result, calls } = await run(type, { unrelatedMail: true });
+      expect(result.success).toBe(true);
+      expect(calls.some(call => call.method === "DELETE" && call.path.includes("unrelated"))).toBe(false);
+      expect(calls.some(call => call.method === "DELETE" && call.path.endsWith("/original-owned-copy"))).toBe(true);
+    },
+  );
   it("creates real recurrence, reads occurrences, updates and verifies before deleting the owned series", async () => {
     const { calls } = await run("exchange-recurring-calendar", { cleanup: false });
     expect(calls.find(call => call.method === "POST" && call.path.endsWith("/events"))?.body)
@@ -188,6 +227,22 @@ describe("Exchange expanded completed journeys", () => {
     expect(calls.filter(call => call.method === "DELETE")).toEqual([
       expect.objectContaining({ path: `/users/${encodeURIComponent(sender)}/events/organizer` }),
     ]);
+    const deletionIndex = calls.findIndex(call => call.method === "DELETE");
+    expect(calls[deletionIndex + 1]).toMatchObject({
+      method: "GET", path: `/users/${encodeURIComponent(sender)}/events/organizer`,
+    });
+  });
+  it("requires observed recurring-series removal and retains cleanup ownership if deletion does not become visible", async () => {
+    const { result, calls } = await run("exchange-recurring-calendar", { seriesDeletionPending: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
+    expect(result.steps.find(step => step.name === "delete-event")?.status).toBe("failed");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+    expect(calls.filter(call => call.method === "DELETE" && call.path.endsWith("/events/organizer"))).toHaveLength(2);
+  });
+  it("does not confuse denied recurring-series readback with deletion", async () => {
+    const { result } = await run("exchange-recurring-calendar", { seriesDeletionReadDenied: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "permission-failure" });
+    expect(result.steps.find(step => step.name === "delete-event")?.status).toBe("failed");
   });
   it.each([0, 1, 2, 4])("rejects an incomplete or unexpected recurrence containing %s occurrences", async occurrenceCount => {
     const { result, calls } = await run("exchange-recurring-calendar", { occurrenceCount });

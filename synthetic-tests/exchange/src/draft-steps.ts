@@ -37,7 +37,6 @@ export async function readDraft(
       !draft.isDraft || draft.bodyPreview !== (edited ? editedDraftContent(attempt) : "Dedicated synthetic probe. Safe to delete.")) {
     throw new IntegrationError("read-failure");
   }
-
 }
 
 export async function deleteDraft(graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal): Promise<void> {

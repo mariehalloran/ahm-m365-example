@@ -41,8 +41,8 @@ describe("project-root monitoring configuration", () => {
       } },
     };
     const migrated = parseProjectConfig(old);
-    expect(migrated.services.exchange.scenarios["attachment-reply-mail"]).toBe(false);
-    expect(migrated.services.exchange.scenarios["meeting-invitation"]).toBe(false);
+    expect(migrated.services.exchange.scenarios["attachment-reply-mail"]).toBe(true);
+    expect(migrated.services.exchange.scenarios["meeting-invitation"]).toBe(true);
     project.services.exchange.targets.push({
       id: "second-pair", mailbox: "second@example.invalid", recipientMailbox: "third@example.invalid",
     });
@@ -60,17 +60,16 @@ describe("project-root monitoring configuration", () => {
     expect(serviceProbes(configured, project.services.exchange.scenarios)).toHaveLength(180);
     expect(serviceSettings(configured, {}, project.services.exchange.scenarios).probes).toHaveLength(180);
   });
-  it("selects Exchange, Teams and OneDrive; explicitly disables SharePoint without enabling live I/O", async () => {
+  it("selects exactly Exchange, Teams and OneDrive without enabling live I/O", async () => {
     expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "services"]);
     expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
     for (const type of ["exchange", "teams", "onedrive"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
-      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 6 : 3).fill(true));
+      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 6 : type === "teams" ? 2 : 3).fill(true));
       const selected = await readProjectService(type, "../monitoring.config.json");
       expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
-    expect(checkedIn.services.sharepoint.enabled).toBe(false);
-    expect((await readProjectService("sharepoint", "../monitoring.config.json")).service.enabled).toBe(false);
+    expect(Object.keys(checkedIn.services).sort()).toEqual(["exchange", "onedrive", "teams"]);
   });
   it("defaults omitted OTEL settings off and rejects unsupported destinations and service-owned settings", () => {
     const { otel, ...previousConfig } = checkedIn;

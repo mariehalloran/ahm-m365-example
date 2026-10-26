@@ -60,7 +60,7 @@ const rosterSchema = z.object({
     id: callIdSchema,
     isInLobby: z.boolean().optional(),
     info: z.object({
-      identity: z.object({ application: z.object({ id: z.string().uuid() }).optional() }),
+      identity: z.object({ application: z.object({ id: z.string().uuid() }).nullish() }),
     }),
   })).max(200),
   "@odata.nextLink": z.unknown().optional(),
@@ -77,7 +77,7 @@ export async function verifyParticipants(
       undefined, true, "v1.0", 131072);
     signal.throwIfAborted();
     // A partial or unbounded roster is not evidence that both bots joined this meeting.
-    if (roster["@odata.nextLink"] !== undefined) throw new IntegrationError("read-failure");
+    if (roster["@odata.nextLink"] != null) throw new IntegrationError("read-failure");
     const identities = new Map<string, Set<string>>();
     for (const participant of roster.value) {
       const application = participant.info.identity.application?.id.toLowerCase();
@@ -95,8 +95,32 @@ export async function verifyParticipants(
   throw new IntegrationError("delivery-timeout");
 }
 
+const meetingCallSchema = z.object({
+  id: callIdSchema,
+  chatInfo: z.object({ threadId: z.string().min(1).max(300) }),
+  meetingInfo: z.object({
+    "@odata.type": z.literal("#microsoft.graph.organizerMeetingInfo"),
+    organizer: z.object({ user: z.object({ id: z.string().uuid(), tenantId: z.string().uuid() }) }),
+  }),
+  tenantId: z.string().uuid(),
+});
+
+export async function verifyMeetingMetadata(
+  graph: GraphClient, id: string, expected: { threadId: string; organizerUserId: string; tenantId: string },
+  signal: AbortSignal,
+): Promise<void> {
+  const call = await graph.json(callPath(id), meetingCallSchema, signal, "GET", undefined, true, "v1.0", 16384);
+  signal.throwIfAborted();
+  if (call.id !== id || call.chatInfo.threadId !== expected.threadId ||
+      call.meetingInfo.organizer.user.id.toLowerCase() !== expected.organizerUserId.toLowerCase() ||
+      call.meetingInfo.organizer.user.tenantId.toLowerCase() !== expected.tenantId.toLowerCase() ||
+      call.tenantId.toLowerCase() !== expected.tenantId.toLowerCase()) {
+    throw new IntegrationError("read-failure");
+  }
+}
+
 export async function playAudio(
-  graph: GraphClient, operations: TeamsCallOperations, id: string, clientContext: string, mediaUri: string,
+  graph: GraphClient, operations: TeamsCallOperations, id: string, clientContext: string, mediaUri: string, botClientId: string,
   signal: AbortSignal, deadline: number, pollIntervalMs: number,
   now: () => number = Date.now, sleep = pause, onState?: StateObserver,
   onOperation?: (operationId: string, status: string, resultCode?: number) => void,
@@ -106,7 +130,7 @@ export async function playAudio(
   if (remaining <= 0) throw new IntegrationError("delivery-timeout");
   const bounded = AbortSignal.timeout(remaining);
   signal = AbortSignal.any([signal, bounded]);
-  const pending = operations.register(id, clientContext, remaining);
+  const pending = operations.register(id, clientContext, remaining, botClientId);
   try {
     const accepted = await graph.json(`${callPath(id)}/playPrompt`, playPromptOperationSchema, signal, "POST", {
       clientContext,

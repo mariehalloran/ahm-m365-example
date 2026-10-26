@@ -1,10 +1,10 @@
 # Microsoft 365 provider monitoring
 
-Each existing service container has an **independent provider lane**. It does not wait for synthetic execution and cannot change synthetic success, business-step measurements, or Experience rollup. Provider state belongs to separate call entities beneath the impact-suppressed `${service}-service-health` parent. No extra container, mandatory Log Analytics workspace, or simulated live data is introduced.
+Each existing service container has an **independent provider lane**. It does not wait for synthetic execution and cannot change synthetic success, business-step measurements, or Experience rollup. All stable and approved beta signals for a product belong to **one** impact-suppressed `${service}-service-health` entity, grouped together in **External Reports**. There are no per-API entities or relationships. No extra container, mandatory Log Analytics workspace, or simulated live data is introduced.
 
 ## Short setup
 
-1. Approve application `ServiceHealth.Read.All` for stable data; separately approve `ServiceActivity-Exchange.Read.All` and/or `ServiceActivity-Teams.Read.All` only when enabling those beta collectors. Keep mailbox/calendar grants on the synthetic identity narrowly scoped. Optional service `providerClientId` selects the separately federated read-only provider application; it never selects the synthetic or Azure-report identity.
+1. Approve application `ServiceHealth.Read.All` for stable data across Exchange, Teams and OneDrive; separately approve `ServiceActivity-Exchange.Read.All` and/or `ServiceActivity-Teams.Read.All` only when enabling those beta collectors. Keep mailbox/calendar/drive grants on the synthetic identity narrowly scoped. Optional service `providerClientId` selects the separately federated read-only provider application; it never selects the synthetic or Azure-report identity. Every hosted worker uses its explicitly selected managed identity and needs its own trust on that provider application; there is no certificate fallback.
 2. Set these **service-file** settings (not root selection/target fields):
 
 ```json
@@ -28,7 +28,9 @@ Each existing service container has an **independent provider lane**. It does no
 
 The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects 1–5 unique functions for that service; omitting it selects all five approved functions. Beta remains **disabled by default** in checked-in profiles.
 
-3. Deploy matching models first (each Service Health call child has its own External Reports group), then prepare workers with explicit approvals:
+For **OneDrive**, set `serviceHealth: true` and keep `serviceActivity.enabled: false`, with no beta `functions` or `thresholds`. The same optional `providerClientId` selects the existing read-only provider app; it does not add Graph permissions. Its provider lane is also 300 seconds.
+
+3. Deploy matching models first (one combined External Reports group per Service Health entity), then prepare workers with explicit approvals:
 
 ```sh
 npm --prefix synthetic-tests run deployment:prepare -- \
@@ -43,7 +45,15 @@ The generated ARM parameter `enableBetaServiceActivity: true` mounts `ENABLE_BET
 
 ## Exact endpoints and units
 
-Stable `GET https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues` filter exact subscribed service names `Exchange Online`, `Microsoft Teams`, `SharePoint Online`. SharePoint has **stable collection only**.
+Stable `GET https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/healthOverviews?$top=100` and `GET https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/issues?$top=100` filter exact subscribed service names:
+
+| Product | Stable service selection | Single destination | Approved beta functions |
+| --- | --- | --- | ---: |
+| Exchange | `Exchange Online` | `exchange-service-health` | 5 |
+| Teams | `Microsoft Teams` | `teams-service-health` | 5 |
+| OneDrive | `Microsoft OneDrive`, overview ID `OneDriveForBusiness` | `onedrive-service-health` | 0 |
+
+The parent verified the OneDrive mapping through the existing hosted identity and existing federated provider application. It is distinct from `{id: "SharePoint", service: "SharePoint Online"}`; no SharePoint alias is used. Keep the working **list** overview endpoint: the same authorized identity returned 403 for `/healthOverviews/OneDriveForBusiness`. This implementation makes no individual-ID lookup. Issues use the exact OneDrive service name. Missing tenant subscription/data or denied issue access produces sanitized Unknown diagnostics rather than a new grant, an alias or fabricated Healthy. No OneDrive beta serviceActivity endpoint has been approved or implemented.
 
 All activity endpoints are GETs beneath `https://graph.microsoft.com/beta/reports/serviceActivity/`:
 
@@ -79,11 +89,13 @@ Only approved stable categorical mappings are automatic:
 | `serviceInterruption` | 0 / Unhealthy |
 | Missing, failed, unrecognized/investigation/recovery states | Unknown, no numeric value |
 
-Issue history is bounded diagnostic context, not an independent availability score. A successful complete snapshot emits an `issue-summary` diagnostic, including an empty snapshot as count zero; the issues child reports that count with Unknown health and no evaluation rules. Failed/incomplete/missing snapshots never imply zero issues. Old incident update times are not the collection freshness of an overview.
+Issue history is bounded diagnostic context, not an independent availability score. A successful complete snapshot emits an `issue-summary` diagnostic, including an empty snapshot as count zero; `microsoft-reported-issue-count` reports that count on the same supporting entity with Unknown health and no evaluation rules. Failed/incomplete/missing snapshots never imply zero issues. Old incident update times are not the collection freshness of an overview.
 
-Every enabled selected function produces `microsoft-activity-<function>` on `${service}-service-health-<function>`. Without a threshold it reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic or call-quality score. Stable overview/issue reports target the `-health-overviews` / `-issues` children. All supported call entities remain visible when disabled/unselected; those calls receive no new reports.
+Every enabled selected function produces `microsoft-activity-<function>` on **`${service}-service-health`**, alongside `microsoft-reported-service-status` and `microsoft-reported-issue-count`. Signal names remain distinct and unchanged; only destinations are consolidated. Without a threshold an activity signal reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic or call-quality score. All approved signal names remain group members when disabled/unselected, but receive no new reports; OneDrive has only its two stable members.
 
-Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Unknown/missing reports also retain unit context. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#direct-report-units-platform-limitation) and [destination/TTL migration](../health-model/README.md#apply-and-migrate).
+The native ARM `signalAggregationGroups` entry is named `external-reports`, displayed as **External Reports**, and lists the signal-name strings in `members`. It is not a child-entity graph, an unsupported `signalGroups.externalReports` object or a writable external-signal declaration. `WorstOf` combines known member states; Unknown members do not override known states, even with `ignoreUnknown: false`. Per-signal health and source diagnostics remain authoritative for missing data. `additionalContext.source` and `apiVersion` distinguish each stable endpoint/beta function within the combined group; the supporting entity remains suppressed.
+
+Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Unknown/missing reports also retain unit context. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#direct-report-units-platform-limitation) and [ordered migration with exact retired IDs and model inventory](../health-model/README.md#consolidating-service-health-ordered-handoff). All old worker revisions must be inactive before final child/relationship pruning.
 
 Select the **latest complete bucket**, not an average/sum of overlapping history. Missing/invalid/duplicate/future/out-of-window data, failed source collection, or bucket age exceeding `maxAgeMinutes` produces Unknown **without a numeric value**, replacing prior health rather than retaining stale Healthy. The default maximum age is 60 minutes and is configurable independently of cadence. QoE/UDP interpretations remain explicit in report context even with customer thresholds.
 

@@ -36,7 +36,9 @@
     "teams": {
       "enabled": true,
       "configFile": "synthetic-tests/teams/config.json",
-      "scenarios": { "publish-channel-message": true, "reply-channel-message": true, "call-test-user": true },
+      "scenarios": {
+        "channel-conversation": true, "scheduled-meeting": true
+      },
       "targets": [
         {
           "id": "teams-probe-001",
@@ -59,7 +61,9 @@
     "onedrive": {
       "enabled": true,
       "configFile": "synthetic-tests/onedrive/config.json",
-      "scenarios": { "user-drive-roundtrip": true, "app-folder-lifecycle": true, "document-versions": true },
+      "scenarios": {
+        "user-drive-roundtrip": true, "app-folder-lifecycle": true, "document-versions": true
+      },
       "targets": [
         {
           "id": "onedrive-probe-001",
@@ -75,14 +79,6 @@
           "folderName": "AHM-Synthetic-Tests",
           "restoreVersion": false
         }
-      ]
-    },
-    "sharepoint": {
-      "enabled": false,
-      "configFile": "synthetic-tests/sharepoint/config.json",
-      "scenarios": { "save-reopen-file": true, "rename-reopen-file": true },
-      "targets": [
-        { "id": "sharepoint-probe-001" }
       ]
     }
   }

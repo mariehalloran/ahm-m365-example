@@ -14,7 +14,6 @@ export type ActivityFunction = (typeof activityFunctionNames)[number];
 export const activityFunctions = {
   exchange: activityFunctionNames.slice(0, 5),
   teams: activityFunctionNames.slice(5),
-  sharepoint: [],
   onedrive: [],
 } as const;
 export function isPercentageActivity(name: ActivityFunction): boolean {

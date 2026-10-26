@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
 import { categoryOf, IntegrationError } from "../../utils/src/http.js";
-import { callIdSchema, leaveCall, playAudio, verifyParticipants, waitForAnswer } from "./call-steps.js";
+import { callIdSchema, leaveCall, playAudio, verifyMeetingMetadata, verifyParticipants, waitForAnswer } from "./call-steps.js";
 import { testToneUri } from "../../utils/src/teams-call-media.js";
 import type { GraphClient } from "../../utils/src/graph.js";
 import { z } from "zod";
@@ -87,6 +88,9 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
         }, false, "v1.0", 16384);
         leg.id = created.id;
         unknownCreation = false;
+        telemetry.emit("teams-call-created", {
+          testId: result.testId, correlationId: result.correlationId, leg: leg.name, ownedCallId: leg.id,
+        });
         const chain = z.string().uuid().nullish().safeParse(created.callChainId);
         if (!chain.success) throw new IntegrationError("malformed-response");
         onState(leg)("establishing", undefined, undefined, chain.data ?? undefined);
@@ -101,6 +105,11 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
       await settleBoth(legs.map(leg => waitForAnswer(leg.graph!, leg.id!, executionSignal,
         joinDeadline, interval, now, context.sleep, onState(leg))));
     }, now, classify);
+    await measureStep(result, "verify-meeting-metadata", async () => {
+      await settleBoth(legs.map(leg => verifyMeetingMetadata(leg.graph!, leg.id!, {
+        threadId: probe.meetingThreadId!, organizerUserId: probe.organizerUserId!, tenantId: probe.tenantId!,
+      }, executionSignal)));
+    }, now, classify);
     phase = "roster";
     await measureStep(result, "verify-participants", async () => {
       if (result.call!.callChainId && result.call!.peerCallChainId &&
@@ -111,14 +120,20 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
     }, now, classify);
     phase = "playback";
     await measureStep(result, "play-audio", async () => {
-      await playAudio(legs[0]!.graph!, context.teamsCallOperations!, legs[0]!.id!, result.correlationId,
-        testToneUri(config.TEAMS_CALLING_CALLBACK_URL!), executionSignal,
+      const playback = (leg: typeof legs[number], clientContext: string) => playAudio(
+        leg.graph!, context.teamsCallOperations!, leg.id!, clientContext,
+        testToneUri(config.TEAMS_CALLING_CALLBACK_URL!),
+        leg.name === "primary" ? config.BOT_CLIENT_ID! : config.TEAMS_CALLING_PEER_CLIENT_ID!, executionSignal,
         Math.min(now() + config.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS! * 1000, deadline),
-        interval, now, context.sleep, onState(legs[0]!),
+        interval, now, context.sleep, onState(leg),
         (operationId, status, resultCode) => telemetry.emit("teams-call-playback-observed", {
-          testId: result.testId, correlationId: result.correlationId, operationId, status,
+          testId: result.testId, correlationId: result.correlationId, leg: leg.name, operationId, status,
           ...(resultCode !== undefined ? { resultCode } : {}),
         }));
+      await settleBoth([
+        playback(legs[0]!, result.correlationId),
+        playback(legs[1]!, randomUUID()),
+      ]);
     }, now, classify);
     result.success = true;
   } catch (error) {
@@ -135,7 +150,7 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
           interval, now, context.sleep, onState(leg));
         leg.disconnected = true;
         telemetry.emit("teams-call-disconnected", {
-          testId: result.testId, correlationId: result.correlationId, phase, leg: leg.name,
+          testId: result.testId, correlationId: result.correlationId, phase, leg: leg.name, ownedCallId: leg.id,
         });
       }));
       if (legs.every(leg => leg.id && leg.disconnected)) result.call!.endedAt = new Date(now()).toISOString();

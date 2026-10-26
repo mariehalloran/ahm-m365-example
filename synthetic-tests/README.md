@@ -1,350 +1,179 @@
 # Microsoft 365 synthetic tests
 
-**Run a test, aggregate its actions, report health, repeat.** Each service has its own config and cadence; one root configuration selects services, journeys, targets, and report policy.
+This is the self-contained Node project: source, shared utilities, tests,
+configuration, dependencies and build output live here. The three service
+workers run independently in Azure Container Apps and publish health directly;
+no telemetry worker or persistent journey state is required.
 
-This directory is the self-contained Node project. For why synthetic journeys complement Microsoft-reported health and how Azure Monitor Health Models exposes experience gaps, see the [repository overview](../README.md).
-
-Start with the service-owned journey guides: [Exchange six core mail/calendar journeys](./exchange/README.md), [Teams bot-only meeting/messaging coverage](./teams/README.md#target-catalog-versus-current-implementation), and [OneDrive roundtrip, app-folder persistence and document versions](./onedrive/README.md). Existing [SharePoint save/rename handlers](./sharepoint/README.md#target-catalog-versus-current-implementation) remain available but are disabled in the root sample. These are API-backed journeys, not browser/desktop or employee sign-in tests. Mocked HTTP tests do not establish successful tenant access or employee receipt. Bot roster presence and playback completion do not prove received audio.
-
-```text
-Exchange Container App   [mail 60s; five other journeys 300s]    --+
-Teams Container App      [test + aggregation, every 120 seconds] --+
-OneDrive Container App  [three independent lanes, every 300s]    --+
-                                                                |
-                            Direct health reports to service model entities
-                                                                |
-                                    Root model of service health models
-
-```
-
-The [health model templates](../health-model/README.md) create a root referencing service models. The checked-in selection has **five models, 171 entities and 166 relationships**: twelve active and 20 planned journey roots, with 47 active and 66 planned steps; SharePoint is planned-only in this selection. OneDrive promotes existing planned root/step IDs without duplicates. Target attempts aggregate without per-user signal inventories. Active journeys/steps have **External Reports**, plus optional **OpenTelemetry**; planned nodes have no reports, remain Unknown and are suppressed from synthetic rollup. Token acquisition and generic cleanup remain internal; deliberate deletion/cancellation/hang-up are business steps. Use the [shared worker deployment](./infra/README.md) and [model migration](../health-model/README.md#apply-and-migrate).
-
-Each service has its own Container App and cadence. Console diagnostics remain in that same process; no separate telemetry service or Kubernetes requirement is introduced.
-
-## Catalog, implementation and live evidence
-
-A journey family is a completed workflow, not a fixed number of API calls. Exchange
-implements six core families; Teams and SharePoint each have five target families
-but only narrower implemented coverage, detailed in their service guides. Live
-Exchange mail, draft, attachment/reply and DL fanout are verified Healthy; its two
-calendar journeys currently fail with 403 pending scoped-authorization cache propagation.
-Teams live verification covers one-bot publication/reply with a Graph observer.
-The new bot-only two-leg meeting/roster/playback/departure architecture is source-tested,
-not live media acceptance; no human calling or direct app-to-app P2P fallback exists.
-OneDrive implements roundtrip, app-folder persistence and actual prior-version retrieval;
-live permissions/provisioning and ingestion must be verified separately. SharePoint is disabled.
-See [live evidence](../docs/deployment.md#deployment-status-and-order), not unit tests,
-for execution and ingestion acceptance.
-
-Graph persisted readback is not Bot B receipt; owner access is not recipient access;
-call signaling is not media; APIs are not browser experience. Future families and
-optional variants below and in service guides are **not implemented or selectable**
-unless explicitly listed as current root scenarios.
-
-### OneDrive target catalog
-
-The [OneDrive service guide](./onedrive/README.md) documents exact APIs,
-authorization limits, root target fields, cleanup and live acceptance.
-
-| Family | Completed-workflow target and status |
-| --- | --- |
-| User-drive roundtrip | Implemented: create folder/file under selected folder, enumerate/download, verify exact hash, delete and confirm absence |
-| App-folder lifecycle | Implemented: app-only approot persistence, prior-state verification, update/readback and scratch deletion; no root deletion |
-| Recipient sharing | Planned: needs independent recipient credentials, not owner-token readback |
-| Document versions | Implemented: update, enumerate actual history, retrieve/verify earlier bytes; optional restore rewrites those bytes |
-| Search and retrieve | Planned: approved selected/AppFolder permissions are not documented for Graph search; enumeration is not search |
-
-An optional browser variant remains planned. All three implemented families run
-on independent configurable 300-second lanes in a separate Container App.
-AppFolder application permission is not Entra-account-scoped; runtime account
-allowlisting is a safeguard, not a tenant-enforced two-user boundary.
+Supported workflows: [six Exchange journeys](./exchange/README.md),
+[two bot-backed Teams journeys](./teams/README.md), and
+[three OneDrive journeys](./onedrive/README.md). Every selected target is attempted.
+There is no SharePoint project, proposal catalog, delegated-user bootstrap,
+separate reply probe, P2P audio, card, sharing or search prototype.
 
 ## Run locally
 
-Requires Node.js 22 or 24 and npm. From the repository root, enter this project:
+Requires Node.js 22 or 24 and npm:
 
 ```sh
 cd synthetic-tests
 npm ci
 npm run exchange -- --once
-# Remove --once to repeat on Exchange's cadence.
-npm run exchange
-# Another terminal/process runs OneDrive independently.
-npm run onedrive
-# Or run one safe Teams simulation.
 npm run teams -- --once
+npm run onedrive -- --once
 ```
 
-Checked-in configs use **simulation** and **console output**: reports are previews, with no real email/files, Azure ingestion, or local state writes. Stop with Ctrl+C.
+Checked-in profiles are safe **simulation**: explicit modeled observations and
+health-report previews, never live Microsoft 365 operations or Azure ingestion.
+Remove `--once` to schedule that service continuously. SIGINT/SIGTERM stop
+scheduling and allow bounded cleanup/reporting.
 
-All remaining npm and compiled-worker commands in this guide run from `synthetic-tests/`. From the repository root, `npm --prefix synthetic-tests run <command>` selects the same project without changing directories.
+```sh
+npm run teams -- --project-config /approved/path/monitoring.private.json --once
+```
+
+The root profile's `configFile` paths are relative to that profile.
+An explicit `--config <service-file>` override is relative to the process working
+directory and cannot override root selection, targets or report policy.
 
 ## Configure the project and each service
 
-[monitoring.config.json](../monitoring.config.json) is the authoritative top-level configuration:
+[monitoring.config.json](../monitoring.config.json) alone owns:
 
-| Root setting | Meaning |
+| Root field | Purpose |
 | --- | --- |
-| `services.<service>.enabled` | Checked-in root enables Exchange, Teams and OneDrive, explicitly disables SharePoint; omitted OneDrive in older profiles stays disabled |
-| `services.<service>.scenarios` | Select implemented journeys independently; OneDrive: `user-drive-roundtrip`, `app-folder-lifecycle`, `document-versions`; see service guides for Exchange/Teams and legacy SharePoint selections |
-| `services.<service>.targets` | Account email addresses or approved site/team/channel IDs, never credentials |
-| `services.teams.callTargets` | Dedicated meeting allowlist: `id`, `tenantId`, `meetingThreadId`, `organizerUserId` (owner metadata only), `peerBotClientId`; one sample meeting; no human call targets |
-| `services.onedrive.targets` | Every selected account: `id`, `userId`, `userPrincipalName`, `folderName`; real `driveId`/`folderId` for selected-folder workflows, optional `restoreVersion`; no directory discovery or delegated sign-in |
-| `services.<service>.configFile` | Service-owned file for independent cadence, timeout, mode, authentication and provider settings; relative to the root config's directory |
-| `healthModel` | Root model name, subscription/resource group, report TTL, and success/mean-duration thresholds |
-| `otel` | Optional export: `enabled: false` by default; destination `console` or `azure-monitor` |
+| `services.exchange.scenarios` | The six documented mail/draft/attachment/list/calendar/invitation switches |
+| `services.teams.scenarios` | Only `channel-conversation` and `scheduled-meeting` |
+| `services.onedrive.scenarios` | Only `user-drive-roundtrip`, `app-folder-lifecycle`, `document-versions` |
+| `services.<service>.enabled` / `configFile` | Service selection and its execution-file path |
+| `services.<service>.targets` | Approved mailbox/channel/account metadata, never credentials |
+| `services.teams.callTargets` | Dedicated meeting and peer-bot allowlist, not human call targets |
+| `healthModel` | Azure destination, success/duration thresholds, report TTL and optional call-quality thresholds |
+| `otel` | Optional console/Azure Monitor export; disabled by default |
 
-Service/scenario selection, targets, and report policy are configured **only in the root file**. The service-file parser rejects duplicate `enabled`, `targets`, and obsolete `telemetry` keys instead of silently ignoring them. Root service/scenario switches disable execution before credentials are initialized. A reusable lane engine runs within each service worker, not across services. Exchange defaults to independent 60-second mail and 300-second extended lanes; service-owned `executionLanes` can set cadence/deadlines. Root Exchange targets add explicit `recipientMailbox` and `distributionList: { address, expectedRecipients }`; see [Exchange migration](./exchange/README.md). Omitted new scenario keys in older profiles default off; missing setup for a selected live journey fails observably. Live execution and beta/provider permissions remain separate safety gates.
+All supported scenarios default to enabled. Explicitly configure private switches;
+obsolete service/scenario keys are rejected rather than silently migrated.
 
-Each service accepts up to 30 configured targets; Teams separately accepts up to
-30 call targets. Selected journeys expand targets into independent attempts:
-30 messaging targets across two journeys plus 30 calls produce up to 90 Teams
-attempts in one cycle, aggregated into fixed journey/action signals.
+Service files contain execution settings only: mode, cadence/deadlines, cohort,
+authentication, cleanup and optional provider settings.
+`executionLanes` is an array of
+`{ name, intervalSeconds, timeoutSeconds, journeys }`; assign every supported
+service scenario exactly once, even when root-disabled. Lanes run independently
+and never overlap themselves. Missed slots are skipped, not replayed.
 
-| Config | Cadence | Default |
-| --- | --- | --- |
-| [Exchange](./exchange/config.json) | Mail 60 seconds; five other core journeys 300 seconds | Simulated mail/calendar results |
-| [OneDrive](./onedrive/config.json) | Three independent 300-second lanes | Simulated roundtrip/app-folder/version results |
-| [SharePoint](./sharepoint/config.json) | 300 seconds | Disabled in root; retained simulation handlers |
-| [Teams](./teams/config.json) | 120 seconds | Simulation; live defaults to an installed same-tenant managed-identity bot |
+Default lanes:
 
-```json
-{
-  "type": "exchange",
-  "intervalSeconds": 60,
-  "timeoutSeconds": 45,
-  "mode": "simulation",
-  "graphAuthentication": "managed-identity",
-  "cohort": "exchange-global"
-}
-```
+- Exchange: mail every 60 seconds; the other five journeys every 300 seconds.
+- Teams: one lane containing channel conversation and scheduled meeting, every 120 seconds.
+- OneDrive: three independent lanes, each every 300 seconds.
+- Each service's optional providers: a separate lane, default `providerIntervalSeconds: 300`.
 
-Restart a worker after editing its file. Separate services do not share a scheduler.
-The reusable asynchronous lane runner executes independent journeys/targets concurrently
-and reports settled results. Each lane never overlaps itself; missed slots are skipped,
-not queued into catch-up bursts. Run one instance per target set until distributed ownership is implemented.
+See [shared configuration details](./utils/README.md#config).
+No duplicate `enabled`, `targets`, report policy or obsolete `telemetry` fields
+belong in a service file.
 
-Each command reads the root config (default `../monitoring.config.json` from this Node project), then the selected `configFile`. Use `--project-config <file>` for a private/mounted root config and `--config <file>` to override only the service file. The latter path is relative to the process working directory; root `configFile` paths are relative to the project config. A service entry rejects another service's config before credentials or operations are initialized.
+### Migrate existing private profiles
 
-### Per-cycle health reports
+- Remove `services.sharepoint`; keep only Exchange, Teams and OneDrive.
+- Replace old Teams scenario switches with exactly `channel-conversation` and
+  `scheduled-meeting`. Keep dedicated `callTargets` and both approved UAMIs;
+  use one execution lane containing both keys.
+- Keep exactly the three documented OneDrive scenarios and their three lanes;
+  remove sharing/search switches and lanes. Do not rename deployed
+  `onedrive-planned-*` roots or their `step-1`…`step-4` IDs.
+- Keep all six Exchange switches, with mail on the 60-second lane and the other
+  five families on the 300-second lane.
+- Remove public-client/token-cache and bot-certificate settings. Teams accepts
+  only bot participants with explicitly selected managed identities; there is
+  no bootstrap command or user-token compatibility path.
+- Optional OneDrive stable collection accepts `serviceHealth: true` and the
+  approved `providerClientId`; its worker UAMI needs provider-app federation
+  trust. Keep `serviceActivity.enabled: false` and omit beta functions/thresholds.
 
-After each settled lane cycle, aggregate actual attempts separately for each journey and business action. Send `synthetic-success-percentage`/`synthetic-mean-duration` to that journey's entity and each journey-scoped business-step entity in `<root-model-name>-<service>`. Selected journeys share a product worker, not necessarily a cadence; service-owned lanes set cadence/deadlines while root config selects scenarios and targets. Defaults remain below 99%/95% success and above 15/60 seconds mean duration for Degraded/Unhealthy; these are demo thresholds, **not per-action SLOs or p95 latency**.
-
-Executed failures and execution timeouts count as zero success; timeouts report Unhealthy, not Unknown. Unexecuted dependent steps are not failed requests: skipped/unobserved actions have no artificial samples and receive Unknown reports without a numeric value. No aggregation history is retained across cycles. Simulation only prints `health-report-preview`; live mode publishes direct ARM health reports and console diagnostics. Publication failures remain explicit.
-
-Reports default to a 15-minute TTL and are replaced each cycle. Settled execution-deadline failures are reported, not discarded as incomplete; external shutdown must not publish a healthy partial aggregate. Expiry **removes** external signals; it does not guarantee Unhealthy or an alert. Independently detect stopped/stalled execution and broken publication. Reports are current-cycle aggregates, not a full metrics store, percentile history, or arbitrary logs query interface; means alone cannot reconstruct weighted historical statistics.
-
-Live hosted workers do not substitute simulations when resources are unready. Real API/authorization failures make the journey unsuccessful. Valid-but-incomplete setup is reported as an actual unexecutable initialization failure: the journey gets a zero-success/Unhealthy report and unexecuted action signals remain Unknown. Recurring workers retry initialization on their service cadence; `--once` still fails after publishing. Invalid schemas and unavailable report credentials can prevent publication entirely.
-
-### Optional OTEL
-
-Configure OTEL only in the root file; service files still reject the obsolete `telemetry` key. With `otel.enabled: true`, `destination: console` adds `otel-log` and `probe-metrics` records without Azure I/O. `destination: azure-monitor` requires `APPLICATIONINSIGHTS_CONNECTION_STRING`; the shared hosting template supplies it from the optional Application Insights component as a secret. Direct reports and existing console results always remain enabled.
-
-Logs retain service/journey/action attribution, correlation IDs and explicit live/simulation modes. Metrics record binary success and measured durations, with skipped actions excluded and internal authentication/cleanup steps omitted. Provider observations are logs only. Export failures do not fabricate failed service operations or prevent direct report attempts; one-shot commands fail explicitly. See [lifecycle, measurement and dependency details](./utils/README.md#optional-opentelemetry).
-
-## Optional Microsoft-reported context
-
-Provider collection is read-only and runs once per service worker cycle in the existing process—not once per journey or target. Safe simulation configs keep it off; the live examples enable stable Service Health. Collection is independent of journey initialization, so missing targets/bot credentials do not block the Graph attempt. Explicit permission/collection errors are logged; no Microsoft health is fabricated. Provider data never changes journey results or the 1/0 synthetic/step measurements.
-
-- `serviceHealth: true` reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues` for the exact subscribed service name. Overview status reports directly to `${service}-service-health` as `microsoft-reported-service-status` in **External Reports**: **100 healthy, 50 degraded, 0 interruption**, with `impactSuppressed`. Failed/missing/unknown overview status produces Unknown without a value and with failure context. The existing trial observes Graph 403 until `ServiceHealth.Read.All` admin consent is granted. Issues/history remain console diagnostics and do not populate health signals.
-- `serviceActivity: { "enabled": true, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 }` additionally requires **`ENABLE_BETA_SERVICE_ACTIVITY=true`**. Five approved Exchange and five Teams beta functions provide experimental supporting context. Approved status/percentage mappings and explicitly configured thresholds can publish direct suppressed Service Health reports; activity counts remain diagnostic unless thresholds are configured. They never supply synthetic samples or Experience/journey health. SharePoint beta configuration is rejected because no SharePoint-specific report is verified.
-- Live mode still requires `ENABLE_LIVE_M365=true` and separately approved application permissions: `ServiceHealth.Read.All`, and optionally `ServiceActivity-Exchange.Read.All` or `ServiceActivity-Teams.Read.All`. These are additional provider permissions, not replacements for scoped journey access. Nothing grants them automatically. Tenant eligibility/enablement must be confirmed.
-
-Business Basic can support the API-backed synthetics and stable Service Health where the subscribed service (including an appropriate Teams SKU) and administrator-approved access exist. Do **not** assume beta report entitlement on Basic: its API pages document permissions, not explicit Basic eligibility. Microsoft's separate [advanced Microsoft 365 monitoring](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service; that published monitoring eligibility is not proof of beta API entitlement. Confirm report availability with the tenant administrator.
-
-Stable and beta collectors use independent provider lanes inside existing service
-containers (`providerIntervalSeconds`, default **300 seconds**), separate from user journeys.
-Beta collection currently receives 403, never fabricated Healthy. Simulation skips
-configured sources without Graph credentials/network or fabricated Microsoft health.
-Provider failures (including missing/invalid data, permission errors, throttling,
-and bounded pagination) are explicit sanitized console diagnostics and summary failure
-counts, not successful empty snapshots. Historical overlapping beta windows are not
-synthetic counters or success rates. OTEL remains optional.
-
-See the [exact configuration, diagnostic contract and bounds](./utils/README.md#optional-provider-collectors) and [measurement semantics](./utils/README.md#measurement-semantics). Each attempt contributes one binary success observation (1 or 0); total duration stays separate from request and confirmed delivery/publication durations. Reports aggregate separately by journey/business step, never by per-target dimensions or inventories.
+Regenerate deployment parameters from that same active root profile. Source
+removal and incremental deployment do not delete previously deployed resources;
+retire only owned obsolete resources under the approved cleanup procedure.
 
 ## Administrator setup: enable authentication and live tests
 
-These are setup instructions, **not permissions or deployments already applied**. Microsoft 365 admin center alone does not run these tests: an Azure administrator prepares the worker host/identity, and the relevant Microsoft 365/Entra administrators authorize its access.
+1. Approve dedicated resources, identity, cadence and cleanup.
+   Follow [access setup](../docs/cross-tenant-access.md) and each service guide.
+2. Deploy [health models](../health-model/README.md#apply-and-migrate) before the
+   [worker foundation](./infra/README.md). The root references three independent
+   service models; each worker identity has ingest-only access to its own model.
+3. Grant only required Microsoft 365 access. Exchange uses mailbox-scoped
+   application RBAC; Teams uses installed managed-identity bots and team-scoped
+   Graph readback; OneDrive uses Selected folder grants and AppFolder.
+4. Use a private live service profile, approved root destination, and
+   `ENABLE_LIVE_M365=true`. This gate is separate from `mode: "live"`.
 
-### 1. Confirm the tenant and dedicated test resources
+Hosted Graph/reporting explicitly selects `AZURE_CLIENT_ID`, not a guessed host,
+CLI or developer login. Teams Bot Connector selects `BOT_CLIENT_ID` and matching
+`BOT_TENANT_ID`/`AZURE_TENANT_ID`; scheduled meetings additionally select the
+approved peer UAMI. No user sign-in, MFA or refresh-token cache is implemented.
+Exchange retains explicit `graphAuthentication: "certificate"` with
+`M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for approved
+local/alternative access; Azure reporting credentials stay independent.
 
-- Confirm the Azure hosting tenant and Microsoft 365 tenant separately. Same-tenant application Graph can use the Azure UAMI. Teams delegated mode requires same-tenant hosting, a separately approved public client and the protected cache. For cross-tenant application Graph, use a certificate-backed application in the **M365 tenant**, independently of Azure health-report credentials; no Azure subscription is needed in the M365 tenant for that option. Follow the [cross-tenant administrator walkthrough](../docs/cross-tenant-access.md).
-- Provision an approved synthetic mailbox, dedicated SharePoint site/library/folder, and test team/standard channel as applicable. Confirm licensing, owners, cadence, cleanup/retention, and recipient restrictions. Business Basic supports the stable Service Health endpoints with administrator-granted access; it does not establish entitlement to optional beta reports.
-- Record the mailbox address; SharePoint site/drive/folder IDs; and Teams tenant/team/standard-channel IDs and approved Bot Connector service URL. Only optional delegated coverage needs expected test-user UPNs. Do not target employee resources merely to get started.
+Providers are optional: stable `ServiceHealth.Read.All` for all three services,
+and separately gated Exchange/Teams beta permissions/`ENABLE_BETA_SERVICE_ACTIVITY=true`. See
+[provider setup](../docs/provider-monitoring.md). Provider failures/counts cannot
+rewrite synthetic success or Experience rollup.
 
-### 2. Prepare and attach the hosted identity
+## Prove one cycle before enabling recurrence
 
-Use a separate user-assigned managed identity per service/environment. The [shared hosting guide](./infra/README.md) and [Bicep](./infra/main.bicep) deploy all selected services with separate identities. Its foundation stage creates no workers, and real execution requires a separate live opt-in. Compiling creates nothing.
+Run each selected worker with `--once` using the approved profile. Verify:
 
-Hand off these non-secret outputs to the tenant administrator:
+- Real authentication and each required action, not simulated health.
+- Expected authors, recipients, meeting identities, hashes and prior-version bytes.
+- Owned-artifact cleanup and both-leg call termination.
+- Actual health-report acceptance, then fresh entity signals and service/root rollup.
+- Independent stopped/stalled-worker and broken-ingestion detection.
+- End-to-end notifications, not just enabled alert rules.
 
-| Output | Use |
-| --- | --- |
-| `tenantId` | Verify the approved Microsoft 365 directory |
-| `clientId` | Select the identity at runtime; application ID for service grants |
-| `principalId` | Enterprise service-principal object ID for permission assignments |
-| `identityResourceId` | Attach the Azure identity to its Container App |
+Missing OneDrive selected-folder IDs/grants are configuration/permission failure
+evidence; app-folder resolution does not authorize searching the drive root or
+using a broad credential fallback. Initialization failures publish unsuccessful
+journeys when the independent report publisher is usable; unexecuted actions
+stay Unknown. Unsafe schemas/reporting credentials can prevent publication and
+need an independent observer.
 
-An application-registration object ID is **not** the managed identity's `principalId`. For same-tenant Graph, managed identities already have an enterprise service principal; do not create a duplicate app registration. For cross-tenant Graph, the separate M365 application has its own Enterprise application Object ID; use that for M365 grants, not the Azure UAMI principal ID. The Azure UAMI remains responsible for health reports.
+## Measurement and reliability
 
-The deploying administrator needs scoped resource creation/identity-attachment rights. A private registry also needs the appropriate scoped image-pull authorization. These Azure permissions do not grant Microsoft 365 access, and the runtime identity does not need subscription Owner/Contributor or tenant administrator roles.
+Each attempt contributes binary success 1/0 and total duration. Executed business
+steps contribute their own measurements; skipped steps never enter a request
+denominator. Generic authentication/cleanup stay internal, while deliberate
+deletion/cancellation/departure are business steps. Execution timeouts are failures,
+not Unknown journeys. Reports aggregate by stable journey/action IDs, not targets.
 
-### 3. Authorize each journey
+Every live cycle directly publishes **External Reports** and console diagnostics.
+Optional root OTEL runs in-process and does not replace direct reporting.
+No durable outbox, cross-cycle history or exactly-once guarantee exists.
+TTL expiry removes reports rather than guaranteeing an Unhealthy state or alert.
+See [operations acceptance gates](../docs/operations.md#enterprise-reliability-acceptance-gate).
 
-| Journey | Administrator action | Boundary to verify |
-| --- | --- | --- |
-| Exchange | Register the identity's service-principal reference in Exchange; assign **`Application Mail.ReadWrite`**, **`Application Mail.Send`**, and calendar journeys' **`Application Calendars.ReadWrite`** through Exchange RBAC for Applications | Scope only the dedicated participants; verify allowed participants and an approved denied control mailbox |
-| SharePoint | Assign Graph application permission **`Sites.Selected`**, then explicitly grant the identity **`write`** on the approved test site | `Sites.Selected` alone grants no site access; the site grant covers that site, not just the configured folder |
-| Teams | Approve the public client's delegated **`ChannelMessage.Send`**, **`ChannelMessage.Read.All`**, **`ChannelMessage.ReadWrite`** and individual human bootstraps; see the [cache/bootstrap guide](../docs/teams-user-bootstrap.md) | Every selected root test-user UPN, same tenant, dedicated standard channel, independently verified posting authors; no provisioning scopes on the runtime app |
+Teams covers bot APIs, not employee receipt or received audio. OneDrive covers
+Graph file operations, not browser rendering or sync. Source validation and
+deployment readiness do not prove live success; see
+[deployment evidence](../docs/deployment.md#deployment-status-and-order).
 
-Follow the [Exchange administrator commands and effective-access checks](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), [SharePoint setup](./sharepoint/README.md), and [Teams setup](./teams/README.md).
+## Validate source and packaging
 
-**Do not additionally grant tenant-wide Entra Graph `Mail.ReadWrite` or `Mail.Send`.** Entra grants and Exchange RBAC are a union; the scoped Exchange role cannot restrict a separate broad mail grant. Review both authorization paths. Allow propagation time and verify effective live access before scheduling.
-
-Teams defaults to `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`: an installed same-tenant bot uses explicitly selected `BOT_CLIENT_ID` for Bot Connector, independent of application Graph observation and ARM reporting. Hosting supplies bot tenant/client metadata from the attached UAMI; no Teams serviceAccess credentials or user-cache storage are needed. No user MFA or refresh-token maintenance is involved, and this is not employee sign-in/UI coverage. Follow the [bot setup](./teams/README.md#primary-setup-unattended-bot). Optional delegated coverage requires explicit `teamsAuthentication: "user-delegated"`, isolated per-user protected caches and [human bootstrap](../docs/teams-user-bootstrap.md); provider collectors never reuse user tokens. Optional bot certificates require explicit `botAuthentication: "certificate"`, never fallback.
-
-### 4. Optionally authorize Microsoft-reported context
-
-Grant only what the service config actually enables, to the **identity collecting that service's data**:
-
-| Config | Additional Graph application permission |
-| --- | --- |
-| `serviceHealth: true` | `ServiceHealth.Read.All` for both stable overviews and issues |
-| Exchange `serviceActivity.enabled: true` | `ServiceActivity-Exchange.Read.All` |
-| Teams `serviceActivity.enabled: true` | `ServiceActivity-Teams.Read.All` |
-
-Managed identities do not have a normal app-registration API-permissions page. An authorized Entra administrator assigns the Graph app role to the existing enterprise service principal. For Microsoft Graph application roles, use an administrator with **Privileged Role Administrator** or another appropriately authorized role; subscription ownership alone is insufficient.
-
-For example, this PowerShell setup grants **only stable Service Health**. It requires the Microsoft Graph PowerShell Applications module and administrator-approved delegated scopes. The setup scopes belong to the administrator's session, **not the worker**. Replace the three handoff placeholders, review existing grants, and run only after approval:
-
-```powershell
-$ErrorActionPreference = "Stop"
-$tenantId = "<approved tenantId>"
-$clientId = "<managed identity clientId>"
-$principalId = "<managed identity principalId>"
-
-Connect-MgGraph -TenantId $tenantId -ContextScope Process `
-    -Scopes "Application.Read.All", "AppRoleAssignment.ReadWrite.All"
-
-$identity = Get-MgServicePrincipal -ServicePrincipalId $principalId
-if ($identity.AppId -ne $clientId) { throw "Identity clientId/principalId mismatch." }
-
-$graph = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
-$role = @($graph.AppRoles | Where-Object {
-    $_.Value -eq "ServiceHealth.Read.All" -and $_.IsEnabled -and
-    $_.AllowedMemberTypes -contains "Application"
-})
-if ($role.Count -ne 1) { throw "Required Graph application role is unavailable." }
-
-$existing = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $principalId -All |
-    Where-Object { $_.ResourceId -eq $graph.Id -and $_.AppRoleId -eq $role[0].Id }
-if (-not $existing) {
-    New-MgServicePrincipalAppRoleAssignedTo -ServicePrincipalId $graph.Id `
-        -PrincipalId $principalId -ResourceId $graph.Id -AppRoleId $role[0].Id
-}
-Disconnect-MgGraph
-```
-
-See Microsoft's [app-role assignment authorization requirements](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignments?view=graph-rest-1.0). The full [permission handoff](../MAILBOX-SYNTHETIC-ACCESS.md#optional-microsoft-reported-provider-data) explains the separation from mailbox roles.
-
-Keep beta disabled for production. Experimental use requires confirmed tenant availability, its additional permission, `serviceActivity.enabled: true`, and **`ENABLE_BETA_SERVICE_ACTIVITY=true`**. These reports remain log-only diagnostics and never drive journey/Experience health. SharePoint beta is not supported by this implementation.
-
-### 5. Configure the worker, not the administrator's login
-
-Copy the live settings example for [Exchange](./exchange/config.live.example.json), [Teams](./teams/config.live.example.json), or [SharePoint](./sharepoint/config.live.example.json) to an approved private runtime-config location. Select that file in a private root config, replace **root** targets and `healthModel.subscriptionId`/resource group/name, and choose the intended cadence. These files contain no targets or enablement; those belong only at the root. Live execution still requires root selection and `ENABLE_LIVE_M365=true` after approval. For example, an Exchange service file is:
-
-```json
-{
-  "type": "exchange",
-  "intervalSeconds": 60,
-  "timeoutSeconds": 45,
-  "mode": "live",
-  "graphAuthentication": "managed-identity",
-  "cohort": "exchange-global",
-  "serviceHealth": true,
-  "serviceActivity": { "enabled": false }
-}
-```
-
-Set these in the hosted worker's environment; keep secrets out of JSON and source control:
-
-| Setting | Value |
-| --- | --- |
-| `AZURE_CLIENT_ID` | Attached user-assigned identity's client ID |
-| `AZURE_TENANT_ID` | Azure hosting tenant ID |
-| Certificate Graph `M365_*` settings | M365 tenant/client ID and securely mounted PEM path; see the cross-tenant guide |
-| `ENABLE_LIVE_M365` | Exactly `true`, only after authorization |
-| Teams delegated `TEAMS_PUBLIC_CLIENT_ID`, `TEAMS_CACHE_ACCOUNT_URL` | Public-client/storage access metadata; Bicep also supplies fixed `TEAMS_CACHE_CONTAINER` / `TEAMS_CACHE_BLOB`; account is root-owned |
-| Teams bot `BOT_TENANT_ID`, `BOT_CLIENT_ID` | Default bot mode: hosted metadata from the attached UAMI; only explicit `botAuthentication: "certificate"` needs a mounted `BOT_CLIENT_CERTIFICATE_PATH` |
-
-Same-tenant Graph defaults to the explicitly selected managed identity. Teams bot
-readback can instead use service `teamsReadbackClientId`: a separate Entra
-registration with team-scoped RSC trusts the worker UAMI through federation.
-Bot Connector, calling, provider collection and ARM reporting retain their
-independent identities. Follow the [bot identity mapping](./teams/README.md#primary-setup-unattended-bot).
-Neither mode falls back to developer login, a system identity, secrets or certificates.
-`healthReportAuthentication` independently obtains an ARM-audience token and
-requires ingestion permission on its own **service model**. Cross-tenant Graph
-uses explicit `certificate` mode and `M365_*`; it does not change Azure reporting.
-
-**Local live development:** a normal laptop does not expose the Container Apps managed-identity endpoint. Explicitly choose `graphAuthentication: "certificate"` and provide the M365 application's `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`. Independently choose `healthReportAuthentication: "certificate"` with an Azure-authorized report application's `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_CERTIFICATE_PATH`. Upload the corresponding public certificates, keep private PEMs secure, and authorize each service principal only for its purpose. Hosted identity grants do not transfer to them. **Migration:** move old Graph certificate metadata from `AZURE_*` to `M365_*`; no legacy fallback occurs. `az login` alone does not authenticate these workers.
-
-### 6. Prove one cycle before enabling recurrence
-
-1. Run the checked-in simulation commands first; these make no Microsoft 365 calls and require no credentials.
-2. Complete allowed/denied access checks. From the approved host, invoke a single live cycle using its private config:
-
-   ```sh
-   npm run exchange -- --project-config /absolute/path/to/approved/monitoring.config.json --once
-   # Or in a built container, with the config mounted at the approved path:
-   node dist/exchange/src/worker.js --project-config /etc/probe/monitoring.config.json --config /etc/probe/exchange.json --once
-   ```
-
-3. Inspect every journey/step result and cleanup outcome. A completed process is not proof of a successful journey. Check explicit provider diagnostics if collection is enabled.
-4. Verify separate journey/step external reports and propagation through service/root models, plus suppressed provider status. Check separately that issues/beta diagnostics and internal token/cleanup operations never become business-step measurements.
-5. Only then run without `--once`. Review the [operations acceptance gates](../docs/operations.md), independent missing-results/worker alerts, and end-to-end notification tests before calling this production-ready.
-
-## Wiring and readiness
-
-| Surface | Current state |
-| --- | --- |
-| Exchange, Teams, OneDrive journeys and named steps | Twelve selected journeys, safe simulation defaults and mocked-Graph tests; legacy SharePoint handlers remain disabled. OneDrive supports selected-folder roundtrip, app-folder persistence and real prior-version retrieval; see dated deployment evidence for live verification. Target catalogs remain broader than implementation. |
-| Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
-| Root model of service models and journey/step entities | Checked-in selection: five models, 171 entities, 166 relationships; twelve active and 20 planned journey roots, 113 business steps. External Reports always for active nodes, OTEL optional; planned coverage stays Unknown/suppressed without reports. See [catalog](../health-model/README.md#catalog-versus-modeled-and-live-coverage). |
-| Stable provider context / beta diagnostics | Independent 300-second provider lanes; direct suppressed status/threshold reports, counts diagnostic absent thresholds, issues diagnostic. Beta currently 403; failed/missing data stays Unknown, never synthetic success samples. See [provider evidence](../docs/provider-monitoring.md). |
-| Worker hosting and packaging | Separate Container Apps reuse one immutable image; see the dated [live baseline](../docs/deployment.md#deployment-status-and-order) rather than treating sample settings as deployed state |
-| Tenant authorization and runtime settings | Mailbox-scoped Exchange and team-scoped Teams readback verified in the baseline; each new deployment must validate its own allowed/denied grants, targets and ingestion |
-| Production operations | Independent stalled-worker/broken-publication detection, end-to-end notifications and OTEL cloud ingestion remain acceptance gates |
-
-The [deployment status](../docs/deployment.md#deployment-status-and-order) distinguishes
-successful live evidence, incomplete setup and unverified production gates. Do not
-infer tenant-wide availability, employee UI success or alert delivery from API tests.
-
-## Components
-
-| Folder | Responsibility |
-| --- | --- |
-| [health-model/](../health-model/) | Independently deployed topology and external report signals |
-| [exchange/](./exchange/) | Exchange worker, config, journeys/actions and tests |
-| [teams/](./teams/) | Teams worker, config, journeys/actions and tests |
-| [onedrive/](./onedrive/README.md) | OneDrive worker, selected-folder/app-folder/version journeys, independent lanes and tests |
-| [sharepoint/](./sharepoint/) | SharePoint worker, config, journeys/actions and tests |
-| [utils/](./utils/README.md) | Shared root/service config, clients, measured steps, execution/scheduling, aggregation/health reports and console diagnostics |
-| [package.json](./package.json), [package-lock.json](./package-lock.json) | npm scripts and pinned dependency graph for this project |
-| [tsconfig.json](./tsconfig.json), [tsconfig.build.json](./tsconfig.build.json), [vitest.config.ts](./vitest.config.ts) | Typechecking, production build and unit-test discovery |
-
-Installed dependencies and generated output live in this project's ignored `node_modules/`, `dist/`, and `coverage/` directories. There is no repository-root npm package or workspace wrapper.
-
-## Validate
+From this directory:
 
 ```sh
-npm run typecheck
 npm test
+npm run typecheck
 npm run build
-node dist/exchange/src/worker.js --once
-node dist/teams/src/worker.js --once
-node dist/onedrive/src/worker.js --once
 ```
 
-This npm package builds all four service entries into `dist/`; tests are excluded from production output. See [shared worker configuration](./utils/README.md), [operations](../docs/operations.md), and [deployment boundaries](../docs/deployment.md). Direct health reporting is required for live execution.
+From the repository root:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s health-model/tests -v
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s synthetic-tests/infra/tests -v
+```
+
+The Docker build context is this directory. The runtime image contains only
+compiled code and production dependencies; mount the approved root/service
+configuration at deployment. [Hosting details](./infra/README.md).

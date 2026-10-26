@@ -3,7 +3,6 @@
   "include": [
     "exchange/src/**/*.ts",
     "teams/src/**/*.ts",
-    "sharepoint/src/**/*.ts",
     "onedrive/src/**/*.ts",
     "utils/src/**/*.ts"
   ]

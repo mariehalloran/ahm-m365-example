@@ -13,33 +13,31 @@ describe("shared probe boundaries", () => {
     ["failed", false, 3200, "send-failure"],
     ["timeout", false, 65000, "delivery-timeout"],
     ["stale", true, 3200, null],
-  ] as const)("preserves deterministic %s outcomes for both services", async (scenario, success, durationMs, diagnosticCategory) => {
+  ] as const)("preserves deterministic %s outcomes for retained services", async (scenario, success, durationMs, diagnosticCategory) => {
     const config = loadConfig({ SYNTHETIC_SCENARIO: scenario });
-    for (const type of ["exchange-mail-flow", "sharepoint-file", "teams-channel-message"] as const) {
+    for (const type of ["exchange-mail-flow", "onedrive-roundtrip", "teams-channel-message"] as const) {
       const probe: Probe = { id: "simulated-probe", type, cohort: "simulated-cohort" };
       const result = resultSchema.parse(await simulate(probe, { config, telemetry, now: () => now, signal: AbortSignal.timeout(1000) }));
       expect(result).toMatchObject({
         testType: type, success, durationMs,
-        diagnosticCategory: type === "sharepoint-file" && scenario === "failed" ? "read-failure" : diagnosticCategory,
+        diagnosticCategory: type === "onedrive-roundtrip" && scenario === "failed" ? "read-failure" : diagnosticCategory,
         diagnosticContext: { testStage: "simulated" },
       });
       expect(Date.parse(result.observedAt) < now).toBe(scenario === "stale");
       expect(result).not.toHaveProperty("expiresAt");
       expect(result.deliveryDurationMs !== undefined).toBe(type === "exchange-mail-flow" && success);
-      expect(result.sendDurationMs !== undefined).toBe(type !== "sharepoint-file");
+      expect(result.sendDurationMs !== undefined).toBe(type !== "onedrive-roundtrip");
       expect(result.publicationDurationMs !== undefined).toBe(type === "teams-channel-message" && success);
-      expect(result.uploadDurationMs !== undefined).toBe(type === "sharepoint-file");
-      expect(result.readDurationMs !== undefined).toBe(type === "sharepoint-file");
       expect(result.steps.map(step => step.name)).toEqual(probeServices[type].steps);
       expect(result.steps.every(step => step.observedAt === result.observedAt)).toBe(true);
       expect(result.steps.at(-1)?.status).toBe("succeeded");
       const failed = result.steps.filter(step => step.status === "failed");
       expect(failed).toHaveLength(success ? 0 : 1);
       if (scenario === "failed") {
-        expect(failed[0]?.name).toBe(type === "exchange-mail-flow" ? "send" : type === "teams-channel-message" ? "post-message" : "read-file");
+        expect(failed[0]?.name).toBe(type === "exchange-mail-flow" ? "send" : type === "teams-channel-message" ? "post-message" : "verify-file-hash");
       }
       if (scenario === "timeout") {
-        expect(failed[0]?.name).toBe(type === "exchange-mail-flow" ? "confirm-delivery" : type === "teams-channel-message" ? "confirm-publication" : "read-file");
+        expect(failed[0]?.name).toBe(type === "exchange-mail-flow" ? "confirm-delivery" : type === "teams-channel-message" ? "confirm-reply" : "verify-file-hash");
       }
     }
   });
@@ -67,11 +65,11 @@ describe("shared probe boundaries", () => {
     expect(resultSchema.safeParse({ ...sample, sendDurationMs: 1001 }).success).toBe(false);
     expect(resultSchema.safeParse({ ...sample, sendDurationMs: 501, deliveryDurationMs: 500 }).success).toBe(false);
     expect(resultSchema.safeParse({
-      ...sample, testType: "sharepoint-file", targetService: "SharePoint Online", sendDurationMs: 100,
+      ...sample, testType: "onedrive-roundtrip", targetService: "OneDrive for Business", sendDurationMs: 100,
     }).success).toBe(false);
     expect(resultSchema.safeParse({ ...sample, sendDurationMs: 250 }).success).toBe(true);
   });
-  it("keeps publication and file phase timings attached only to their own services", () => {
+  it("keeps publication timings attached only to the messaging service and rejects removed phase fields", () => {
     const teams = {
       ...baseResult({ id: "teams-001", type: "teams-channel-message", cohort: "teams-global" }, now),
       success: true, durationMs: 1000, sendDurationMs: 200, publicationDurationMs: 700,
@@ -80,12 +78,12 @@ describe("shared probe boundaries", () => {
     expect(resultSchema.safeParse({ ...teams, publicationDurationMs: 1001 }).success).toBe(false);
     expect(resultSchema.safeParse({ ...teams, success: false, diagnosticCategory: "read-failure" }).success).toBe(false);
     expect(resultSchema.safeParse({ ...teams, uploadDurationMs: 100 }).success).toBe(false);
-    const sharepoint = {
-      ...baseResult({ id: "sp-001", type: "sharepoint-file", cohort: "sharepoint-global" }, now),
-      success: true, durationMs: 1000, uploadDurationMs: 100, readDurationMs: 200,
+    const onedrive = {
+      ...baseResult({ id: "od-001", type: "onedrive-roundtrip", cohort: "onedrive-global" }, now),
+      success: true, durationMs: 1000,
     };
-    expect(resultSchema.safeParse(sharepoint).success).toBe(true);
-    expect(resultSchema.safeParse({ ...sharepoint, readDurationMs: 1001 }).success).toBe(false);
-    expect(resultSchema.safeParse({ ...sharepoint, publicationDurationMs: 100 }).success).toBe(false);
+    expect(resultSchema.safeParse(onedrive).success).toBe(true);
+    expect(resultSchema.safeParse({ ...onedrive, readDurationMs: 100 }).success).toBe(false);
+    expect(resultSchema.safeParse({ ...onedrive, publicationDurationMs: 100 }).success).toBe(false);
   });
 });

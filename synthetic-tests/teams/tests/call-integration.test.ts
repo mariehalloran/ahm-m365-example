@@ -42,30 +42,26 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     expect(success("teams-call-play-audio")).toMatchObject({ healthState: "Unknown" });
     expect(success("teams-call-end-call")).toMatchObject({ healthState: "Healthy", value: 100 });
   });
-  it("keeps one channel and one dedicated meeting without channel metadata on calls", () => {
+  it("keeps one channel-based journey and one dedicated meeting without channel metadata on calls", () => {
     const probes = serviceProbes(service, project.services.teams.scenarios);
     expect(probes.filter(probe => probe.type === "teams-channel-message")).toHaveLength(1);
-    expect(probes.filter(probe => probe.type === "teams-channel-reply")).toHaveLength(1);
     const calls = probes.filter(probe => probe.type === "teams-call");
     expect(calls).toHaveLength(1);
     expect(calls.map(probe => probe.meetingThreadId)).toEqual(project.services.teams.callTargets.map(target => target.meetingThreadId));
     expect(calls.every(probe => !probe.teamId && !probe.channelId && !probe.serviceUrl && !probe.userPrincipalName)).toBe(true);
   });
 
-  it("recurs immediately on the ordinary schedule without an approval gate and keeps messaging", async () => {
+  it("starts the shared Teams lane immediately with both selected journeys", async () => {
     const controller = new AbortController();
     const execute = vi.fn(runCycle);
-    let sleeps = 0;
     await runServiceWorker(service, {
       project, signal: controller.signal, env: {}, telemetry: { emit: vi.fn() }, execute,
-      sleep: async () => { if (++sleeps === 2) controller.abort(); },
+      sleep: async () => { controller.abort(); },
     });
-    expect(execute).toHaveBeenCalledTimes(2);
-    for (const [config] of execute.mock.calls) {
-      expect(config.probes.map(probe => probe.type)).toEqual([
-        "teams-channel-message", "teams-channel-reply", "teams-call",
-      ]);
-    }
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls.map(([config]) => config.probes.map(probe => probe.type))).toEqual([
+      ["teams-channel-message", "teams-call"],
+    ]);
   });
 
   it("runs each selected account once in a single cycle without real requests in simulation", async () => {
@@ -77,10 +73,10 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     expect(network).not.toHaveBeenCalled();
     expect(cycle.results.filter(result => result.testType === "teams-call")).toHaveLength(1);
     expect(new Set(cycle.results.filter(result => result.testType === "teams-call").map(result => result.testId)).size).toBe(1);
-    expect(results.record).toHaveBeenCalledTimes(3);
+    expect(results.record).toHaveBeenCalledTimes(2);
   });
 
-  it("aggregates binary user attempts and executed actions into five shared call entities", async () => {
+  it("aggregates binary user attempts and executed actions into seven shared call entities", async () => {
     const config = serviceSettings(service, {}, project.services.teams.scenarios);
     const seed = config.probes.find(probe => probe.type === "teams-call")!;
     const probes = Array.from({ length: 3 }, (_, index) => ({ ...seed, id: `meeting-${index}`,
@@ -92,9 +88,10 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     const failed = baseResult(probes[2]!, Date.now());
     failed.diagnosticCategory = "authentication-failure";
     const reports = aggregateHealthReports("teams", { cycleId: "test-cycle", results: [...successes, failed] }, project.healthModel);
-    expect(reports).toHaveLength(18);
+    expect(reports).toHaveLength(20);
     expect(new Set(reports.map(report => report.entityName))).toEqual(new Set([
-      "teams-call", "teams-call-place-call", "teams-call-wait-for-answer", "teams-call-verify-participants", "teams-call-play-audio", "teams-call-end-call",
+      "teams-call", "teams-call-place-call", "teams-call-wait-for-answer", "teams-call-verify-meeting-metadata",
+      "teams-call-verify-participants", "teams-call-play-audio", "teams-call-end-call",
     ]));
     expect(reports.find(report => report.entityName === "teams-call" && report.body.signalName === "synthetic-success-percentage")?.body.value)
       .toBeCloseTo(200 / 3);
@@ -119,8 +116,8 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
   });
 
   it("disables calls independently without disabling or multiplying messaging", () => {
-    const probes = serviceProbes(service, { ...project.services.teams.scenarios, "call-test-user": false });
-    expect(probes.map(probe => probe.type)).toEqual(["teams-channel-message", "teams-channel-reply"]);
+    const probes = serviceProbes(service, { ...project.services.teams.scenarios, "scheduled-meeting": false });
+    expect(probes.map(probe => probe.type)).toEqual(["teams-channel-message"]);
   });
   it("executes every selected dedicated meeting once, retaining only aggregate sample counts", async () => {
     const selected = parseProjectConfig({ ...project, services: { ...project.services, teams: {
@@ -129,14 +126,15 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
       })),
     } } });
     const configured = { ...service, callTargets: selected.services.teams.callTargets };
-    const cycle = await runCycle(serviceSettings(configured, {}, { "call-test-user": true }), {
+    const cycle = await runCycle(serviceSettings(configured, {}, { "scheduled-meeting": true }), {
       results: { record: vi.fn(), recordDiagnostic: vi.fn() }, telemetry: { emit: vi.fn() },
     });
     expect(cycle.results.map(result => result.testId)).toEqual(["meeting-0", "meeting-1", "meeting-2", "meeting-3"]);
     const reports = aggregateHealthReports("teams", cycle, project.healthModel);
     expect(reports.find(report => report.entityName === "teams-call" &&
       report.body.signalName === "synthetic-success-percentage")?.body.value).toBe(100);
-    expect(JSON.stringify(reports)).not.toContain("meeting-");
+    // Target-ID leakage check; distinct from the legitimate "verify-meeting-*" step/entity vocabulary.
+    expect(JSON.stringify(reports)).not.toMatch(/meeting-\d/);
   });
   it.each([
     { BOT_CLIENT_ID: undefined },
@@ -151,7 +149,7 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
       TEAMS_CALLING_PLAYBACK_ENABLED: "true", TEAMS_CALLING_CALLBACK_URL: "https://approved.example.invalid/api/calls",
       BOT_CLIENT_ID: "66666666-6666-4666-8666-666666666666", TEAMS_CALLING_PEER_CLIENT_ID: call.peerBotClientId,
       ...overrides,
-    })).toThrow("two distinct explicit managed identities");
+    })).toThrow("BOT_AUTHENTICATION" in overrides ? "BOT_AUTHENTICATION" : "two distinct explicit managed identities");
   });
   it("rejects obsolete human call targets with migration guidance", () => {
     expect(() => loadConfig({ PROBES_JSON: JSON.stringify([{

@@ -1,6 +1,6 @@
 import type { TokenCredential } from "@azure/identity";
 import { createHealthReportCredential } from "./auth.js";
-import { isReportedStep, oneDriveStepEntities, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { isReportedStep, journeyStepEntities, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type StepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
@@ -117,10 +117,10 @@ function collectEntitySamples(service: ServiceConfig["type"], results: Synthetic
         })),
         skipped: 0,
       },
-      ...journey.steps.filter(isReportedStep).map(name => {
+      ...(journey.steps as readonly StepName[]).filter(isReportedStep).map(name => {
         const samples = collectActionSamples(name, journeyResults);
         return {
-          entityName: `${journey.entityName}-${oneDriveStepEntities[testType]?.[name] ?? name}`, samples,
+          entityName: `${journey.entityName}-${journeyStepEntities[testType]?.[name] ?? name}`, samples,
           skipped: journeyResults.length - samples.length,
         };
       }),
@@ -319,7 +319,7 @@ export function serviceActivityReports(
       unhealthyRule: { operator: "LessThan", threshold: thresholds.unhealthyBelow },
     } : undefined;
     return {
-      entityName: `${service.type}-service-health-${functionName}`,
+      entityName: `${service.type}-service-health`,
       body: {
         signalName: `microsoft-activity-${functionName}` as const, expiresInMinutes: ttlMinutes,
         healthState: value === undefined || !rules ? "Unknown" : evaluateHealthState(value, rules),
@@ -358,7 +358,7 @@ export function serviceHealthReport(
   const value = failures.length || skipped || stale || invalid || !scores.length || knownScores.length !== scores.length
     ? undefined : Math.min(...knownScores);
   return {
-    entityName: `${service}-service-health-health-overviews`,
+    entityName: `${service}-service-health`,
     body: {
       signalName: "microsoft-reported-service-status", expiresInMinutes: ttlMinutes,
       healthState: value === undefined ? "Unknown" : value === 100 ? "Healthy" : value === 0 ? "Unhealthy" : "Degraded",
@@ -391,7 +391,7 @@ export function serviceHealthIssuesReport(
     now - Date.parse(summary.collectedAt) > maxAgeMinutes * 60000);
   const value = summaries.length !== 1 || failed || invalid || stale ? undefined : summary?.count;
   return {
-    entityName: `${service}-service-health-issues`,
+    entityName: `${service}-service-health`,
     body: {
       signalName: "microsoft-reported-issue-count", healthState: "Unknown", expiresInMinutes: ttlMinutes,
       ...(value === undefined ? {} : { value }),

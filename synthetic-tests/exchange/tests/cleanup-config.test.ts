@@ -49,9 +49,9 @@ describe("Exchange service-config cleanup selection", () => {
       }));
     }
   });
-  it("does not disable Teams or SharePoint cleanup", async () => {
+  it("does not disable Teams or OneDrive cleanup", async () => {
     const config = serviceSettings(parseServiceConfig({ ...file, enabled: true, targets, exchangeCleanupEnabled: false }));
-    for (const type of ["teams-channel-message", "sharepoint-file"] as const) {
+    for (const type of ["teams-channel-message", "onedrive-roundtrip"] as const) {
       const telemetry = { emit: vi.fn() };
       const result = resultSchema.parse(await simulate({ id: "other-001", type, cohort: "other-global" }, {
         config, signal: new AbortController().signal, telemetry,

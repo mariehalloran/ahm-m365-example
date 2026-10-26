@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { probeServices, type Probe, type Scenario, type StepName, type SyntheticResult, type Telemetry, type TestType } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
-import type { TeamsJourneyClient } from "./teams.js";
+import type { TeamsBotClient } from "./teams.js";
 import { IntegrationError } from "./http.js";
 import type { TeamsCallOperations } from "./teams-call-operations.js";
 
@@ -21,7 +21,7 @@ export interface ProbeContext {
   };
   signal: AbortSignal;
   graph?: GraphClient;
-  teamsBot?: TeamsJourneyClient;
+  teamsBot?: TeamsBotClient;
   teamsCalling?: GraphClient;
   teamsCallingPeer?: GraphClient;
   teamsCallOperations?: TeamsCallOperations;
@@ -66,7 +66,7 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
   result.durationMs = scenario === "slow" ? 30000 : scenario === "timeout" ? 65000 : 3200;
   result.diagnosticCategory = scenario === "failed"
-    ? ["sharepoint", "onedrive"].includes(metadata.service) || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
+    ? metadata.service === "onedrive" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
     : scenario === "timeout" ? "delivery-timeout" : null;
   result.diagnosticContext.testStage = "simulated";
   if (!retainArtifacts) result.diagnosticContext.cleanupSucceeded = true;
@@ -77,24 +77,20 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
     "exchange-mail-flow": "send", "exchange-draft": "update-draft",
     "exchange-attachment-reply": "send-attachment", "exchange-distribution-list": "send-group-mail",
     "exchange-recurring-calendar": "update-event", "exchange-meeting": "accept-meeting",
-    "teams-channel-message": "post-message", "teams-channel-reply": "post-reply",
-    "teams-call": "place-call",
-    "sharepoint-file": "read-file", "sharepoint-rename": "rename-file",
+    "teams-channel-message": "post-message", "teams-call": "place-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
     "exchange-attachment-reply": "confirm-reply-mail", "exchange-distribution-list": "confirm-group-delivery",
     "exchange-recurring-calendar": "verify-event", "exchange-meeting": "confirm-acceptance",
-    "teams-channel-message": "confirm-publication", "teams-channel-reply": "confirm-reply",
-    "teams-call": "play-audio",
-    "sharepoint-file": "read-file", "sharepoint-rename": "read-file",
+    "teams-channel-message": "confirm-reply", "teams-call": "end-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
   const failedStep = scenario === "failed" ? failureSteps[probe.type]
     : scenario === "timeout" ? completionSteps[probe.type] : undefined;
   const longStep = failedStep ?? completionSteps[probe.type];
-  const baseline = (name: StepName) => ["authenticate", "cleanup", "verify-drive"].includes(name) ? 100 : 200;
+  const baseline = (name: StepName) => ["authenticate", "cleanup"].includes(name) ? 100 : 200;
   const fixedDuration = orderedSteps.reduce((sum, name) =>
     sum + (name === longStep || (["cleanup", "delete-draft"].includes(name) && retainArtifacts) ||
       (failedStep && name !== "cleanup" && orderedSteps.indexOf(name) > orderedSteps.indexOf(failedStep)) ? 0 : baseline(name)), 0);
@@ -125,8 +121,8 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
     if (submitted === undefined || confirmed === undefined) throw new IntegrationError("malformed-response");
     return submitted + confirmed;
   };
-  const sendStep = metadata.service === "teams" && probe.type !== "teams-call"
-    ? probe.type === "teams-channel-reply" ? "post-reply" : "post-message"
+  const sendStep = probe.type === "teams-channel-message"
+    ? "post-message"
     : probe.type === "exchange-mail-flow" ? "send" : undefined;
   if (sendStep) {
     const measured = stepDuration(sendStep);
@@ -136,13 +132,7 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
     result.deliveryDurationMs = confirmedDuration("send", "confirm-delivery");
   }
   if (metadata.service === "teams" && result.success && sendStep) {
-    result.publicationDurationMs = confirmedDuration(sendStep, completionSteps[probe.type]);
-  }
-  if (metadata.service === "sharepoint") {
-    const upload = stepDuration("upload-file");
-    const read = stepDuration("read-file");
-    if (upload !== undefined) result.uploadDurationMs = upload;
-    if (read !== undefined) result.readDurationMs = read;
+    result.publicationDurationMs = confirmedDuration(sendStep, "confirm-publication");
   }
   return result;
 };

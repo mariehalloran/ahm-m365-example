@@ -42,7 +42,7 @@ export const exchangeProbe: ProbeHandler = async (probe, context) => {
       result,
       "authenticate",
       async () => {
-        if (!probe.mailbox) throw new IntegrationError("collector-failure");
+        if (!probe.mailbox) throw new IntegrationError("configuration-failure");
         return authenticate(context.graph, signal);
       },
       now,

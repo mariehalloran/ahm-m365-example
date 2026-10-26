@@ -2,7 +2,7 @@ import { z } from "zod";
 import { categories } from "./contracts.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 
-export const providerServices = ["exchange", "teams", "sharepoint"] as const;
+export const providerServices = ["exchange", "teams", "onedrive"] as const;
 export const providerSources = [
   "serviceAnnouncement.healthOverviews", "serviceAnnouncement.issues",
   ...activityFunctionNames,

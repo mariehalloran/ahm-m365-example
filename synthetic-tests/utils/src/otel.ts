@@ -37,8 +37,6 @@ export function resultAttributes(result: SyntheticResult, mode: ExecutionMode): 
     ...(result.sendDurationMs === undefined ? {} : { "probe.send_duration_ms": result.sendDurationMs }),
     ...(result.deliveryDurationMs === undefined ? {} : { "probe.delivery_duration_ms": result.deliveryDurationMs }),
     ...(result.publicationDurationMs === undefined ? {} : { "probe.publication_duration_ms": result.publicationDurationMs }),
-    ...(result.uploadDurationMs === undefined ? {} : { "probe.upload_duration_ms": result.uploadDurationMs }),
-    ...(result.readDurationMs === undefined ? {} : { "probe.read_duration_ms": result.readDurationMs }),
   };
 }
 
@@ -142,8 +140,6 @@ export function createResultTelemetry(
     sendDurationMs: meter.createHistogram("synthetic.send.duration", { unit: "s" }),
     deliveryDurationMs: meter.createHistogram("mailflow.delivery.duration", { unit: "s" }),
     publicationDurationMs: meter.createHistogram("teams.message.publication.duration", { unit: "s" }),
-    uploadDurationMs: meter.createHistogram("sharepoint.file.upload.duration", { unit: "s" }),
-    readDurationMs: meter.createHistogram("sharepoint.file.read.duration", { unit: "s" }),
   };
   const callPhases = [
     { name: "connection", step: "wait-for-answer" },
@@ -178,7 +174,7 @@ export function createResultTelemetry(
       if (closed) throw new TelemetryExportError();
       for (const measurement of callQualityMeasurements(cycle)) {
         if (measurement.value !== undefined) qualityInstruments[measurement.metric]!.record(measurement.value, {
-          "probe.service": "teams", "probe.journey": "call-test-user", "probe.mode": "live",
+          "probe.service": "teams", "probe.journey": "scheduled-meeting", "probe.mode": "live",
           "quality.complete": measurement.complete,
         });
       }

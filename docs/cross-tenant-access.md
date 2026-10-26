@@ -3,25 +3,26 @@
 ## Recommended: deploy in the customer's tenant
 
 1. Use a customer-approved Azure subscription **associated with the same Entra tenant as Microsoft 365**. The subscription owner's email does not determine its tenant. Use the organization's approved subscription provisioning and billing process.
-2. Create dedicated test mailboxes, a SharePoint site/library/folder, and a Teams team/standard channel. Existing licensed user mailboxes work; shared mailboxes are optional and do not simplify application authentication. Confirm licenses, ownership, cadence and cleanup limits.
+2. Approve dedicated test mailboxes, a Teams team/standard channel and bot-only meeting, and provisioned OneDrive accounts with dedicated test folders. Existing licensed mailboxes work; shared mailboxes are optional and do not simplify application authentication. Confirm ownership, cadence and cleanup limits.
 3. Create a private [root configuration](../monitoring.config.json) with approved targets and Azure model destination. Keep both `graphAuthentication` and `healthReportAuthentication` set to `managed-identity` in the service files.
 4. Deploy the [health models](../health-model/README.md#apply-and-migrate), then the [worker foundation](../synthetic-tests/infra/README.md#provision-and-publish), leaving workers disabled. It creates a separate user-assigned managed identity per service.
 5. Have the customer's administrators grant:
 
    | Service | Required access |
    | --- | --- |
-   | Exchange | Mailbox-scoped `Application Mail.ReadWrite` and `Application Mail.Send` through [Exchange application RBAC](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), **not tenant-wide Graph mail permissions** |
-   | SharePoint | Graph `Sites.Selected`, admin consent and an explicit `write` grant on the [dedicated site](../synthetic-tests/sharepoint/README.md#authentication-and-permissions) |
-   | Teams | [Managed-identity bot](../synthetic-tests/teams/README.md#primary-setup-unattended-bot), installed Teams app and separate Entra readback registration with team-scoped RSC and worker-UAMI federation; delegated coverage is opt-in |
+   | Exchange | Mailbox-scoped `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` through [Exchange application RBAC](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), **not tenant-wide Graph mail/calendar permissions** |
+   | Teams | [Managed-identity bots](../synthetic-tests/teams/README.md#primary-setup-unattended-bot), installed Teams app and separate Entra readback registration with team-scoped RSC and worker-UAMI federation; meeting access requires separate application-permission approval |
+   | OneDrive | [Selected folder write grants and AppFolder](../synthetic-tests/onedrive/README.md#primary-setup), with real approved drive/folder IDs; no broad file-permission fallback |
+   | Provider context | Optional `ServiceHealth.Read.All` and provider-app federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
    | Health reports | The foundation grants each Azure identity ingest-only access on its own service model |
 
 6. Enable live execution only after allowed/denied access checks. Follow the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish), verify real journeys and cleanup, then fresh reports and service/root rollup.
 
-**Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Default Teams bot mode uses `teamsAuthentication: "bot"` and independent `botAuthentication: "managed-identity"`; hosted `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the attached UAMI for Bot Connector. Graph read permissions alone do not authorize posting: approve and install the matching bot. No user bootstrap/cache is needed. Optional delegated mode requires [human bootstrap](./teams-user-bootstrap.md), may require reauthentication/MFA and may be blocked by Conditional Access. Provider Graph credentials remain application-only. Enable optional `ServiceHealth.Read.All` application-provider consent only if approved.
+**Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Teams uses only `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`; hosted `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the attached UAMI for Bot Connector, with a second explicitly selected UAMI for meetings. Graph read permissions alone do not authorize posting: approve and install the matching bot. No delegated-user sign-in, bootstrap or token cache exists. Provider credentials remain application-only and separate from synthetic access.
 
 ## Temporary cross-tenant lab: reuse existing Azure hosting
 
-Use this only with approval from both hosting and M365 tenant owners. No Azure subscription is needed in the M365 tenant. Start with **Exchange** to prove access before adding SharePoint and Teams.
+Use this only with approval from both hosting and M365 tenant owners. No Azure subscription is needed in the M365 tenant. The explicit certificate alternative below is for **Exchange**; Teams bot participants remain managed-identity-only.
 
 Do not bypass tenant restrictions on application creation. If cross-tenant hosting
 is explicitly approved, the implemented option is **certificate authentication with
@@ -90,6 +91,10 @@ The template sets **`M365_*` for Graph** and leaves **`AZURE_*` for Azure report
 
 ### 5. Verify and extend
 
-From an approved host with the configured identity and mounts, [run one live cycle](../synthetic-tests/README.md#6-prove-one-cycle-before-enabling-recurrence) and inspect both Exchange journeys, cleanup, and fresh Azure reports. A successful deployment or token request is not a successful mailbox test. Enable recurrence only after acceptance.
+From an approved host with the configured identity and mounts, [run one live cycle](../synthetic-tests/README.md#prove-one-cycle-before-enabling-recurrence) and inspect every selected Exchange journey, cleanup, and fresh Azure reports. A successful deployment or token request is not a successful mailbox test. Enable recurrence only after allowed/denied checks and reporting are verified.
 
-Add separate SharePoint and Teams observer applications using the same steps and the permissions above. The same-tenant bot MI default does not extend to a cross-tenant lab; a separately approved installed bot can explicitly select `botAuthentication: "certificate"` and separate `BOT_*` credentials. Do not claim fully keyless cross-tenant Teams or customer production readiness from this lab. Revoke lab grants, remove the uploaded public certificate and review retained synthetic artifacts when finished.
+Use the service-specific setup guides before extending access to another workload.
+Teams readback/providers prefer approved managed-identity federation; observer
+Graph credentials do not authorize Connector posting or meeting participants.
+Revoke only owned grants/certificates and review retained synthetic artifacts
+when the certificate trial ends.

@@ -23,8 +23,8 @@ const serviceFields = {
   scenario: z.enum(scenarios).default("healthy"),
   cohort: probeSchema.shape.cohort,
   graphAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
-  teamsAuthentication: z.enum(["user-delegated", "bot"]).default("bot"),
-  botAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
+  teamsAuthentication: z.literal("bot").default("bot"),
+  botAuthentication: z.literal("managed-identity").default("managed-identity"),
   teamsReadbackClientId: z.string().uuid().optional(),
   providerClientId: z.string().uuid().optional(),
   teamsCallingCallbackUrl: teamsCallingCallbackUrlSchema.optional(),
@@ -51,7 +51,7 @@ const serviceFields = {
   serviceActivity: serviceActivitySchema.default({}),
 };
 const serviceFileSchema = z.object({
-  ...serviceFields, type: z.enum(["exchange", "sharepoint", "teams", "onedrive"]),
+  ...serviceFields, type: z.enum(["exchange", "teams", "onedrive"]),
 }).strict();
 export type ServiceFileConfig = z.infer<typeof serviceFileSchema>;
 const common = {
@@ -68,12 +68,6 @@ const serviceSchema = z.discriminatedUnion("type", [
     }).strict()).max(30),
   }).strict(),
   z.object({
-    ...common, type: z.literal("sharepoint"),
-    targets: z.array(target.extend({
-      siteId: probeSchema.shape.siteId, driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
-    }).strict()).max(30),
-  }).strict(),
-  z.object({
     ...common, type: z.literal("onedrive"),
     targets: z.array(target.extend({
       userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
@@ -85,7 +79,6 @@ const serviceSchema = z.discriminatedUnion("type", [
     ...common, type: z.literal("teams"),
     targets: z.array(target.extend({
       tenantId: probeSchema.shape.tenantId,
-      userPrincipalName: probeSchema.shape.userPrincipalName,
       teamId: probeSchema.shape.teamId,
       channelId: probeSchema.shape.channelId,
       serviceUrl: probeSchema.shape.serviceUrl,
@@ -106,8 +99,9 @@ function validateProviderSettings(service: ServiceFileConfig): void {
   if (service.teamsCallQuality.pollIntervalSeconds > service.teamsCallQuality.maxWaitSeconds) {
     throw new ConfigurationError("teamsCallQuality polling interval must not exceed its collection budget");
   }
-  if (service.type === "onedrive" && (service.serviceHealth || service.serviceActivity.enabled || service.providerClientId)) {
-    throw new ConfigurationError("OneDrive has no supported provider collector; serviceHealth and serviceActivity must remain disabled");
+  if (service.type === "onedrive" && (service.serviceActivity.enabled ||
+      service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
+    throw new ConfigurationError("OneDrive has no approved beta service activity functions");
   }
   if (service.executionLanes) {
     const names = service.executionLanes.map(lane => lane.name);
@@ -125,7 +119,7 @@ function validateProviderSettings(service: ServiceFileConfig): void {
     throw new ConfigurationError("providerClientId requires managed-identity Graph authentication");
   }
   if (service.teamsReadbackClientId !== undefined &&
-      (service.type !== "teams" || service.teamsAuthentication !== "bot" || service.graphAuthentication !== "managed-identity")) {
+      (service.type !== "teams" || service.graphAuthentication !== "managed-identity")) {
     throw new ConfigurationError("teamsReadbackClientId requires Teams bot mode with managed-identity Graph authentication");
   }
   const activity = service.serviceActivity;
@@ -135,13 +129,12 @@ function validateProviderSettings(service: ServiceFileConfig): void {
   }
   const allowed: readonly string[] = activityFunctions[service.type];
   const configuredFunctions = activity.functions ?? allowed;
-  if ((service.type === "sharepoint" && activity.enabled) ||
-      new Set(configuredFunctions).size !== configuredFunctions.length ||
+  if (new Set(configuredFunctions).size !== configuredFunctions.length ||
       configuredFunctions.some(name => !allowed.includes(name)) ||
       Object.entries(activity.thresholds).some(([name, rules]) =>
         !configuredFunctions.includes(name) || !rules || rules.unhealthyBelow > rules.degradedBelow ||
         (isPercentageActivity(name as (typeof activityFunctionNames)[number]) && rules.degradedBelow > 100))) {
-    throw new ConfigurationError("Unsupported serviceActivity function for this service; SharePoint has no supported beta collector");
+    throw new ConfigurationError("Unsupported serviceActivity function or threshold for this service");
   }
 }
 
@@ -160,12 +153,6 @@ export function parseServiceConfig(raw: unknown): ServiceConfig {
     throw new ConfigurationError(`Invalid service config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}`);
   }
   const service = parsed.data;
-  if (service.type === "teams" && service.enabled && service.mode === "live" && service.teamsAuthentication === "user-delegated") {
-    const tenants = new Set(service.targets.map(item => item.tenantId?.toLowerCase()));
-    if (tenants.size > 1) {
-      throw new ConfigurationError("Delegated Teams targets must use one tenantId");
-    }
-  }
   validateProviderSettings(service);
   if (service.enabled && service.targets.length === 0 && (service.type !== "teams" || service.callTargets.length === 0)) {
     throw new ConfigurationError("Enabled service config requires at least one target");

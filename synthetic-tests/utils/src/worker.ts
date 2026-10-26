@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { ConfigurationError, type Config } from "./config.js";
-import { consoleTelemetry, resultSchema, type Probe, type Telemetry } from "./contracts.js";
+import { consoleTelemetry, probeServices, resultSchema, type Probe, type Telemetry } from "./contracts.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, type ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
@@ -14,7 +14,6 @@ import { createResultOutput, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import type { ResultTelemetry } from "./otel.js";
 import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
-import { probeServices } from "./contracts.js";
 import { collectCycleCallQuality } from "./teams-call-quality-collection.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
@@ -28,7 +27,7 @@ export function parseWorkerArguments(args: readonly string[], defaultConfig?: st
     } else if (argument === "--project-config" && !projectConfig && args[index + 1] && !args[index + 1]!.startsWith("--")) {
       projectConfig = args[++index];
     } else if (argument === "--once" && !once) once = true;
-    else throw new ConfigurationError("Usage: npm run <exchange|teams|sharepoint|onedrive> -- [--project-config <monitoring.config.json>] [--config <service-config.json>] [--once]");
+    else throw new ConfigurationError("Usage: npm run <exchange|teams|onedrive> -- [--project-config <monitoring.config.json>] [--config <service-config.json>] [--once]");
   }
   if (!config && defaultConfig === undefined) throw new ConfigurationError("An explicit --config is required");
   return { config: config ?? defaultConfig!, once, ...(projectConfig ? { projectConfig } : {}) };
@@ -162,7 +161,7 @@ export async function collectAndReportServiceProviders(
   } catch (error) {
     errors.push(error);
     try {
-      if (service.type !== "onedrive") providerOutput.recordDiagnostic({
+      providerOutput.recordDiagnostic({
         kind: "failure", service: service.type, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
         collectedAt: new Date().toISOString(), category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
         ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),

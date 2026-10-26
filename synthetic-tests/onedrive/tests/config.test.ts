@@ -5,7 +5,6 @@ import { baseResult, simulate } from "../../utils/src/probes.js";
 import { applyProjectConfig, parseProjectConfig, readProjectConfig, readProjectService } from "../../utils/src/project-config.js";
 import { serviceRuntime } from "../../utils/src/runtime.js";
 import { parseServiceConfig, parseServiceFileConfig, readServiceConfig, serviceProbes, serviceSettings } from "../../utils/src/service-config.js";
-import { serviceHealthSources } from "../../utils/src/service-health.js";
 import { runCycle } from "../../utils/src/runner.js";
 import { runServiceWorker } from "../../utils/src/worker.js";
 import { resultSchema, testTypes } from "../../utils/src/contracts.js";
@@ -16,22 +15,18 @@ const configured = applyProjectConfig(checkedIn, file);
 const telemetry = { emit: vi.fn() };
 
 describe("OneDrive root selection and independent execution", () => {
-  it("selects three supported families for both safe sample accounts, with no SharePoint execution", () => {
+  it("selects exactly three executable journeys for both safe sample accounts", () => {
     expect(configured).toMatchObject({ enabled: true, type: "onedrive", mode: "simulation" });
-    expect(checkedIn.services.sharepoint.enabled).toBe(false);
+    expect(Object.keys(checkedIn.services)).toEqual(["exchange", "teams", "onedrive"]);
     expect(serviceProbes(configured, checkedIn.services.onedrive.scenarios)).toHaveLength(6);
     expect(configured.executionLanes).toHaveLength(3);
     expect(configured.executionLanes?.every(lane => lane.intervalSeconds === 300)).toBe(true);
     expect(file).not.toHaveProperty("targets");
     expect(file).not.toHaveProperty("enabled");
   });
-  it("leaves OneDrive disabled for original private profiles that omit it", () => {
-    const { onedrive, ...services } = checkedIn.services;
-    const migrated = parseProjectConfig({ ...checkedIn, services });
-    expect(migrated.services.onedrive).toMatchObject({ enabled: false, targets: [] });
-    expect(Object.values(migrated.services.onedrive.scenarios).some(Boolean)).toBe(false);
-    expect(applyProjectConfig(migrated, file).enabled).toBe(false);
-    expect(onedrive.enabled).toBe(true);
+  it("requires explicit service selection rather than migrating obsolete profiles silently", () => {
+    const { onedrive: _onedrive, ...services } = checkedIn.services;
+    expect(() => parseProjectConfig({ ...checkedIn, services })).toThrow("services.onedrive");
   });
   it("supports all selected accounts with missing drive IDs for real appfolder execution; no root discovery requirement", () => {
     const live = parseServiceConfig({ ...configured, mode: "live" });
@@ -51,14 +46,25 @@ describe("OneDrive root selection and independent execution", () => {
     settings.probes[0]![key] = "altered";
     await expect(serviceRuntime(configured, settings, telemetry, {})).rejects.toThrow("selected root-configured");
   });
-  it.each([
-    { serviceHealth: true }, { serviceActivity: { enabled: true } },
-    { providerClientId: "11111111-1111-4111-8111-111111111111" },
-  ])("does not silently alias an unsupported provider collector %j", extra => {
-    expect(() => parseServiceFileConfig({ ...file, ...extra })).toThrow("no supported provider collector");
-    expect(serviceHealthSources("onedrive")).toEqual([]);
+  it("allows separately approved stable Service Health through the selected provider application", () => {
+    const service = parseServiceFileConfig({
+      ...file, serviceHealth: true, providerClientId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(service).toMatchObject({
+      serviceHealth: true, providerIntervalSeconds: 300, serviceActivity: { enabled: false },
+      graphAuthentication: "managed-identity", providerClientId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(() => parseServiceFileConfig({ ...service, graphAuthentication: "certificate" }))
+      .toThrow("providerClientId requires managed-identity");
   });
-  it("reports all six settled attempts into stable existing roots and step IDs, not per-target inventories", async () => {
+  it.each([
+    { enabled: true },
+    { functions: ["getConnectivityMetricsForExchange"] },
+    { thresholds: { getConnectivityMetricsForExchange: { degradedBelow: 99, unhealthyBelow: 95 } } },
+  ])("rejects unapproved OneDrive beta activity settings %j", serviceActivity => {
+    expect(() => parseServiceFileConfig({ ...file, serviceActivity })).toThrow("no approved beta");
+  });
+  it("reports all six settled attempts into stable journey roots and step IDs, not per-target inventories", async () => {
     const output = { emit: vi.fn() };
     await runServiceWorker(configured, { project: checkedIn, once: true, telemetry: output, env: {} });
     const results = output.emit.mock.calls.filter(([name]) => name === "synthetic-result");
@@ -68,6 +74,7 @@ describe("OneDrive root selection and independent execution", () => {
     const serialized = JSON.stringify(previews);
     expect(serialized).toContain("onedrive-planned-user-drive-roundtrip-step-1");
     expect(serialized).toContain("onedrive-planned-app-folder-lifecycle-step-4");
+    expect(serialized).toContain("onedrive-planned-document-versions-step-3");
     expect(serialized).not.toContain("onedrive-probe-001");
     expect(serialized).not.toContain("serviceAnnouncement");
     expect(output.emit.mock.calls.some(([name]) => name === "health-report-published")).toBe(false);

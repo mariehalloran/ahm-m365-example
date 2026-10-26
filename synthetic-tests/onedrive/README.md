@@ -1,40 +1,31 @@
 # OneDrive API-backed synthetic journeys
 
-One independent Azure Container App runs three concurrent, stateless execution
-lanes, initially every **300 seconds**. Every selected account is attempted; one
-account's failure does not substitute for another's evidence. Journeys publish
-aggregated binary success and elapsed business-action/journey duration directly to
-their service health model. Optional root-configured OTEL stays off by default.
+One independent Container App runs exactly three real journeys for **every
+selected account**, on independent 300-second lanes. Workers keep no cross-cycle
+state/outbox; completed attempts report aggregated binary success and measured
+journey/action duration directly, with console diagnostics. Root OTEL is optional
+and disabled by default.
 
-These are real Graph file operations in `live` mode, not browser, sync-client,
-employee sign-in, recipient receipt, or cross-account access tests. Simulation is
-explicitly labeled and only previews reports.
+These tests exercise Graph, not employee sign-in, browser rendering or sync.
+Sharing/search/browser prototypes and SharePoint are not selectable.
+Source tests do not establish successful live access or ingestion; see
+[deployment evidence](../../docs/deployment.md#deployment-status-and-order).
 
 ## Primary setup
 
-1. Provision the approved test users' OneDrives. An administrator discovers each
-   account's real object/drive IDs and creates a dedicated `AHM-Synthetic-Tests`
-   folder. Record its item ID; the probe never discovers or mutates the drive root.
-2. Use the service's explicitly selected UAMI. Approve **only**
-   `Files.SelectedOperations.Selected` plus a **write** resource grant on each
-   dedicated folder, and `Files.ReadWrite.AppFolder` for the separate app-folder
-   lane. The worker does not grant its own permissions or require directory-read
-   permissions.
-3. Add the accounts and scenarios to the active private **root** configuration.
-   Select a reviewed copy of [config.live.example.json](./config.live.example.json)
-   using `configFile`; do not duplicate accounts or scenario switches there.
-4. Deploy the health model first, then the [shared worker infrastructure](../infra/README.md).
-   Hosted execution independently requires `ENABLE_LIVE_M365=true`. Verify actual
-   Graph outcomes **and ingested health reports**, not deployment success alone.
+1. Provision each approved user's OneDrive. An administrator creates the dedicated
+   `AHM-Synthetic-Tests` folder and supplies its **real drive ID and folder item ID**.
+   The probe does not discover or mutate the drive root.
+2. Select the service UAMI explicitly through `AZURE_CLIENT_ID`. Approve
+   `Files.SelectedOperations.Selected` with a **write grant on each dedicated
+   folder**, and separately `Files.ReadWrite.AppFolder` for app-folder execution.
+   The worker never grants itself access or requests broader permissions.
+3. Configure selection and account/target metadata only in the private root
+   profile. Point `configFile` at the separate live service file.
+4. Deploy the health model before the worker, set `mode: "live"` and separately
+   `ENABLE_LIVE_M365=true`; verify real operations, cleanup and accepted reports.
 
-From `synthetic-tests/`:
-
-```sh
-npm run onedrive -- --once
-npm run onedrive -- --project-config /approved/path/monitoring.private.json --once
-```
-
-Root selection example (placeholders are not live resource IDs):
+Root selection example; placeholders are not live resource IDs:
 
 ```json
 {
@@ -49,141 +40,99 @@ Root selection example (placeholders are not live resource IDs):
     "id": "onedrive-probe-001",
     "userId": "11111111-1111-4111-8111-111111111111",
     "userPrincipalName": "dedicated-onedrive@example.invalid",
-    "driveId": "<administrator-discovered-drive-id>",
-    "folderId": "<approved-dedicated-folder-item-id>",
+    "driveId": "<approved-drive-id>",
+    "folderId": "<dedicated-folder-item-id>",
     "folderName": "AHM-Synthetic-Tests",
     "restoreVersion": false
   }]
 }
 ```
 
-`driveId`/`folderId` can be omitted while provisioning is incomplete. App-folder
-resolution uses the configured user ID directly, without reading drive-root metadata.
-Selected-folder journeys still attempt authentication and report missing IDs as
-**Unhealthy configuration evidence**, never simulated success. Missing/provisioning
-OneDrives, denied scopes/grants, unavailable versions, mismatched bytes and deadlines
-also fail observably. No broader-permission or credential fallback is attempted.
-Older root profiles without `services.onedrive` remain disabled, not auto-enabled.
-The checked-in root selects both safe `.invalid` sample accounts and all three
-families in simulation; SharePoint is explicitly disabled.
+Missing selected-folder IDs/grants produce actual configuration/permission failure
+evidence, never simulated Healthy results or broad discovery. App-folder execution
+can resolve `/users/{configured-user}/drive/special/approot` without a drive ID,
+but that does not authorize the selected-folder journeys.
 
-## Implemented workflows and exact Graph v1.0 APIs
+## Journeys and exact endpoints
 
-| Scenario | Completed business workflow | APIs |
+All endpoints use `https://graph.microsoft.com/v1.0`.
+
+| Scenario → test type | Four sequential business actions | Exact operation family |
 | --- | --- | --- |
-| `user-drive-roundtrip` | Verify approved folder, create uniquely correlated nested folder/file, enumerate and download the file, compare SHA-256 of exact bytes, delete owned folder and confirm absence | `GET /drives/{drive}/items/{folder}`; `POST .../items/{folder}/children`; `PUT .../items/{owned-folder}:/{name}:/content`; `GET .../items/{owned-folder}/children`; `GET .../items/{file}/content`; `DELETE .../items/{owned-folder}`; `GET` readback must return 404 |
-| `app-folder-lifecycle` | Resolve this application's approot for the configured user, create/reopen its dedicated test subfolder, verify any previous state, write/read/update/reread state, delete only this run's scratch file | `GET /users/{user-id}/drive/special/approot`; subsequent item metadata/children/content operations under that returned app folder; `DELETE` and 404 readback only for the correlated scratch file |
-| `document-versions` | Write/read revision 1, update/read revision 2, enumerate actual history, download and hash-verify revision 1; optional `restoreVersion` writes those verified prior bytes back and rereads them | Dedicated-folder/file APIs above; `GET /drives/{drive}/items/{file}/versions`; `GET .../versions/{version}/content`; optional restore uses `PUT .../items/{owned-folder}:/{name}:/content`, **not** a claim of native restoreVersion semantics |
+| `user-drive-roundtrip` → `onedrive-roundtrip` | `create-folder-file`, `reopen-file`, `verify-file-hash`, `delete-owned-artifacts` | Verify `GET /drives/{drive}/items/{approvedFolder}`; create a unique subfolder with `POST .../children`; `PUT .../items/{ownedFolder}:/{name}:/content`; enumerate `GET .../{ownedFolder}/children`; download `GET .../{file}/content`; delete owned folder and verify 404. |
+| `app-folder-lifecycle` → `onedrive-appfolder` | `write-app-data`, `read-app-data`, `update-app-data`, `delete-app-scratch` | Resolve `GET /users/{user}/drive/special/approot`; create a new correlated child folder; write/read/update/reread/hash `state.json`; delete this cycle's entire owned folder and verify absence. Never deletes approot or relies on state from another cycle. |
+| `document-versions` → `onedrive-versions` | `update-document`, `list-versions`, `read-prior-version`, `restore-version` | Write/read revision 1 and revision 2 under the selected folder; `GET .../items/{file}/versions`; download `GET .../versions/{priorVersion}/content` and verify prior bytes. Optional restore writes those verified bytes via `PUT .../content` and rereads them. |
 
-Files contain small correlated JSON with a content hash. Each non-appfolder
-attempt owns one random-correlation folder under the approved folder and deletes
-only verified owned IDs; ambiguous responses resolve only that exact owned path.
-Deliberate roundtrip deletion/scratch deletion are reported business actions;
-generic compensating cleanup and token acquisition remain internal.
+Optional downloaded-byte restoration is **not** native `restoreVersion` semantics.
+When `restoreVersion` is false, that action is skipped without a failed request.
+Prior-version polling shares the bounded execution budget (initially 120 seconds);
+current bytes cannot stand in for actual historical-version evidence.
 
-App-folder state intentionally persists in
-`approot/<folderName>-<target.id>/state.json`; workers retain no local history.
-Each cycle verifies prior state before overwriting it. Only the application's
-recognized test payload is overwritten, not arbitrary user data. A first cycle
-proves same-cycle readback, not historical persistence; a later successful cycle
-also verifies the previously stored state. Never delete approot, its parent,
-another target's subfolder, or the persistent state as generic cleanup.
+Each attempt owns a random-correlation folder. Deliberate deletion is a measured
+business action; compensating cleanup/token acquisition remain internal.
+Cleanup uses an independent bounded signal and verifies exact owned paths/IDs
+before deletion. Wrong hashes, malformed ownership, denied operations, missing
+history, timeouts and failed cleanup cannot produce successful journeys.
+Existing app-folder data, including old test state, remains untouched.
 
-Versioning depends on actual OneDrive retention/settings. Polling is bounded by
-the configured timeout and respects cancellation. Empty history or no matching
-earlier bytes cannot pass; current content is not relabeled a historical version.
-Graph lists newest/current first and doesn't support downloading current content
-through the versions endpoint. The optional restore step is skipped/Unknown when
-disabled, not counted as a failed or successful request.
-When no configured account selects restore, its existing child entity is
-impact-suppressed so the intentionally Unknown optional step cannot block normal
-version-journey rollup.
+## Scheduling and stable model IDs
 
-## Authentication and the actual permission boundary
+Both service files use these complete lane assignments:
 
-Hosted Graph defaults to app-only `ManagedIdentityCredential` with the explicitly
-selected `AZURE_CLIENT_ID`. The dedicated identity is
-`uami-<healthModel.name>-onedrive`; the independent worker shares the existing
-Container Apps environment and registry. Reporting uses its separate ARM audience
-and ingest-only role. The standard explicit `graphAuthentication: certificate`
-option supports approved local development; there is no delegated user sign-in,
-refresh-token bootstrap or silent fallback.
+```json
+"executionLanes": [
+  { "name": "files", "intervalSeconds": 300, "timeoutSeconds": 120,
+    "journeys": ["user-drive-roundtrip"] },
+  { "name": "appfolder", "intervalSeconds": 300, "timeoutSeconds": 120,
+    "journeys": ["app-folder-lifecycle"] },
+  { "name": "versions", "intervalSeconds": 300, "timeoutSeconds": 120,
+    "journeys": ["document-versions"] }
+]
+```
 
-Microsoft's [Selected permissions documentation][selected] describes both Entra
-consent and the explicit resource assignment. A selected folder write grant
-inherits to its contained probe artifacts; granting a folder can break permission
-inheritance and consumes a unique security scope. The worker never requests
-`Files.ReadWrite.All`, `Sites.ReadWrite.All`, or tenant-wide file read permission.
+Keep the deployed root IDs
+`onedrive-planned-user-drive-roundtrip`,
+`onedrive-planned-app-folder-lifecycle`,
+`onedrive-planned-document-versions`, each with existing `step-1`…`step-4` mapping
+in the action order above. Their historical names are ingestion compatibility,
+not extra planned entities.
 
-**`Files.ReadWrite.AppFolder` application permission is not restricted to the two
-configured accounts in Entra.** It authorizes this application's app folder in
-other users' drives too, and app-folder access includes files users place there.
-The runtime checks account/drive/folder bindings against the root allowlist and
-only addresses configured user IDs; this is an application safeguard, **not a
-tenant-enforced two-user grant**. For an account without a configured drive ID,
-the approot API response resolves the drive only for that approved user. When a
-drive ID is supplied, it must match the returned app-folder drive.
+## Permission and transport boundaries
 
-The generic versions API permission tables list broad application permissions;
-the [Selected scope resource rules][selected] describe narrower item access.
-Live acceptance must verify those version operations under the approved folder
-grant; denial remains unhealthy and does not justify expanding scope.
-See Microsoft's [app-folder guidance][appfolder], [versions][versions] and
-[version-content API][version-content].
+[Selected permissions](https://learn.microsoft.com/graph/permissions-selected-overview)
+require consent **and** a resource grant. The dedicated folder's grant inherits
+to cycle-owned artifacts. Actual version endpoint authorization still requires
+live verification; denial is not approval to expand scope.
 
-## Explicitly planned / blocked coverage
+`Files.ReadWrite.AppFolder` application access is **not tenant-enforced to just
+the root-configured users**. The runtime account/drive allowlist is an application
+safeguard, not a two-user Entra permission boundary. Optional drive bindings are
+checked against approot's returned drive.
 
-| Family | Why it is not implemented/selectable |
-| --- | --- |
-| Search/retrieve | [Graph driveItem search][search] documents application `Files.Read.All` or higher and explicitly excludes `Sites.Selected`; it does not document compatibility with the approved file-selected/AppFolder permissions. No tenant-wide search scope is approved. Folder enumeration is **not** search/indexing evidence. |
-| Recipient sharing | The current app-only owner identity is not an independent recipient credential. No recipient access/revocation evidence is fabricated with the owner's token. |
-| Browser upload/reopen | No browser identity/session automation is approved or implemented. API success does not prove the OneDrive UI or sync experience. |
+Graph-authenticated download requests follow only approved HTTPS
+`.sharepoint.com`/`.sharepointonline.com` preauthenticated content redirects,
+without forwarding the Graph token. Content size and collection pagination are
+bounded. Those hostnames are OneDrive's content transport, not a retained
+SharePoint workload.
 
-There is **no OneDrive Service Health or beta activity collector** in this worker.
-Configuration rejects enabled provider collection rather than aliasing a
-SharePoint provider name. Its model retains suppressed supporting context without
-invented provider calls.
+There is no broad credential/permission fallback or recipient identity substitution.
+Optional stable Service Health uses the distinct `OneDriveForBusiness` /
+`Microsoft OneDrive` overview and matching issues, never SharePoint status.
+Approve `ServiceHealth.Read.All` separately. A configured `providerClientId` selects
+the approved provider application through worker-UAMI federation; it needs its
+own trust for this service identity. The independent provider lane defaults to
+300 seconds and reports only to suppressed `onedrive-service-health`, without
+changing synthetic success. Simulation keeps `serviceHealth: false`; the live
+example enables it. OneDrive beta activity functions are not supported or approved.
 
-## Model, scheduling and acceptance
+From `synthetic-tests/`:
 
-Promoted roots retain their already-deployed IDs:
-`onedrive-planned-user-drive-roundtrip`, `onedrive-planned-app-folder-lifecycle`,
-`onedrive-planned-document-versions`. The `-planned-` substring is historical;
-active metadata makes them normal UserFlow roots with External Reports and
-standard rollup. Existing `step-1` through `step-4` child IDs are preserved, with
-semantic action names mapped to those IDs. Other families remain Unknown and
-suppressed. De-duplication prevents active/planned copies of one entity.
+```sh
+npm run onedrive -- --once
+npm run onedrive -- --project-config /approved/path/monitoring.private.json --once
+```
 
-All three default lanes have independently configurable 300-second cadence and
-120-second timeout. The reusable runner executes account attempts concurrently,
-then aggregates settled outcomes; timeouts are failures/Unhealthy. Skipped
-prerequisites and disabled restore steps do not enter the failure denominator.
-Reports contain no per-account signal inventory.
-
-Run `npm test -- onedrive/tests`, `npm run typecheck`, and `npm run build`.
-Tests exercise real handler shapes with mocked Graph responses, permission/
-provisioning failures, incorrect hashes, unavailable history, safe cleanup,
-cross-cycle app-folder state, runtime allowlists, report IDs and timeout mapping.
-They are not live service acceptance. Follow [operational acceptance][operations]
-for independently detecting stalled workers/stale reports, broken report transport,
-and end-to-end notifications. A running container alone is insufficient.
-
-### Recorded live trial: 2026-10-26
-
-Both approved accounts completed the app-folder workflow on consecutive
-five-minute cycles: persisted state was reopened/validated, updated/reread and
-scratch deletion verified. Actual journey/action health reports were ingested;
-app-folder success was 100%. This does not establish selected-folder access.
-The selected-folder roundtrip and versions scenarios remain enabled but report
-Unhealthy configuration evidence until their dedicated folders and resource
-write grants exist. Unexecuted business actions remain skipped/Unknown.
-The existing administrator CLI token has no file/site scopes, so it cannot
-bootstrap those folders/grants. No broad permissions or delegated sign-in were
-added to work around that boundary. Search/sharing/browser coverage remains planned.
-
-[selected]: https://learn.microsoft.com/en-us/graph/permissions-selected-overview
-[appfolder]: https://learn.microsoft.com/en-us/graph/onedrive-sharepoint-appfolder
-[versions]: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions?view=graph-rest-1.0
-[version-content]: https://learn.microsoft.com/en-us/graph/api/driveitemversion-get-contents?view=graph-rest-1.0
-[search]: https://learn.microsoft.com/en-us/graph/api/driveitem-search?view=graph-rest-1.0
-[operations]: ../../docs/operations.md#enterprise-reliability-acceptance-gate
+Private profiles require all three supported scenario keys and no removed
+sharing/search lane assignments. Simulation is explicitly labeled and previews
+reports only. For real acceptance, inspect each account's actions and actual
+aggregated ingestion; configuration/deployment success alone is insufficient.

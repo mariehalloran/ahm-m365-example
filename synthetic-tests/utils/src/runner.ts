@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
 import { resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
-import type { TeamsJourneyClient } from "./teams.js";
+import type { TeamsBotClient } from "./teams.js";
 import type { TeamsCallOperations } from "./teams-call-operations.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
@@ -17,12 +17,11 @@ export interface RunnerDependencies {
   results: ResultOutput;
   telemetry: Telemetry;
   graph?: GraphClient;
-  teamsBot?: TeamsJourneyClient;
+  teamsBot?: TeamsBotClient;
   teamsCalling?: GraphClient;
   teamsCallingPeer?: GraphClient;
   teamsCallOperations?: TeamsCallOperations;
   shutdown?: () => Promise<void>;
-  clientsForProbe?: (probe: Probe) => { graph: GraphClient; teamsBot: TeamsJourneyClient };
   handler?: ProbeHandler;
   now?: () => number;
   reportHealth?: HealthReporter;
@@ -100,7 +99,6 @@ async function runSingleProbe(
         ...(dependencies.teamsCalling ? { teamsCalling: dependencies.teamsCalling } : {}),
         ...(dependencies.teamsCallingPeer ? { teamsCallingPeer: dependencies.teamsCallingPeer } : {}),
         ...(dependencies.teamsCallOperations ? { teamsCallOperations: dependencies.teamsCallOperations } : {}),
-        ...(dependencies.clientsForProbe && probe.type !== "teams-call" ? dependencies.clientsForProbe(probe) : {}),
       }),
       deadline.promise,
     ]);

@@ -5,7 +5,6 @@ export default defineConfig({
     include: [
       "exchange/tests/**/*.test.ts",
       "teams/tests/**/*.test.ts",
-      "sharepoint/tests/**/*.test.ts",
       "onedrive/tests/**/*.test.ts",
       "utils/tests/**/*.test.ts",
     ],

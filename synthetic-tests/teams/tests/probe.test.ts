@@ -5,7 +5,8 @@ import { resultSchema, type Probe } from "../../utils/src/contracts.js";
 import { GraphClient, graphBase } from "../../utils/src/graph.js";
 import { AuthenticatedHttp, IntegrationError } from "../../utils/src/http.js";
 import { TeamsBotClient, validateTeamsServiceUrl } from "../../utils/src/teams.js";
-import { teamsProbe } from "../src/journey.js";
+import { teamsConversationProbe as teamsProbe } from "../src/conversation.js";
+import { teamsJourneyDefinitions } from "../src/catalog.js";
 import { authenticate, cleanup, confirmPublication, postMessage, type ChannelAttempt } from "../src/steps.js";
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
@@ -17,7 +18,9 @@ const graphScope = "https://graph.microsoft.com/.default";
 const botScope = "https://api.botframework.com/.default";
 const conversationId = "19:conversation@thread.tacv2;messageid=123";
 const activityId = "activity/123?owned";
+const replyId = "reply/456?owned";
 const messagesPath = `/teams/${teamId}/channels/${encodeURIComponent(channelId)}/messages`;
+const repliesPath = `${messagesPath}/graph-message-id-not-bot-activity-id/replies`;
 const probe: Probe = { id: "teams-001", type: "teams-channel-message", cohort: "teams-global", tenantId, teamId, channelId, serviceUrl };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const message = (marker: string, author = applicationId) => ({
@@ -52,8 +55,11 @@ interface RunOptions {
   invalidCreateJson?: boolean;
   createNetworkFailure?: boolean;
   cleanupStatus?: number;
+  replyStatus?: number;
+  replyNetworkFailure?: boolean;
   attempts?: number;
   onRead?: (state: ReadState) => Response | Promise<Response>;
+  onReplyRead?: (state: ReadState) => Response | Promise<Response>;
   controller?: AbortController;
   onCreate?: () => void;
   onCleanup?: (signal: AbortSignal | null | undefined) => void | Promise<void>;
@@ -62,7 +68,9 @@ interface RunOptions {
 async function run(options: RunOptions = {}) {
   let clock = Date.parse("2026-10-19T10:00:00Z");
   let marker = "";
+  let replyMarker = "";
   let polls = 0;
+  let replyPolls = 0;
   let page = 0;
   const calls: Call[] = [];
   const scopes: { identity: "graph" | "bot"; scope: string | string[] }[] = [];
@@ -90,6 +98,11 @@ async function run(options: RunOptions = {}) {
     });
     if (url.hostname === "smba.trafficmanager.net" && method === "POST") {
       clock += options.sendMs ?? 30;
+      if (url.pathname !== "/teams/v3/conversations") {
+        replyMarker = z.object({ text: z.string() }).parse(JSON.parse(String(init?.body))).text;
+        if (options.replyNetworkFailure) throw new Error("connection lost after reply");
+        return json({ id: replyId }, options.replyStatus ?? 201);
+      }
       marker = z.object({ activity: z.object({ text: z.string() }) }).parse(JSON.parse(String(init?.body))).activity.text;
       options.onCreate?.();
       if (options.createNetworkFailure) throw new Error("connection lost after send");
@@ -103,6 +116,12 @@ async function run(options: RunOptions = {}) {
     }
     if (url.hostname === "graph.microsoft.com" && method === "GET") {
       clock += options.readMs ?? 20;
+      if (url.pathname.endsWith("/replies")) {
+        if (!url.searchParams.has("$skiptoken")) { replyPolls++; page = 0; }
+        page++;
+        return options.onReplyRead?.({ poll: replyPolls, page, marker: replyMarker, url }) ??
+          json({ value: [{ ...message(replyMarker), id: "graph-reply-id" }] });
+      }
       if (!url.searchParams.has("$skiptoken")) { polls++; page = 0; }
       page++;
       return options.onRead?.({ poll: polls, page, marker, url }) ??
@@ -125,15 +144,16 @@ async function run(options: RunOptions = {}) {
     sleep: async (ms, signal) => { signal.throwIfAborted(); clock += ms; },
   });
   expect(resultSchema.safeParse(result).success).toBe(true);
-  expect(result.steps.map(step => step.name)).toEqual(["authenticate", "post-message", "confirm-publication", "cleanup"]);
+  expect(result.steps.map(step => step.name)).toEqual(teamsJourneyDefinitions["teams-channel-message"].steps);
   return { result, calls, scopes, telemetry, marker, polls, fetcher };
 }
 
-describe("Teams bot post / Graph readback / bot delete", () => {
+describe("Teams same-bot channel and thread roundtrip", () => {
   it.each([true, false])("honors the cleanup toggle after correct-author bot readback (enabled=%s)", async cleanupEnabled => {
     const { result, calls, telemetry } = await run({ cleanupEnabled });
     expect(result.success).toBe(true);
-    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(cleanupEnabled ? 1 : 0);
+    expect(result.steps.find(step => step.name === "confirm-reply")?.status).toBe("succeeded");
+    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(cleanupEnabled ? 2 : 0);
     expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
     if (cleanupEnabled) {
       expect(result.steps.at(-1)?.status).toBe("succeeded");
@@ -153,6 +173,36 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.diagnosticCategory).toBe("read-failure");
     expect(calls.some(call => call.method === "DELETE")).toBe(false);
     expect(result.steps.at(-1)).toMatchObject({ status: "skipped", reason: "cleanup-disabled" });
+    expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+  });
+  it("does not report a completed channel journey from root publication alone", async () => {
+    const { result, calls } = await run({ timeoutMs: 250, onReplyRead: () => json({ value: [] }) });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    expect(result.steps.find(step => step.name === "post-reply")?.status).toBe("succeeded");
+    expect(result.steps.find(step => step.name === "confirm-reply")?.status).toBe("failed");
+    expect(result.publicationDurationMs).toBeUndefined();
+    expect(calls.filter(call => call.method === "POST")).toHaveLength(2);
+    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(2);
+  });
+  it.each(["wrong-author", "wrong-correlation", "deleted"] as const)(
+    "fails the complete journey when reply evidence has %s", async mismatch => {
+      const { result } = await run({ timeoutMs: 250, onReplyRead: ({ marker }) => {
+        const item = message(marker, mismatch === "wrong-author" ? tenantId : applicationId);
+        if (mismatch === "wrong-correlation") item.body.content += " extra";
+        return json({ value: [{ ...item, ...(mismatch === "deleted" ? { deletedDateTime: "2026-10-26T00:00:00Z" } : {}) }] });
+      } });
+      expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
+      expect(result.steps.find(step => step.name === "confirm-reply")?.status).toBe("failed");
+    },
+  );
+  it("does not retry an ambiguous reply or claim root deletion proved unknown reply cleanup", async () => {
+    const { result, calls } = await run({ replyNetworkFailure: true, attempts: 3 });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "send-failure" });
+    expect(result.steps.find(step => step.name === "post-reply")?.status).toBe("failed");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(false);
+    expect(calls.filter(call => call.method === "POST")).toHaveLength(2);
+    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(1);
   });
   it("allows every named action to run directly against the existing strict HTTP clients", async () => {
     const urls: string[] = [];
@@ -181,19 +231,30 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     const { result, calls, scopes, telemetry, marker } = await run();
     expect(result).toMatchObject({ success: true, targetService: "Microsoft Teams", diagnosticCategory: null });
     expect(result.steps.map(step => [step.name, step.status])).toEqual([
-      ["authenticate", "succeeded"], ["post-message", "succeeded"], ["confirm-publication", "succeeded"], ["cleanup", "succeeded"],
+      ["authenticate", "succeeded"], ["post-message", "succeeded"], ["confirm-publication", "succeeded"],
+      ["post-reply", "succeeded"], ["confirm-reply", "succeeded"],
+      ["cleanup", "succeeded"],
     ]);
     expect(result.diagnosticContext).toMatchObject({ testStage: "complete", cleanupSucceeded: true });
+    expect(telemetry.emit).toHaveBeenCalledWith("teams-channel-roundtrip-observed",
+      expect.objectContaining({ evidence: "persisted-bot-root-and-reply" }));
     expect(marker).toBe(`AHM synthetic ${result.correlationId}`);
     expect(calls.map(call => [call.method, call.url])).toEqual([
       ["POST", `${serviceUrl}v3/conversations`],
       ["GET", `${graphBase}${messagesPath}?$top=50`],
+      ["POST", `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`],
+      ["GET", `${graphBase}${repliesPath}?$top=50`],
+      ["DELETE", `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyId)}`],
       ["DELETE", `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`],
     ]);
     expect(JSON.parse(calls[0]?.body ?? "")).toEqual({
       isGroup: true, bot: { id: `28:${applicationId}` },
       channelData: { tenant: { id: tenantId }, team: { id: teamId }, channel: { id: channelId } },
       activity: { type: "message", textFormat: "plain", text: marker },
+    });
+    expect(JSON.parse(calls[2]?.body ?? "")).toMatchObject({
+      type: "message", text: `AHM synthetic reply ${result.correlationId}`,
+      from: { id: `28:${applicationId}` }, replyToId: activityId,
     });
     expect(scopes.every(call => call.scope === (call.identity === "graph" ? graphScope : botScope))).toBe(true);
     for (const call of calls) {
@@ -208,10 +269,10 @@ describe("Teams bot post / Graph readback / bot delete", () => {
 
   it("isolates authentication and post failures without recording unexecuted publication as a failure", async () => {
     const auth = await run({ authenticationFailure: "bot" });
-    expect(auth.result.steps.map(step => step.status)).toEqual(["failed", "skipped", "skipped", "skipped"]);
+    expect(auth.result.steps.map(step => step.status)).toEqual(["failed", "skipped", "skipped", "skipped", "skipped", "skipped"]);
     expect(auth.calls).toEqual([]);
     const post = await run({ createStatus: 403 });
-    expect(post.result.steps.map(step => step.status)).toEqual(["succeeded", "failed", "skipped", "failed"]);
+    expect(post.result.steps.map(step => step.status)).toEqual(["succeeded", "failed", "skipped", "skipped", "skipped", "failed"]);
     expect(post.calls.every(call => call.method === "POST")).toBe(true);
     expect(post.result.steps.at(-1)).toMatchObject({ diagnosticCategory: "cleanup-failure" });
   });
@@ -220,7 +281,7 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.diagnosticContext.authenticationDurationMs).toBe(100);
     expect(result.sendDurationMs).toBe(30);
     expect(result.publicationDurationMs).toBe(290);
-    expect(result.durationMs).toBe(430);
+    expect(result.durationMs).toBe(520);
   });
 
   it("times out unconfirmed publication and cleans up the accepted activity", async () => {
@@ -229,7 +290,7 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.publicationDurationMs).toBeUndefined();
     expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(1);
-    expect(result.steps.map(step => step.status)).toEqual(["succeeded", "succeeded", "failed", "succeeded"]);
+    expect(result.steps.map(step => step.status)).toEqual(["succeeded", "succeeded", "failed", "skipped", "skipped", "succeeded"]);
   });
 
   it.each(["graph", "bot"] as const)("authenticates %s before mutation, without cleanup queries on failure", async authenticationFailure => {
@@ -280,7 +341,7 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     const { result, calls } = await run({
       createBody: { id: conversationId, activityId, serviceUrl: "https://attacker.invalid/" },
     });
-    expect(result.success).toBe(true);
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
     expect(calls.every(call => ["smba.trafficmanager.net", "graph.microsoft.com"].includes(new URL(call.url).hostname))).toBe(true);
     expect(calls.at(-1)?.url).toBe(`${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`);
   });
@@ -362,8 +423,8 @@ describe("Teams bot post / Graph readback / bot delete", () => {
         ? json({ value: [], "@odata.nextLink": nextLink("page-two") })
         : json({ value: [{ ...message(marker), body: { contentType: "text", content: marker } }] }),
     });
-    expect(result.success).toBe(true);
-    expect(calls.filter(call => call.method === "GET").map(call => call.url)).toEqual([
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    expect(calls.filter(call => call.method === "GET" && !call.url.includes("/replies")).map(call => call.url)).toEqual([
       `${graphBase}${messagesPath}?$top=50`, nextLink("page-two"),
     ]);
   });
@@ -380,8 +441,8 @@ describe("Teams bot post / Graph readback / bot delete", () => {
         })
         : json({ value: [message(marker)] }),
     });
-    expect(result.success).toBe(true);
-    const reads = calls.filter(call => call.method === "GET");
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    const reads = calls.filter(call => call.method === "GET" && !call.url.includes("/replies"));
     expect(reads).toHaveLength(firstPage ? 1 : 2);
     expect(reads.every(call => new URL(call.url).pathname === `/v1.0${messagesPath}`)).toBe(true);
   });
@@ -402,8 +463,8 @@ describe("Teams bot post / Graph readback / bot delete", () => {
         ? json({ value: [], "@odata.nextLink": nextLink(token) })
         : json({ value: [message(marker)] }),
     });
-    expect(result.success).toBe(true);
-    expect(calls.filter(call => call.method === "GET").map(call => call.url)).toEqual([
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    expect(calls.filter(call => call.method === "GET" && !call.url.includes("/replies")).map(call => call.url)).toEqual([
       `${graphBase}${messagesPath}?$top=50`, nextLink(token),
     ]);
   });
@@ -416,8 +477,8 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     const { result, calls } = await run({
       onRead: ({ marker }) => json({ value: [message(marker)], "@odata.nextLink": link }),
     });
-    expect(result.success).toBe(true);
-    expect(calls.filter(call => call.method === "GET").map(call => call.url)).toEqual([
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    expect(calls.filter(call => call.method === "GET" && !call.url.includes("/replies")).map(call => call.url)).toEqual([
       `${graphBase}${messagesPath}?$top=50`,
     ]);
   });
@@ -459,15 +520,17 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.publicationDurationMs).toBeUndefined();
   });
 
-  it("retains confirmed timings but fails the overall journey when owned-message cleanup fails", async () => {
+  it("fails the completed journey when owned reply and root cleanup fail", async () => {
     const { result } = await run({ cleanupStatus: 403 });
-    expect(result).toMatchObject({ success: false, diagnosticCategory: "cleanup-failure", sendDurationMs: 30, publicationDurationMs: 50, durationMs: 60 });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "cleanup-failure", sendDurationMs: 30, durationMs: 120 });
+    expect(result.publicationDurationMs).toBe(50);
     expect(result.diagnosticContext.cleanupSucceeded).toBe(false);
   });
 
   it("accepts an already absent owned activity as successful idempotent cleanup", async () => {
     const { result } = await run({ cleanupStatus: 404 });
     expect(result.success).toBe(true);
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
     expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
   });
 

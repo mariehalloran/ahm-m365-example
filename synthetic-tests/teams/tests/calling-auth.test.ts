@@ -35,32 +35,45 @@ async function fixture() {
 }
 
 describe("canonical Microsoft communications callback JWT verification", () => {
-  it("rejects an authentically signed wrong-audience callback before it can complete a registered operation", async () => {
+  it("binds both real signed HTTP callback audiences to their own independently correlated operations", async () => {
     const { verify } = await fixture();
     const store = new TeamsCallOperations();
     const clientContext = "55555555-5555-4555-8555-555555555555";
-    const pending = store.register("owned-call", clientContext, 10000);
+    const peerContext = "66666666-6666-4666-8666-666666666666";
+    const pending = store.register("owned-call", clientContext, 10000, clientId);
     pending.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "owned-operation", status: "running", clientContext });
-    const listener = vi.fn((body: unknown) => store.accept(body));
+    const peer = store.register("peer-call", peerContext, 10000, peerClientId);
+    peer.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "peer-operation", status: "running", clientContext: peerContext });
+    const listener = vi.fn((body: unknown, identity: { botClientId: string }) => store.accept(body, identity));
     const server = await startTeamsCallingCallback({ port: 0, host: "127.0.0.1", verify, onNotification: listener });
     try {
-      const resource = "/communications/calls/owned-call/operations/owned-operation";
-      const post = async (aud: string) => fetch(`http://127.0.0.1:${server.port}/api/calls`, {
-        method: "POST", headers: { Authorization: `Bearer ${await token({ aud })}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ value: [{ changeType: "deleted", resourceUrl: resource, resourceData: {
-          "@odata.type": "#microsoft.graph.playPromptOperation", "@odata.id": resource, status: "completed", clientContext,
-        } }] }),
-      });
+      const post = async (aud: string, peerLeg = false) => {
+        const resource = peerLeg ? "/communications/calls/peer-call/operations/peer-operation"
+          : "/communications/calls/owned-call/operations/owned-operation";
+        return fetch(`http://127.0.0.1:${server.port}/api/calls`, {
+          method: "POST", headers: { Authorization: `Bearer ${await token({ aud })}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ value: [{ changeType: "deleted", resourceUrl: resource, resourceData: {
+            "@odata.type": "#microsoft.graph.playPromptOperation", "@odata.id": resource, status: "completed",
+            clientContext: peerLeg ? peerContext : clientContext,
+          } }] }),
+        });
+      };
       expect((await post(tenantId)).status).toBe(401);
       expect(listener).not.toHaveBeenCalled();
-      expect(pending.observation()).toBeUndefined();
       expect((await post(peerClientId)).status).toBe(200);
+      expect((await post(clientId, true)).status).toBe(200);
+      expect(pending.observation()).toBeUndefined();
+      expect(peer.observation()).toBeUndefined();
+      expect((await post(clientId)).status).toBe(200);
       expect(pending.observation()?.status).toBe("completed");
-    } finally { pending.dispose(); store.shutdown(); await server.shutdown(); }
+      expect(peer.observation()).toBeUndefined();
+      expect((await post(peerClientId, true)).status).toBe(200);
+      expect(peer.observation()?.status).toBe("completed");
+    } finally { store.shutdown(); await server.shutdown(); }
   });
   it("accepts only either explicit bot's verified signed audience, never an audience array or forged peer", async () => {
     const { verify } = await fixture();
-    await expect(verify(await token({ aud: peerClientId }))).resolves.toBeUndefined();
+    await expect(verify(await token({ aud: peerClientId }))).resolves.toEqual({ botClientId: peerClientId });
     await expect(verify(await token({ aud: peerClientId }, other.privateKey))).rejects.toThrow();
     await expect(verify(await token({ aud: [clientId, peerClientId] }))).rejects.toThrow();
     await expect(verify(await token({ aud: peerClientId, tid: clientId }))).rejects.toThrow();
@@ -72,8 +85,8 @@ describe("canonical Microsoft communications callback JWT verification", () => {
   });
   it.each(["https://graph.microsoft.com", "https://api.botframework.com"])("accepts signed %s tokens for only this bot/tenant", async iss => {
     const { verify, fetcher } = await fixture();
-    await expect(verify(await token({ iss }))).resolves.toBeUndefined();
-    await expect(verify(await token({ iss }))).resolves.toBeUndefined();
+    await expect(verify(await token({ iss }))).resolves.toEqual({ botClientId: clientId });
+    await expect(verify(await token({ iss }))).resolves.toEqual({ botClientId: clientId });
     expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([callingDiscoveryUrl, callingKeysUrl]);
   });
   it.each([
@@ -92,7 +105,7 @@ describe("canonical Microsoft communications callback JWT verification", () => {
     { [tenantClaim]: undefined, tid: tenantId, nbf: undefined },
   ])("normalizes equivalent signed tenant claim naming without requiring optional nbf", async claims => {
     const { verify } = await fixture();
-    await expect(verify(await token(claims))).resolves.toBeUndefined();
+    await expect(verify(await token(claims))).resolves.toEqual({ botClientId: clientId });
   });
   it.each([
     { [tenantClaim]: tenantId, tid: "33333333-3333-4333-8333-333333333333" },

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../../utils/src/graph.js";
 import { AuthenticatedHttp } from "../../utils/src/http.js";
-import { leaveCall, verifyParticipants, waitForAnswer } from "../src/call-steps.js";
+import { leaveCall, verifyMeetingMetadata, verifyParticipants, waitForAnswer } from "../src/call-steps.js";
 
 function fixture(responses: Response[]) {
   let now = 0;
@@ -21,8 +21,8 @@ describe("owned call answer and verified disconnection", () => {
   });
   it("waits for both application identities, ignoring a user with the same directory ID", async () => {
     const current = fixture([
-      Response.json({ value: [{ id: "human", info: { identity: { user: { id: bots[1] } } } }] }),
-      Response.json({ value: bots.map((bot, i) => participant(String(i), bot)) }),
+      Response.json({ value: [{ id: "human", info: { identity: { application: null, user: { id: bots[1] } } } }] }),
+      Response.json({ value: bots.map((bot, i) => participant(String(i), bot)), "@odata.nextLink": null }),
     ]);
     await verifyParticipants(current.graph, "owned-call", bots, signal(), 30, 10, current.now, current.sleep);
     expect(current.now()).toBe(10);
@@ -41,6 +41,32 @@ describe("owned call answer and verified disconnection", () => {
       Response.json({ value: bots.map(bot => participant("same-participant", bot)) })));
     await expect(verifyParticipants(current.graph, "owned-call", bots, signal(), 30, 10, current.now, current.sleep))
       .rejects.toMatchObject({ category: "delivery-timeout" });
+  });
+  const meeting = {
+    id: "owned-call", chatInfo: { threadId: "19:meeting_test@thread.v2" }, tenantId: bots[0],
+    meetingInfo: {
+      "@odata.type": "#microsoft.graph.organizerMeetingInfo",
+      organizer: { user: { id: bots[1], tenantId: bots[0] } },
+    },
+  };
+  const expectedMeeting = { threadId: meeting.chatInfo.threadId, organizerUserId: bots[1], tenantId: bots[0] };
+  it("reads exact owned meeting metadata without querying or signing in as the organizer", async () => {
+    const current = fixture([Response.json(meeting)]);
+    await verifyMeetingMetadata(current.graph, "owned-call", expectedMeeting, signal());
+    expect(current.fetcher).toHaveBeenCalledOnce();
+    expect(String(current.fetcher.mock.calls[0]?.[0])).toBe("https://graph.microsoft.com/v1.0/communications/calls/owned-call");
+    expect(current.fetcher.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+  it.each([
+    { id: "foreign-call" },
+    { chatInfo: { threadId: "19:meeting_foreign@thread.v2" } },
+    { tenantId: bots[1] },
+    { meetingInfo: { ...meeting.meetingInfo, organizer: { user: { id: bots[0], tenantId: bots[0] } } } },
+    { meetingInfo: { ...meeting.meetingInfo, organizer: { user: { id: bots[1], tenantId: bots[1] } } } },
+    { meetingInfo: null },
+  ])("rejects wrong or absent meeting evidence instead of trusting POST acceptance: %j", changed => {
+    const current = fixture([Response.json({ ...meeting, ...changed })]);
+    return expect(verifyMeetingMetadata(current.graph, "owned-call", expectedMeeting, signal())).rejects.toThrow();
   });
   it.each(["establishing", "ringing", "hold", "unknownFutureValue"])(
     "fails unanswered %s rather than treating elapsed time as success", async state => {

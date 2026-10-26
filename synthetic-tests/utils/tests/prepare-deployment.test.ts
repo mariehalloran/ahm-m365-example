@@ -15,9 +15,9 @@ beforeEach(async () => {
   projectFile = join(directory, "monitoring.json");
   await mkdir(join(directory, "profiles"));
   const project = structuredClone(checkedIn);
-  project.services.teams.scenarios["call-test-user"] = false;
+  project.services.teams.scenarios["scheduled-meeting"] = false;
   project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
-  for (const type of ["exchange", "teams", "sharepoint", "onedrive"] as const) {
+  for (const type of ["exchange", "teams", "onedrive"] as const) {
     project.services[type].configFile = `profiles/${type}.json`;
     await writeFile(join(directory, project.services[type].configFile), JSON.stringify(await readServiceConfig(`${type}/config.json`)));
   }
@@ -32,7 +32,7 @@ describe("deployment parameter preparation", () => {
   };
   async function callingProfile() {
     const project = JSON.parse(await readFile(projectFile, "utf8"));
-    project.services.teams.scenarios["call-test-user"] = true;
+    project.services.teams.scenarios["scheduled-meeting"] = true;
     await writeFile(projectFile, JSON.stringify(project));
     await writeFile(join(directory, "profiles/teams.json"), JSON.stringify({
       ...await readServiceConfig("teams/config.live.example.json"),
@@ -61,10 +61,10 @@ describe("deployment parameter preparation", () => {
     await writeFile(accessFile, JSON.stringify({ teams: metadata }));
     await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow();
   });
-  it.each(["exchange", "teams", "sharepoint", "onedrive"])("never attaches a peer for disabled/non-Teams calling: %s", async type => {
+  it.each(["exchange", "teams", "onedrive"])("never attaches a peer for disabled/non-Teams calling: %s", async type => {
     const accessFile = join(directory, "peer.json");
     await writeFile(accessFile, JSON.stringify({ [type]: peer }));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow("enabled live Teams meeting calls only");
+    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow("needs the peer bot");
   });
   it("packages an independently hosted live OneDrive MI worker with root-owned accounts and selected-folder bindings", async () => {
     const onedrive = await readServiceConfig("onedrive/config.live.example.json");
@@ -72,20 +72,18 @@ describe("deployment parameter preparation", () => {
     await expect(prepareDeploymentParameters(projectFile, "image:test")).rejects.toThrow("--enable-live");
     const prepared = await prepareDeploymentParameters(projectFile, "image:test", true);
     expect(prepared.parameters.serviceConfigs.value.onedrive).toMatchObject({
-      type: "onedrive", mode: "live", graphAuthentication: "managed-identity", serviceHealth: false,
+      type: "onedrive", mode: "live", graphAuthentication: "managed-identity", serviceHealth: true,
     });
     expect(prepared.parameters.serviceConfigs.value.onedrive).not.toHaveProperty("targets");
     expect(prepared.parameters.projectConfig.value.services.onedrive.targets).toHaveLength(2);
-    expect(prepared.parameters.projectConfig.value.services.sharepoint.enabled).toBe(false);
+    expect(prepared.parameters.projectConfig.value.services).not.toHaveProperty("sharepoint");
     expect(prepared.parameters.serviceAccess.value).toEqual({});
   });
-  it("keeps legacy private profiles without OneDrive disabled and prepares them without new private service files", async () => {
+  it("requires migration of legacy private profiles rather than injecting an unselected service", async () => {
     const project = JSON.parse(await readFile(projectFile, "utf8"));
     delete project.services.onedrive;
     await writeFile(projectFile, JSON.stringify(project));
-    const prepared = await prepareDeploymentParameters(projectFile, "image:test");
-    expect(prepared.parameters.projectConfig.value.services.onedrive).toMatchObject({ enabled: false, targets: [] });
-    expect(prepared.parameters.serviceConfigs.value.onedrive).toMatchObject({ type: "onedrive", mode: "simulation" });
+    await expect(prepareDeploymentParameters(projectFile, "image:test")).rejects.toThrow("services.onedrive");
   });
   it("requires explicit beta deployment approval and preserves the provider cadence/functions/thresholds", async () => {
     await writeFile(join(directory, "profiles/exchange.json"), JSON.stringify({
@@ -149,24 +147,10 @@ describe("deployment parameter preparation", () => {
     expect(prepared.parameters.projectConfig.value.services.teams.targets).toHaveLength(1);
     expect(prepared.parameters.projectConfig.value.services.teams.targets[0]).not.toHaveProperty("userPrincipalName");
   });
-  it("requires explicit bot certificate selection and complete hosted access metadata", async () => {
+  it("rejects removed bot certificate authentication", async () => {
     const service = { ...await readServiceConfig("teams/config.live.example.json"), botAuthentication: "certificate" };
     await writeFile(join(directory, "profiles/teams.json"), JSON.stringify(service));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true)).rejects.toThrow("bot certificate settings");
-    const accessFile = join(directory, "access.json");
-    const access = { teams: {
-      botTenantId: "11111111-1111-4111-8111-111111111111",
-      botClientId: "22222222-2222-4222-8222-222222222222",
-      botCertificateSecretUri: "https://probe.vault.azure.net/secrets/bot-pem",
-    } };
-    await writeFile(accessFile, JSON.stringify(access));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow("target and bot tenants");
-    const project = await readProjectConfig(projectFile);
-    for (const target of [...project.services.teams.targets, ...project.services.teams.callTargets]) target.tenantId = access.teams.botTenantId;
-    await writeFile(projectFile, JSON.stringify(project));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).resolves.toBeDefined();
-    await writeFile(join(directory, "profiles/teams.json"), JSON.stringify({ ...service, botAuthentication: "managed-identity" }));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow("botAuthentication: certificate");
+    await expect(prepareDeploymentParameters(projectFile, "image:test", true)).rejects.toThrow("botAuthentication");
   });
   it("preserves Exchange retention in the selected service profile, not the root targets", async () => {
     const exchange = { ...await readServiceConfig("exchange/config.json"), exchangeCleanupEnabled: false };
@@ -182,42 +166,12 @@ describe("deployment parameter preparation", () => {
     expect(prepared.parameters.serviceConfigs.value.teams.teamsCleanupEnabled).toBe(false);
     expect(prepared.parameters.projectConfig.value.services.teams).not.toHaveProperty("teamsCleanupEnabled");
   });
-  async function delegatedProfile() {
-    const service = { ...await readServiceConfig("teams/config.live.example.json"), teamsAuthentication: "user-delegated", serviceHealth: false };
-    await writeFile(join(directory, "profiles/teams.json"), JSON.stringify(service));
-    const project = await readProjectConfig(projectFile);
-    project.services.teams.targets = [{
-      id: "teams-001", tenantId: "22222222-2222-4222-8222-222222222222",
-      userPrincipalName: "test@example.invalid", teamId: "33333333-3333-4333-8333-333333333333",
-      channelId: "standard-channel",
-    }];
-    await writeFile(projectFile, JSON.stringify(project));
-    return join(directory, "access.json");
-  }
-  it("allows delegated foundation before bootstrap and requires public-client metadata for workers", async () => {
-    const accessFile = await delegatedProfile();
-    expect((await prepareDeploymentParameters(projectFile)).parameters.deployWorkers.value).toBe(false);
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true)).rejects.toThrow("teamsPublicClientId");
-    const access = { teams: { teamsPublicClientId: "44444444-4444-4444-8444-444444444444" } };
-    await writeFile(accessFile, JSON.stringify(access));
-    const prepared = await prepareDeploymentParameters(projectFile, "image:test", true, accessFile);
-    expect(prepared.parameters.serviceAccess.value).toEqual(access);
-    expect(prepared.parameters.serviceConfigs.value.teams.teamsAuthentication).toBe("user-delegated");
-  });
-  it("requires separate application certificate metadata only when delegated Teams providers use it", async () => {
-    const accessFile = await delegatedProfile();
-    const service = { ...await readServiceConfig(join(directory, "profiles/teams.json")), graphAuthentication: "certificate" };
-    await writeFile(join(directory, "profiles/teams.json"), JSON.stringify(service));
-    await writeFile(accessFile, JSON.stringify({ teams: { teamsPublicClientId: "44444444-4444-4444-8444-444444444444" } }));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).resolves.toBeDefined();
-    await writeFile(join(directory, "profiles/teams.json"), JSON.stringify({ ...service, serviceHealth: true }));
-    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow("M365 application settings");
-  });
-  it("rejects unselected public-client metadata, bot fallback and embedded cache content", async () => {
-    const accessFile = await delegatedProfile();
+  it("rejects removed public-client metadata, bot certificates, SharePoint and embedded cache content", async () => {
+    const accessFile = join(directory, "access.json");
     for (const access of [
       { exchange: { teamsPublicClientId: "44444444-4444-4444-8444-444444444444" } },
       { teams: { cache: "must-not-be-in-config" } },
+      { sharepoint: {} },
       { teams: {
         botTenantId: "22222222-2222-4222-8222-222222222222",
         botClientId: "44444444-4444-4444-8444-444444444444",
@@ -318,7 +272,7 @@ describe("deployment parameter preparation", () => {
   ])("rejects partial or misplaced application metadata %j", async access => {
     const accessFile = join(directory, "access.json");
     await writeFile(accessFile, JSON.stringify(access));
-    await expect(prepareDeploymentParameters(projectFile, undefined, false, accessFile)).rejects.toThrow("access requires");
+    await expect(prepareDeploymentParameters(projectFile, undefined, false, accessFile)).rejects.toThrow();
   });
   it.each([
     "https://probe.vault.azure.net/secrets/cert?token=secret",
@@ -342,27 +296,23 @@ describe("deployment parameter preparation", () => {
     } }));
     await expect(prepareDeploymentParameters(projectFile, undefined, false, accessFile)).rejects.toThrow("graphAuthentication: certificate");
   });
-  it("rejects mismatched Teams application, bot, and target tenants", async () => {
-    const teams = { ...await readServiceConfig("teams/config.live.example.json"), teamsAuthentication: "bot", botAuthentication: "certificate", graphAuthentication: "certificate" };
+  it("rejects mismatched Teams Graph observer and target tenants without changing bot authentication", async () => {
+    const teams = { ...await readServiceConfig("teams/config.live.example.json"), graphAuthentication: "certificate" };
     await writeFile(join(directory, "profiles/teams.json"), JSON.stringify(teams));
     const accessFile = join(directory, "access.json");
     const teamsAccess = {
       m365TenantId: "22222222-2222-4222-8222-222222222222",
       m365ClientId: "33333333-3333-4333-8333-333333333333",
       m365CertificateSecretUri: "https://probe.vault.azure.net/secrets/teams-pem",
-      botTenantId: "44444444-4444-4444-8444-444444444444",
-      botClientId: "55555555-5555-4555-8555-555555555555",
-      botCertificateSecretUri: "https://probe.vault.azure.net/secrets/bot-pem",
     };
     await writeFile(accessFile, JSON.stringify({ teams: teamsAccess }));
-    await expect(prepareDeploymentParameters(projectFile, undefined, false, accessFile)).rejects.toThrow("bot and M365");
-    await writeFile(accessFile, JSON.stringify({ teams: { ...teamsAccess, botTenantId: teamsAccess.m365TenantId } }));
     await expect(prepareDeploymentParameters(projectFile, undefined, false, accessFile)).rejects.toThrow("target and M365");
     const project = await readProjectConfig(projectFile);
     for (const target of [...project.services.teams.targets, ...project.services.teams.callTargets]) target.tenantId = teamsAccess.m365TenantId;
     await writeFile(projectFile, JSON.stringify(project));
     const parameters = await prepareDeploymentParameters(projectFile, "image:test", true, accessFile);
-    expect(parameters.parameters.serviceAccess.value.teams?.botCertificateSecretUri).toBe(teamsAccess.botCertificateSecretUri);
+    expect(parameters.parameters.serviceAccess.value.teams?.m365ClientId).toBe(teamsAccess.m365ClientId);
+    expect(parameters.parameters.serviceConfigs.value.teams.botAuthentication).toBe("managed-identity");
   });
   it("reports unreadable, malformed, and invalid access files explicitly", async () => {
     const accessFile = join(directory, "access.json");

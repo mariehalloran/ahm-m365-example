@@ -1,14 +1,15 @@
 # Deploy the service workers
 
 Deploy the [health models](../../health-model/README.md#apply-and-migrate) first.
-This template hosts selected Exchange, Teams, SharePoint and OneDrive services in **separate Azure Container
+This template hosts selected Exchange, Teams and OneDrive services in **separate Azure Container
 Apps**, using one private image, independent service configurations and separate
 user-assigned managed identities (UAMIs). Only selected live Teams calling enables
-public HTTPS ingress; Exchange, SharePoint, OneDrive and messaging-only Teams stay private.
-The checked-in root selects Exchange/Teams/OneDrive and disables SharePoint.
+public HTTPS ingress; Exchange, OneDrive and messaging-only Teams stay private.
+The checked-in root selects all three supported services.
 OneDrive reuses the environment/registry and receives its own
 `uami-<healthModel.name>-onedrive`, worker and ingest-only service-model assignment.
-It adds no bot, user sign-in, storage account, provider collector or M365 grants.
+It adds no bot, user sign-in, storage account or M365 grants. Its optional stable
+provider uses the distinct Microsoft OneDrive service entry, not SharePoint.
 See the [OneDrive setup and exact permission boundary](../onedrive/README.md).
 
 The foundation creates the registry, environment, identities and narrowly scoped
@@ -42,7 +43,7 @@ match. The worker template attaches that identity alongside the unchanged primar
 reporting/image-pull UAMI and supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams,
 simulation and calling-disabled workers receive neither. It creates no peer,
 Azure Bot or Graph grants. Both bots require separately approved
-`Calls.JoinGroupCall.All` and the same `/api/calls` callback, on existing port8080
+`Calls.JoinGroupCall.All` and the same `/api/calls` callback, on existing port 8080
 with one replica. See [meeting setup](../teams/README.md#two-bot-meeting-audio-setup).
 
 Checked-in profiles remain safe simulations. An approved live profile attempts
@@ -139,9 +140,9 @@ npm --prefix synthetic-tests run deployment:prepare -- \
 ```
 
 Copy only required entries from [service-access.example.json](./service-access.example.json).
-The worker mounts raw UTF-8 PEMs at `/etc/credentials/m365.pem` and, for explicitly
-selected bot certificate authentication, `/etc/credentials/bot.pem`. It keeps
-`M365_*`, `BOT_*` and Azure reporting's `AZURE_*` separate. There is no credential
+The worker mounts the raw UTF-8 PEM at `/etc/credentials/m365.pem`. Bot participants
+remain managed-identity-only; no bot certificate path exists. It keeps `M365_*`,
+`BOT_*` and Azure reporting's `AZURE_*` separate. There is no credential
 fallback. Preparation rejects incomplete/mixed metadata and inconsistent tenants.
 
 Each UAMI needs separately approved secret-read access and network reachability
@@ -174,16 +175,6 @@ temporary file after success or failure. Supply the secure parameter on every
 subsequent deployment in this mode. Native encrypted secrets still require
 credential rotation and restricted secret-reading/application-modification access.
 
-### Optional delegated Teams
-
-Explicit `teamsAuthentication: user-delegated` provisions encrypted Blob storage
-with public/shared-key access disabled and container-scoped access for the Teams
-UAMI. Supply `serviceAccess.teams.teamsPublicClientId` and follow the
-[human bootstrap guide](../../docs/teams-user-bootstrap.md). Accounts/targets stay
-root-owned; cache partitions are per account. This optional flow can need MFA or
-reauthentication. Switching to bot mode does not delete old caches/revoke grants;
-retire them only through approved cleanup.
-
 ## Runtime behavior and verification
 
 - One authoritative replica per service/target set, single-revision mode and
@@ -200,18 +191,21 @@ retire them only through approved cleanup.
   cross-cycle journey history or durable outbox.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
-rollup, not just successful ARM provisioning. The checked-in root selects twelve
-active journeys and 47 active business steps; including suppressed planned
-coverage yields five models, 171 entities and 166 relationships. Provider context
+rollup, not just successful ARM provisioning. The checked-in root selects eleven
+active journeys and 47 active business steps across four models, 68 entities and
+64 relationships. There is no proposal catalog. Provider context
 is separate and impact-suppressed. Invalid schemas or unusable report credentials
 can prevent publication and require independent detection.
 
-Supported Exchange/Teams/SharePoint collectors also run an independent provider lane (`providerIntervalSeconds`,
-default 300), with no second worker/container. Explicit beta preparation uses
+Each service's optional stable collector also runs an independent provider lane
+(`providerIntervalSeconds`, default 300), with no second worker/container.
+Exchange/Teams additionally support five approved beta activity functions each.
+Explicit beta preparation uses
 `--enable-beta-service-activity` to mount `ENABLE_BETA_SERVICE_ACTIVITY=true`;
 service config still owns beta enablement/functions/thresholds. See the
 [direct provider report setup](../../docs/provider-monitoring.md).
-OneDrive has no verified provider mapping and rejects provider collection.
+OneDrive rejects beta activity settings; its stable collector requires the approved
+provider application's consent and federation trust for the OneDrive worker UAMI.
 
 Production acceptance additionally requires [worker-stall, publication-failure and
 end-to-end notification checks](../../docs/operations.md#enterprise-reliability-acceptance-gate).

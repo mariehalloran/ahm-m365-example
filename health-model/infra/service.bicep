@@ -45,17 +45,9 @@ func sourceGroup(name string, displayName string, members string[]) object => {
 }
 
 var contextName = '${service.service}-service-health'
-var hasRuntime = !empty(filter(service.journeys, journey => !(journey.?planned ?? false)))
-var providerCalls = !hasRuntime || service.service == 'onedrive' ? [] : concat(
-  [
-    { name: 'health-overviews', displayName: 'serviceAnnouncement.healthOverviews (status score)', signalName: 'microsoft-reported-service-status' }
-    { name: 'issues', displayName: 'serviceAnnouncement.issues (Count)', signalName: 'microsoft-reported-issue-count' }
-  ],
-  map(providerActivityFunctions[service.service], name => {
-    name: name
-    displayName: name
-    signalName: 'microsoft-activity-${name}'
-  })
+var providerSignalNames = concat(
+  ['microsoft-reported-service-status', 'microsoft-reported-issue-count'],
+  map(providerActivityFunctions[service.service], name => 'microsoft-activity-${name}')
 )
 var telemetryQuery = loadTextContent('../queries/synthetic.kql')
 var teamsCallSignals = [
@@ -111,40 +103,27 @@ var nodes = concat(
       y: 0
     }
   ],
-  hasRuntime ? [
+  [
     {
       name: contextName
       displayName: 'Service Health'
       kind: 'context'
       journey: ''
       step: ''
-      rollup: true
+      rollup: false
       impact: 'Suppressed'
       x: 0
       y: 240
     }
-  ] : [],
-  map(providerCalls, call => {
-    name: '${contextName}-${call.name}'
-    displayName: call.displayName
-    kind: 'provider-call'
-    journey: ''
-    step: ''
-    signalName: call.signalName
-    rollup: false
-    impact: 'Standard'
-    x: 0
-    y: 440 + indexOf(providerCalls, call) * 170
-  }),
+  ],
   map(service.journeys, journey => {
     name: journey.entityName
     displayName: journey.displayName
     kind: 'journey'
-    planned: journey.?planned ?? false
     journey: journey.name
     step: ''
     rollup: true
-    impact: (journey.?planned ?? false) ? 'Suppressed' : 'Standard'
+    impact: 'Standard'
     x: 400 + indexOf(service.journeys, journey) * 500
     y: 240
   }),
@@ -153,9 +132,8 @@ var nodes = concat(
     journey =>
       map(journey.steps, step => {
         name: '${journey.entityName}-${step.name}'
-        displayName: (journey.?planned ?? false) ? '[Planned / unimplemented] ${step.displayName}' : step.displayName
+        displayName: step.displayName
         kind: 'step'
-        planned: journey.?planned ?? false
         journey: journey.name
         step: step.?telemetryName ?? step.name
         rollup: false
@@ -166,8 +144,7 @@ var nodes = concat(
   ))
 )
 var relationships = concat(
-  hasRuntime ? [{ parent: modelName, child: contextName }] : [],
-  map(providerCalls, call => { parent: contextName, child: '${contextName}-${call.name}' }),
+  [{ parent: modelName, child: contextName }],
   map(service.journeys, journey => { parent: modelName, child: journey.entityName }),
   flatten(map(
     service.journeys,
@@ -221,7 +198,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
         canvasPosition: { x: node.x, y: node.y }
         signalGroups: union(
           node.rollup ? { dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false } } : {},
-          enableOtel && (node.kind == 'journey' || node.kind == 'step') && !(node.?planned ?? false)
+          enableOtel && (node.kind == 'journey' || node.kind == 'step')
             ? {
                 azureLogAnalytics: {
                   authenticationSetting: 'workspace-query'
@@ -248,7 +225,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey'
         ? { icon: { iconName: 'UserFlow' } }
         : {},
-      node.kind == 'root' || node.kind == 'context' || (node.?planned ?? false)
+      node.kind == 'root'
         ? {}
         : {
             signalAggregationGroups: concat(
@@ -256,8 +233,8 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                 sourceGroup(
                   'external-reports',
                   'External Reports',
-                  node.kind == 'provider-call'
-                    ? [node.signalName]
+                  node.kind == 'context'
+                    ? providerSignalNames
                     : concat(
                         ['synthetic-success-percentage', 'synthetic-mean-duration'],
                         node.name == 'teams-call' ? teamsCallSignals : []
@@ -285,3 +262,4 @@ resource modelRelationships 'Microsoft.CloudHealth/healthmodels/relationships@20
 output modelId string = model.id
 output rootEntityName string = model.name
 output entityNames array = [for node in nodes: node.name]
+output relationshipNames array = [for relationship in relationships: '${relationship.parent}-to-${relationship.child}']

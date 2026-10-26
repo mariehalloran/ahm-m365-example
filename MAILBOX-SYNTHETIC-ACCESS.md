@@ -1,6 +1,6 @@
 # Exchange synthetic permissions and managed identity setup
 
-This is the administrator handoff for mailbox-scoped authorization. The default **same-Entra-tenant** path runs in Azure Container Apps and authenticates to Graph with an explicitly selected **user-assigned managed identity**. For a different M365 tenant, use a certificate-backed application registered in that tenant, with Azure report authentication kept separate; follow the [cross-tenant administrator walkthrough](./docs/cross-tenant-access.md). Both paths access only the approved synthetic mailbox.
+This is the administrator handoff for mailbox-scoped authorization. The default **same-Entra-tenant** path runs in Azure Container Apps and authenticates to Graph with an explicitly selected **user-assigned managed identity**. For a different M365 tenant, use a certificate-backed application registered in that tenant, with Azure report authentication kept separate; follow the [cross-tenant administrator walkthrough](./docs/cross-tenant-access.md). Both paths access only the approved synthetic participants.
 
 No mailbox password is required. The same-tenant managed-identity path needs no application secret or customer-managed certificate. The explicit cross-tenant certificate path requires secure PEM storage/mounting and rotation; it never falls back from managed identity automatically.
 
@@ -13,11 +13,11 @@ The [shared Container Apps setup](./synthetic-tests/infra/README.md) separates i
 | Dedicated A/B shared/test mailboxes and an explicit synthetic distribution list with expected recipients | Complete cross-mailbox attachment/reply, list delivery and meeting journeys; keep business mailboxes outside the test |
 | The Microsoft 365 tenant ID, primary SMTP address, mailbox object ID, and owner | Confirm the correct tenant/target and define a narrow scope |
 | Approval for the Exchange worker's managed identity | Azure creates its service principal; Exchange must separately authorize it |
-| Exchange RBAC application roles scoped only to the test mailbox | Permit draft creation, send, Inbox checks, and owned-message cleanup |
+| Exchange RBAC application roles scoped only to approved participants | Permit draft/send/read/cleanup and the selected calendar actions |
 | An approved out-of-scope control mailbox | Verify that unrelated mailbox access is denied, without sending/deleting there |
 | Approved cadence, retention, mail-flow restrictions, and an escalation owner | Control volume, cleanup, and security impact |
 
-At one message per minute, one target produces up to **1,440 messages/day or 43,200 per thirty-day month**, plus sent/received copies. Agree on volume before enabling live execution.
+The one-minute mail journey produces up to **1,440 messages/day or 43,200 per thirty-day month per target**, plus sent/received copies. The other five journey families run every five minutes and add mail/calendar operations. Agree on total volume before enabling live execution.
 
 An eligible Exchange Online subscription must exist. A shared mailbox up to 50 GB generally needs no separate mailbox license; archive, hold, capacity, and advanced compliance/security features can change that. Human delegates need their own eligible licensing. Ask the tenant owner to confirm it.
 
@@ -35,7 +35,7 @@ If an existing private Azure Container Registry supplies the image, the attached
 
 ### Exchange mailbox authorization
 
-Use **Exchange Online RBAC for Applications only**, scoped to the dedicated mailbox:
+Use **Exchange Online RBAC for Applications only**, scoped to the dedicated participants:
 
 | Role | Journey steps that need it |
 | --- | --- |
@@ -67,9 +67,7 @@ An authorized Entra administrator assigns the selected permissions to the servic
 
 Only request the rows actually enabled. These permissions read provider context and do not grant mailbox message access. The prohibition on unscoped Entra `Mail.ReadWrite`/`Mail.Send` grants still applies; do not add those mail roles while configuring provider reads.
 
-Stable Service Health reports exact overview status directly to `exchange-service-health` using `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption, with `impactSuppressed`. Failed/missing/unknown overviews produce Unknown without a value and with failure context; the existing trial receives Graph 403 until `ServiceHealth.Read.All` admin consent is granted. Collection runs once per cycle even if journey initialization fails. Beta reports are explicitly opt-in, console-diagnostic-only, and never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available.
-
-No SharePoint-specific serviceActivity function has been verified in the documented catalog. Do not invent one or grant unrelated Office Apps permissions as a substitute. API failures/no data must be visible as collection diagnostics, not defaulted to healthy service status.
+Stable Service Health reports exact overview status directly to the single impact-suppressed `exchange-service-health` entity using `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Issues and five approved beta signals share its External Reports group; there are no per-API child entities. Failed/missing/unknown overviews produce Unknown without a value. Collection has an independent provider lane even when journey initialization fails. Beta functions are explicitly opt-in; counts and percentages remain diagnostic unless customer thresholds are configured. They never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available. See [exact provider contracts](./docs/provider-monitoring.md).
 
 ## 3. Infrastructure and non-secret handoff IDs
 
@@ -97,6 +95,7 @@ $expectedTenantId = "<tenantId from the identity output>"
 $clientId = "<managed identity clientId>"
 $principalId = "<managed identity principalId>"
 $mailbox = "ahm-synthetic@<accepted-domain>"
+$recipientMailbox = "ahm-synthetic-recipient@<accepted-domain>"
 $controlMailbox = "<approved-existing-out-of-scope-mailbox>"
 $scopeName = "AHM-Exchange-Synthetic-Mailbox"
 
@@ -112,7 +111,7 @@ New-ServicePrincipal -AppId $clientId -ObjectId $principalId `
     -DisplayName "AHM Exchange synthetic identity"
 
 New-ManagementScope -Name $scopeName `
-    -RecipientRestrictionFilter "PrimarySmtpAddress -eq '$mailbox'"
+    -RecipientRestrictionFilter "(PrimarySmtpAddress -eq '$mailbox') -or (PrimarySmtpAddress -eq '$recipientMailbox')"
 
 New-ManagementRoleAssignment -Name "AHM-Synthetic-MailReadWrite" `
     -App $principalId -Role "Application Mail.ReadWrite" `
@@ -122,11 +121,16 @@ New-ManagementRoleAssignment -Name "AHM-Synthetic-MailSend" `
     -App $principalId -Role "Application Mail.Send" `
     -CustomResourceScope $scopeName
 
+New-ManagementRoleAssignment -Name "AHM-Synthetic-CalendarsReadWrite" `
+    -App $principalId -Role "Application Calendars.ReadWrite" `
+    -CustomResourceScope $scopeName
+
 Test-ServicePrincipalAuthorization -Identity $principalId -Resource $mailbox
+Test-ServicePrincipalAuthorization -Identity $principalId -Resource $recipientMailbox
 Test-ServicePrincipalAuthorization -Identity $principalId -Resource $controlMailbox
 ```
 
-The allowed test must show both roles in scope, and the control mailbox must be out of scope. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
+Each allowed participant must show the selected roles in scope, and the control mailbox must be out of scope. This example covers an approved A/B pair; include every other explicitly selected expected recipient in the reviewed scope. Omit `Application Calendars.ReadWrite` when both calendar journeys are disabled. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
 
 New test tenants may require the one-time, tenant-wide `Enable-OrganizationCustomization` prerequisite. Check `Get-OrganizationConfig`'s `IsDehydrated` property, obtain tenant-owner approval, and run the command only when it is `True`. Wait for completion before retrying the scoped setup; do not replace scoped grants with broader permissions.
 
@@ -164,9 +168,9 @@ Same-tenant hosted Exchange remains keyless by default. The shared hosting templ
 
 The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, journeys, action functions and tests. Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
 
-The mail journey is authenticate -> create draft -> send -> confirm Inbox delivery -> cleanup. A second journey edits and reopens an owned draft without sending. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
+The six families are send/verify, draft lifecycle, attachment/reply, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 
-The root health model references an independent Exchange model. Its two journey entities receive whole-journey reports and six separate business-step child entities receive action reports, using **External Reports** only. Token acquisition and cleanup remain internal, with no standalone step reports or graph nodes. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. One mailbox sending to itself is not employee-to-employee delivery, Outlook UI coverage, or tenant-wide availability.
+The root health model references an independent Exchange model. Its six journey entities receive whole-journey reports and 25 business-step children receive action reports through **External Reports**. Token acquisition and compensating cleanup remain internal; deliberate draft deletion and calendar deletion/cancellation are business steps. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. API-backed dedicated participants do not establish Outlook UI or tenant-wide availability.
 
 ## 7. Not required by this Exchange test
 
@@ -185,15 +189,15 @@ Cross-tenant managed identity and federation are not implemented. Different-tena
 
 ## 8. Copy-and-send request
 
-> **Subject: Dedicated Exchange test mailbox and scoped managed-identity authorization**
+> **Subject: Dedicated Exchange test participants and scoped managed-identity authorization**
 >
-> Please provide one dedicated synthetic mailbox and confirm the same Entra tenant as our Azure Container App identity.
+> Please approve dedicated A/B synthetic mailboxes and a synthetic distribution list with explicit expected recipients, and confirm the same Entra tenant as our Azure Container App identity.
 >
-> We will supply the user-assigned managed identity's client ID and enterprise service-principal object ID from the Azure setup. Please register its reference in Exchange and assign only `Application Mail.ReadWrite` and `Application Mail.Send`, using Exchange RBAC for Applications scoped to that mailbox.
+> We will supply the user-assigned managed identity's client ID and enterprise service-principal object ID from the Azure setup. Please register its reference in Exchange and assign `Application Mail.ReadWrite`, `Application Mail.Send`, and selected calendar journeys' `Application Calendars.ReadWrite`, using Exchange RBAC for Applications scoped only to approved participants.
 >
 > Please do not add equivalent unscoped Entra Graph mail grants. We need allowed/denied authorization checks, a review of effective grants, and one live Graph validation before scheduling.
 >
-> The test creates a draft, sends to itself, confirms delivery, and deletes its own test copies. Please approve volume (up to one message/minute/target), mailbox licensing, recipient restrictions, retention, an out-of-scope control mailbox, and named ownership/escalation.
+> The six selected families cover A→B mail, drafts, attachment/reply, list fanout, recurrence, and meeting acceptance/cancellation. Please approve the one-minute mail cadence and five-minute other journeys, mailbox licensing, recipient restrictions, owned-artifact cleanup/retention, an out-of-scope control mailbox, and named ownership/escalation.
 >
 > We do not need a mailbox password, application secret/certificate for hosted Exchange authentication, or administrator privileges for the running worker. Please return approved tenant/mailbox IDs, identity/scope/assignment details, test results, and operating constraints.
 

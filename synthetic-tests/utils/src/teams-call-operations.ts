@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { IntegrationError } from "./http.js";
+import type { CallingIdentity } from "./teams-calling-auth.js";
 
 const identifier = z.string().min(1).max(2048).refine(value =>
   value.trim() === value && !/[\u0000-\u001f\u007f/\\?#]/.test(value) && ![".", ".."].includes(value));
@@ -8,12 +9,13 @@ export const playPromptOperationSchema = z.object({
   id: identifier,
   clientContext: z.string().uuid(),
   status: z.enum(["notStarted", "running", "completed", "failed"]),
-  resultInfo: z.object({ code: z.number().int().optional(), subcode: z.number().int().optional() }).optional(),
+  resultInfo: z.object({ code: z.number().int().optional(), subcode: z.number().int().optional() }).nullish(),
 });
 type Operation = z.infer<typeof playPromptOperationSchema>;
 type Observation = Omit<Operation, "id"> & { id: string; callId: string };
 interface Entry {
   callId: string;
+  botClientId: string;
   expiresAt: number;
   timer: ReturnType<typeof setTimeout>;
   operationId?: string;
@@ -51,14 +53,15 @@ export class TeamsCallOperations {
   private readonly entries = new Map<string, Entry>();
   constructor(private readonly now: () => number = Date.now) {}
 
-  register(callId: string, clientContext: string, lifetimeMs: number) {
+  register(callId: string, clientContext: string, lifetimeMs: number, botClientId: string) {
     this.prune();
     if (!identifier.safeParse(callId).success || !z.string().uuid().safeParse(clientContext).success ||
+        !z.string().uuid().safeParse(botClientId).success ||
         !Number.isInteger(lifetimeMs) || lifetimeMs < 1 || lifetimeMs > 120000 ||
         this.entries.has(clientContext) || this.entries.size >= 32) throw new IntegrationError("configuration-failure");
     const timer = setTimeout(() => this.remove(clientContext), lifetimeMs);
     timer.unref();
-    const entry: Entry = { callId, expiresAt: this.now() + lifetimeMs, timer, pending: [] };
+    const entry: Entry = { callId, botClientId: botClientId.toLowerCase(), expiresAt: this.now() + lifetimeMs, timer, pending: [] };
     this.entries.set(clientContext, entry);
     return {
       bind: (operation: Operation) => {
@@ -76,7 +79,7 @@ export class TeamsCallOperations {
     };
   }
 
-  accept(notification: unknown): void {
+  accept(notification: unknown, identity: CallingIdentity): void {
     const envelope = z.object({ value: z.array(z.unknown()).max(100) }).safeParse(notification);
     if (!envelope.success) return;
     this.prune();
@@ -90,7 +93,8 @@ export class TeamsCallOperations {
           !sameId(resource.operationId, dataResource.operationId) ||
           (data.id !== undefined && !sameId(data.id, resource.operationId))) continue;
       const entry = this.active(data.clientContext);
-      if (!entry || !sameId(entry.callId, resource.callId)) continue;
+      if (!entry || entry.botClientId !== identity.botClientId.toLowerCase() ||
+          !sameId(entry.callId, resource.callId)) continue;
       const observation: Observation = { ...data, callId: resource.callId, id: resource.operationId };
       if (entry.operationId) this.apply(entry, observation);
       else if (entry.pending.length < 4) entry.pending.push(observation);

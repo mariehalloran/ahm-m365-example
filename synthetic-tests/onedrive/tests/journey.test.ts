@@ -26,6 +26,7 @@ function fixture() {
   const faults: {
     noVersions?: boolean; badHash?: boolean; permission?: boolean; appUnavailable?: boolean;
     malformedUpload?: boolean; cleanupFailure?: boolean; hostilePage?: boolean; wrongFolder?: boolean;
+    ambiguousCreate?: boolean;
   } = {};
   let sequence = 0;
   const locate = (path: string) => {
@@ -52,6 +53,7 @@ function fixture() {
         folder: {}, parentReference: { id: id!, driveId: "drive-1" },
       };
       items.set(folder.id, folder);
+      if (faults.ambiguousCreate) throw new IntegrationError("graph-unavailable", 503);
       return folder;
     }
     if (method === "PUT") {
@@ -123,22 +125,25 @@ describe("OneDrive completed API-backed journeys", () => {
     expect(f.paths.filter(call => call.method === "DELETE")).toHaveLength(1);
     expect(result.steps.at(-1)).toMatchObject({ name: "cleanup", status: "skipped", reason: "no-mutation" });
   });
-  it("uses user-addressed approot without a drive ID, persists prior safe state and deletes only per-run scratch data", async () => {
+  it("uses user-addressed approot without a drive ID, verifies updates and deletes all per-cycle owned data", async () => {
     const f = fixture();
     const selected = probe("onedrive-appfolder");
     delete selected.driveId;
     delete selected.folderId;
     expect((await f.run(selected)).success).toBe(true);
-    const folder = [...f.items.values()].find(item => item.name === "AHM-Synthetic-Tests-user-1")!;
-    const state = [...f.items.values()].find(item => item.name === "state.json")!;
-    expect(JSON.parse(state.bytes!.toString())).toMatchObject({ userId, targetId: "user-1", revision: 2 });
+    expect([...f.items.keys()]).toEqual(["approved", "approot"]);
+    const firstCreation = f.paths.find(call => call.method === "POST")!.body as { name: string };
+    expect(firstCreation.name).toMatch(/^ahm-synthetic-/);
+    const firstUpdate = f.paths.filter(call => call.method === "PUT").at(-1)!.body;
+    expect(firstUpdate).toMatchObject({ userId, targetId: "user-1", revision: 2 });
     const before = f.paths.length;
     expect((await f.run(selected)).success).toBe(true);
-    expect(f.paths.slice(before).find(call => call.method === "DOWNLOAD")?.path).toContain(state.id);
-    expect(f.items.has(folder.id)).toBe(true);
+    const nextCreation = f.paths.slice(before).find(call => call.method === "POST")!.body as { name: string };
+    expect(nextCreation.name).not.toBe(firstCreation.name);
+    expect([...f.items.keys()]).toEqual(["approved", "approot"]);
     expect(f.items.has("approot")).toBe(true);
-    expect([...f.items.values()].some(item => item.name.startsWith("scratch-"))).toBe(false);
-    expect(f.paths.filter(call => call.method === "DELETE").every(call => call.path.includes("/items/file-"))).toBe(true);
+    expect(f.paths.filter(call => call.method === "DELETE").every(call => call.path.includes("/items/folder-"))).toBe(true);
+    expect(f.paths.filter(call => call.method === "DELETE")).toHaveLength(2);
     expect(f.paths.filter(call => call.path.includes("/users/")).every(call =>
       call.path === `/users/${userId}/drive/special/approot`)).toBe(true);
   });
@@ -204,16 +209,36 @@ describe("OneDrive completed API-backed journeys", () => {
     expect(result.steps.find(step => step.name === "read-prior-version")).toMatchObject({ status: "failed" });
     expect([...f.items.keys()]).toEqual(["approved", "approot"]);
   });
-  it("does not overwrite unowned or corrupted persistent app data", async () => {
+  it("does not read, overwrite or delete existing app-folder data, including legacy test state", async () => {
     const f = fixture();
+    f.items.set("legacy", {
+      id: "legacy", name: "AHM-Synthetic-Tests-user-1", folder: {}, parentReference: { id: "approot", driveId: "drive-1" },
+    });
+    f.items.set("legacy-state", {
+      id: "legacy-state", name: "state.json", file: {}, parentReference: { id: "legacy", driveId: "drive-1" },
+      bytes: Buffer.from('{"owner":"someone-else"}'),
+    });
     expect((await f.run(probe("onedrive-appfolder"))).success).toBe(true);
-    const state = [...f.items.values()].find(item => item.name === "state.json")!;
-    state.bytes = Buffer.from('{"owner":"someone-else"}');
-    const before = f.paths.length;
+    expect(f.items.get("legacy-state")?.bytes?.toString()).toBe('{"owner":"someone-else"}');
+    expect(f.paths.some(call => /\/items\/legacy/.test(call.path))).toBe(false);
+  });
+  it("cleans an ambiguous app-folder creation through only its exact per-cycle owned path", async () => {
+    const f = fixture();
+    f.faults.ambiguousCreate = true;
     const result = await f.run(probe("onedrive-appfolder"));
-    expect(result.success).toBe(false);
-    expect(f.paths.slice(before).filter(call => call.method === "PUT")).toEqual([]);
-    expect(state.bytes.toString()).toBe('{"owner":"someone-else"}');
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "graph-unavailable" });
+    expect(result.steps.find(step => step.name === "cleanup")).toMatchObject({ status: "succeeded" });
+    expect([...f.items.keys()]).toEqual(["approved", "approot"]);
+  });
+  it("cleans all per-cycle app data if verifying the updated bytes fails", async () => {
+    const f = fixture();
+    const download = vi.mocked(f.graph.downloadContent).getMockImplementation()!;
+    vi.spyOn(f.graph, "downloadContent").mockImplementationOnce(download).mockResolvedValueOnce(Buffer.from("incorrect-bytes"));
+    const result = await f.run(probe("onedrive-appfolder"));
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "read-failure" });
+    expect(result.steps.find(step => step.name === "update-app-data")).toMatchObject({ status: "failed" });
+    expect(result.steps.find(step => step.name === "cleanup")).toMatchObject({ status: "succeeded" });
+    expect([...f.items.keys()]).toEqual(["approved", "approot"]);
   });
   it("cancellation remains failure while cleanup uses its independent signal", async () => {
     const f = fixture();

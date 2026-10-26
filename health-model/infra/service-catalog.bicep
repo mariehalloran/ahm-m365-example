@@ -14,7 +14,6 @@ var providerActivityFunctions = {
     'getAudioStreamQoEMetricsForTeams'
     'getAudioStreamsOverUdpMetricsForTeams'
   ]
-  sharepoint: []
   onedrive: []
 }
 
@@ -30,12 +29,11 @@ type JourneyDefinition = {
   entityName: string
   displayName: string
   steps: ServiceStep[]
-  planned: bool?
 }
 
 @export()
 type ServiceDefinition = {
-  service: 'exchange' | 'teams' | 'sharepoint' | 'onedrive'
+  service: 'exchange' | 'teams' | 'onedrive'
   displayName: string
   journeys: JourneyDefinition[]
 }
@@ -120,31 +118,24 @@ var serviceDefinitions ServiceDefinition[] = [
     displayName: 'Teams Experience'
     journeys: [
       {
-        name: 'publish-channel-message'
+        name: 'channel-conversation'
         entityName: 'teams-global'
-        displayName: 'Publish channel message'
+        displayName: 'Post, read back and reply in a channel as a bot'
         steps: [
-          { name: 'post-message', displayName: 'Post message' }
-          { name: 'confirm-publication', displayName: 'Confirm publication' }
+          { name: 'post-message', displayName: 'Post root as the selected bot' }
+          { name: 'confirm-publication', displayName: 'Verify persisted root author and correlation' }
+          { name: 'post-reply', displayName: 'Reply in the thread as the same bot' }
+          { name: 'confirm-reply', displayName: 'Verify persisted reply author and correlation' }
         ]
       }
       {
-        name: 'reply-channel-message'
-        entityName: 'teams-reply'
-        displayName: 'Reply in channel thread'
-        steps: [
-          { name: 'post-message', displayName: 'Post root message' }
-          { name: 'post-reply', displayName: 'Post reply' }
-          { name: 'confirm-reply', displayName: 'Confirm reply visibility' }
-        ]
-      }
-      {
-        name: 'call-test-user'
+        name: 'scheduled-meeting'
         entityName: 'teams-call'
-        displayName: 'Two bots join a meeting, verify roster, play audio and leave'
+        displayName: 'Join a scheduled meeting, verify roster and play audio'
         steps: [
           { name: 'place-call', displayName: 'Join dedicated meeting as two distinct bots' }
           { name: 'wait-for-answer', displayName: 'Verify both owned calls established' }
+          { name: 'verify-meeting-metadata', displayName: 'Verify dedicated meeting metadata' }
           { name: 'verify-participants', displayName: 'Verify both bot identities in both meeting rosters' }
           { name: 'play-audio', displayName: 'Play test tone and verify operation completion' }
           { name: 'end-call', displayName: 'Leave both owned calls and verify disconnected' }
@@ -170,12 +161,12 @@ var serviceDefinitions ServiceDefinition[] = [
       {
         name: 'app-folder-lifecycle'
         entityName: 'onedrive-planned-app-folder-lifecycle'
-        displayName: 'Persist, reopen and update app-folder data'
+        displayName: 'Write, read, update and delete app-folder data'
         steps: [
-          { name: 'step-1', telemetryName: 'write-app-data', displayName: 'Verify prior state and write app-folder data' }
+          { name: 'step-1', telemetryName: 'write-app-data', displayName: 'Create cycle-owned folder and app data' }
           { name: 'step-2', telemetryName: 'read-app-data', displayName: 'Read and verify data' }
           { name: 'step-3', telemetryName: 'update-app-data', displayName: 'Update, reread and verify persisted state' }
-          { name: 'step-4', telemetryName: 'delete-app-scratch', displayName: 'Delete owned scratch data; retain safe state' }
+          { name: 'step-4', telemetryName: 'delete-app-scratch', displayName: 'Delete cycle-owned folder and verify removal' }
         ]
       }
       {
@@ -187,33 +178,6 @@ var serviceDefinitions ServiceDefinition[] = [
           { name: 'step-2', telemetryName: 'list-versions', displayName: 'Enumerate actual document version history' }
           { name: 'step-3', telemetryName: 'read-prior-version', displayName: 'Download prior version and verify bytes' }
           { name: 'step-4', telemetryName: 'restore-version', displayName: 'Optional: restore downloaded prior bytes and verify' }
-        ]
-      }
-    ]
-  }
-  {
-    service: 'sharepoint'
-    displayName: 'SharePoint Experience'
-    journeys: [
-      {
-        name: 'save-reopen-file'
-        entityName: 'sharepoint-global'
-        displayName: 'Save and reopen file'
-        steps: [
-          { name: 'verify-drive', displayName: 'Verify library' }
-          { name: 'upload-file', displayName: 'Upload file' }
-          { name: 'read-file', displayName: 'Read file' }
-        ]
-      }
-      {
-        name: 'rename-reopen-file'
-        entityName: 'sharepoint-rename'
-        displayName: 'Rename and reopen file'
-        steps: [
-          { name: 'verify-drive', displayName: 'Verify library' }
-          { name: 'upload-file', displayName: 'Upload file' }
-          { name: 'rename-file', displayName: 'Rename file' }
-          { name: 'read-file', displayName: 'Reopen and verify file' }
         ]
       }
     ]

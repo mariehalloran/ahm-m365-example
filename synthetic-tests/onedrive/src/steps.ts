@@ -14,12 +14,16 @@ const collectionSchema = z.object({ value: z.array(itemSchema).max(200), "@odata
 const versionsSchema = z.object({
   value: z.array(z.object({ id: z.string().min(1).max(100) })).max(200), "@odata.nextLink": z.string().optional(),
 });
-const payloadSchema = z.object({
-  schemaVersion: z.literal("1.0"), owner: z.literal("ahm-onedrive"),
-  targetId: z.string(), userId: z.string().uuid(), correlationId: z.string().uuid(),
-  revision: z.union([z.literal(1), z.literal(2)]), text: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict();
-export type Payload = z.infer<typeof payloadSchema>;
+export interface Payload {
+  schemaVersion: "1.0";
+  owner: "ahm-onedrive";
+  targetId: string;
+  userId: string;
+  correlationId: string;
+  revision: 1 | 2;
+  text: string;
+  sha256: string;
+}
 
 export interface FileAttempt {
   probe: Probe;
@@ -29,7 +33,6 @@ export interface FileAttempt {
   folderName: string;
   folderId?: string;
   fileId?: string;
-  scratchId?: string;
   mutationAttempted: boolean;
 }
 
@@ -127,6 +130,7 @@ async function deleteVerified(
 }
 
 export async function deleteOwnedFolder(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+  if (!attempt.driveId || !attempt.parentId) throw new IntegrationError("configuration-failure");
   if (!attempt.folderId) {
     const folder = await getOptional(graph, childPath(attempt, attempt.parentId, attempt.folderName), signal);
     if (!folder) { attempt.mutationAttempted = false; return; }
@@ -146,34 +150,7 @@ export async function openAppFolder(graph: GraphClient, attempt: FileAttempt, si
   if (attempt.driveId && root.parentReference.driveId !== attempt.driveId) throw new IntegrationError("configuration-failure");
   attempt.driveId = root.parentReference.driveId;
   attempt.parentId = root.id;
-  const existing = await getOptional(graph, childPath(attempt, root.id, attempt.folderName), signal);
-  if (existing) attempt.folderId = validateItem(attempt, existing, attempt.folderName, root.id, true).id;
-  else await createFolder(graph, attempt, signal);
-}
-
-export async function verifyPersistedState(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
-  const previous = await getOptional(graph, childPath(attempt, attempt.folderId!, "state.json"), signal);
-  if (!previous) return;
-  validateItem(attempt, previous, "state.json", attempt.folderId!, false);
-  const bytes = await downloadFile(graph, attempt, previous.id, signal);
-  let raw: unknown;
-  try { raw = JSON.parse(bytes.toString("utf8")); } catch { throw new IntegrationError("read-failure"); }
-  const parsed = payloadSchema.safeParse(raw);
-  if (!parsed.success || parsed.data.targetId !== attempt.probe.id || parsed.data.userId !== attempt.probe.userId ||
-      digest(parsed.data.text) !== parsed.data.sha256 ||
-      parsed.data.text !== `OneDrive synthetic ${parsed.data.correlationId} revision ${parsed.data.revision}`) {
-    throw new IntegrationError("read-failure");
-  }
-  verifyBytes(bytes, parsed.data);
-}
-
-export async function deleteScratch(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
-  const name = `scratch-${attempt.correlationId}.json`;
-  const file = attempt.scratchId ? undefined : await getOptional(graph, childPath(attempt, attempt.folderId!, name), signal);
-  const id = attempt.scratchId ?? (file ? validateItem(attempt, file, name, attempt.folderId!, false).id : undefined);
-  if (id) await deleteVerified(graph, attempt, id, name, attempt.folderId!, false, signal);
-  delete attempt.scratchId;
-  attempt.mutationAttempted = false;
+  await createFolder(graph, attempt, signal);
 }
 
 export async function listVersions(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<string[]> {

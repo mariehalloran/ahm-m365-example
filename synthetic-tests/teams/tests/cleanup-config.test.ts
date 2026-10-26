@@ -7,7 +7,7 @@ const file = {
   type: "teams", mode: "simulation", cohort: "teams-global", intervalSeconds: 120, timeoutSeconds: 45,
 };
 const targets = [{ id: "teams-001" }];
-const selection = { "publish-channel-message": true, "reply-channel-message": true };
+const selection = { "channel-conversation": true };
 
 describe("Teams service-config cleanup selection", () => {
   it("defaults to cleanup and explicitly keeps both checked-in profiles safe", async () => {
@@ -30,7 +30,7 @@ describe("Teams service-config cleanup selection", () => {
     "simulates retention without successful cleanup or real mutation claims in both scenarios (%s)", async scenario => {
       const service = parseServiceConfig({ ...file, enabled: true, targets, scenario, teamsCleanupEnabled: false });
       const config = serviceSettings(service, {}, selection);
-      expect(config.probes).toHaveLength(2);
+      expect(config.probes).toHaveLength(1);
       for (const probe of config.probes) {
         const telemetry = { emit: vi.fn() };
         const result = resultSchema.parse(await simulate(probe, {
@@ -57,9 +57,9 @@ describe("Teams service-config cleanup selection", () => {
       expect(telemetry.emit).not.toHaveBeenCalled();
     }
   });
-  it("does not change Exchange/SharePoint cleanup simulation or allow retention reasons on business steps", async () => {
+  it("does not change Exchange/OneDrive cleanup simulation or allow retention reasons on business steps", async () => {
     const config = serviceSettings(parseServiceConfig({ ...file, enabled: true, targets, teamsCleanupEnabled: false }));
-    for (const type of ["exchange-mail-flow", "sharepoint-file"] as const) {
+    for (const type of ["exchange-mail-flow", "onedrive-roundtrip"] as const) {
       const telemetry = { emit: vi.fn() };
       const result = await simulate({ id: "other-001", type, cohort: "other-global" }, {
         config, signal: new AbortController().signal, telemetry,

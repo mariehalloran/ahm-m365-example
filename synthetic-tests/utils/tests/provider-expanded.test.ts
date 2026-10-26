@@ -48,7 +48,7 @@ describe("all approved Exchange/Teams beta provider functions", () => {
     expect(reports).toHaveLength(5);
     for (const [index, report] of reports.entries()) {
       const name = activityFunctions[type][index]!;
-      expect(report.entityName).toBe(`${type}-service-health-${name}`);
+      expect(report.entityName).toBe(`${type}-service-health`);
       expect(report.body).toMatchObject({ healthState: "Unknown", value: isPercentageActivity(name) ? 97 : 120 });
       expect(report.body).not.toHaveProperty("evaluationRules");
       expect(report.body).not.toHaveProperty("dataUnit");
@@ -72,7 +72,7 @@ describe("all approved Exchange/Teams beta provider functions", () => {
     }, 15, now);
     expect(reports).toHaveLength(5);
     expect(reports[0]).toMatchObject({
-      entityName: "exchange-service-health-getConnectivityMetricsForExchange", body: {
+      entityName: "exchange-service-health", body: {
         signalName: "microsoft-activity-getConnectivityMetricsForExchange", value: 97, healthState: "Degraded",
       },
     });
@@ -104,7 +104,7 @@ describe("all approved Exchange/Teams beta provider functions", () => {
     ];
     const reports = serviceActivityReports(config, { cycleId: "thresholds", providerDiagnostics }, 15, now);
     expect(reports.map(report => report.body.healthState)).toEqual(["Degraded", "Unknown", "Unknown", "Unhealthy", "Unknown"]);
-    expect(reports.every(report => report.entityName.startsWith("teams-service-health-get"))).toBe(true);
+    expect(reports.every(report => report.entityName === "teams-service-health")).toBe(true);
     expect(reports[3]?.body.additionalContext).toContain("telemetry-coverage-not-call-quality");
   });
 
@@ -120,7 +120,7 @@ describe("all approved Exchange/Teams beta provider functions", () => {
       const reports = serviceActivityReports(config, { cycleId: "failed", providerDiagnostics }, 15, now);
       expect(reports).toHaveLength(1);
       expect(reports[0]).toMatchObject({
-        entityName: "teams-service-health-getAudioStreamQoEMetricsForTeams",
+        entityName: "teams-service-health",
         body: { healthState: "Unknown", signalName: "microsoft-activity-getAudioStreamQoEMetricsForTeams" },
       });
       expect(reports[0]?.body).not.toHaveProperty("value");

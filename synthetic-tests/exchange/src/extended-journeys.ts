@@ -104,8 +104,9 @@ async function receive(a: Attempt, mailbox: string, subject = a.subject) {
   return poll(a, async () => {
     const found = await a.graph.json(`${user(mailbox)}/mailFolders/inbox/messages?${query}`, messages, a.context.signal);
     if (found["@odata.nextLink"]) throw new IntegrationError("read-failure");
-    for (const message of found.value) own(a.ownedMail, mailbox, message.id);
-    return found.value.find(message => message.subject === subject);
+    const matching = found.value.filter(message => message.subject === subject);
+    for (const message of matching) own(a.ownedMail, mailbox, message.id);
+    return matching[0];
   });
 }
 
@@ -166,7 +167,8 @@ async function distribution(a: Attempt): Promise<void> {
   await step(a, "send-group-mail", () => send(a, a.probe.mailbox!, [group.address]));
   await step(a, "confirm-group-delivery", async () => {
     const deliveries = await Promise.allSettled(group.expectedRecipients.map(mailbox => receive(a, mailbox)));
-    if (deliveries.some(result => result.status === "rejected")) throw new IntegrationError("delivery-timeout");
+    const failure = deliveries.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   });
 }
 
@@ -252,6 +254,15 @@ async function recurring(a: Attempt): Promise<void> {
   });
   await step(a, "delete-event", async () => {
     await a.graph.request(item(mailbox, "events", master.id), a.context.signal, "DELETE");
+    await poll(a, async () => {
+      try {
+        await a.graph.json(item(mailbox, "events", master.id), event, a.context.signal);
+        return undefined;
+      } catch (error) {
+        if (error instanceof IntegrationError && error.status === 404) return true;
+        throw error;
+      }
+    });
     a.ownedEvents.get(mailbox)?.delete(master.id);
   });
 }
@@ -307,8 +318,8 @@ async function clean(a: Attempt, signal: AbortSignal): Promise<void> {
         try {
           const query = new URLSearchParams({ "$filter": `subject eq '${quote(subject)}'`, "$top": "100" });
           const copies = await a.graph.json(`${user(mailbox)}/messages?${query}`, messages, signal);
+          for (const copy of copies.value) if (copy.subject === subject) own(a.ownedMail, mailbox, copy.id);
           if (copies["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
-          for (const copy of copies.value) own(a.ownedMail, mailbox, copy.id);
         } catch (error) { failures.push(error); }
       }
     }

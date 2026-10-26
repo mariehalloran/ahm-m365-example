@@ -5,7 +5,6 @@ RUN npm ci
 COPY tsconfig.json tsconfig.build.json ./
 COPY exchange/src ./exchange/src
 COPY teams/src ./teams/src
-COPY sharepoint/src ./sharepoint/src
 COPY onedrive/src ./onedrive/src
 COPY utils/src ./utils/src
 RUN npm run build

@@ -110,19 +110,12 @@ export function createLiveTeamsBot(
 function botCredential(
   config: Config, env: NodeJS.ProcessEnv, identity: { BOT_TENANT_ID: string; BOT_CLIENT_ID: string },
 ): TokenCredential {
-  if (config.BOT_AUTHENTICATION === "managed-identity") {
-    if (!z.string().uuid().safeParse(env.AZURE_TENANT_ID).success ||
-        env.AZURE_TENANT_ID?.toLowerCase() !== identity.BOT_TENANT_ID.toLowerCase()) {
-      throw new ConfigurationError("Bot managed identity requires AZURE_TENANT_ID in the same approved bot tenant");
-    }
-    return new ManagedIdentityCredential({ clientId: identity.BOT_CLIENT_ID });
-  } else if (config.BOT_AUTHENTICATION === "certificate") {
-    const path = z.string().trim().min(1).safeParse(env.BOT_CLIENT_CERTIFICATE_PATH);
-    if (!path.success) throw new ConfigurationError("Bot certificate access requires BOT_CLIENT_CERTIFICATE_PATH");
-    return new ClientCertificateCredential(identity.BOT_TENANT_ID, identity.BOT_CLIENT_ID, path.data);
-  } else {
-    throw new ConfigurationError("Invalid BOT_AUTHENTICATION mode");
+  if (config.BOT_AUTHENTICATION !== "managed-identity" ||
+      !z.string().uuid().safeParse(env.AZURE_TENANT_ID).success ||
+      env.AZURE_TENANT_ID?.toLowerCase() !== identity.BOT_TENANT_ID.toLowerCase()) {
+    throw new ConfigurationError("BOT_AUTHENTICATION requires managed-identity and a matching AZURE_TENANT_ID in the same approved bot tenant");
   }
+  return new ManagedIdentityCredential({ clientId: identity.BOT_CLIENT_ID });
 }
 
 export function createTeamsCallingGraph(config: Config, env: NodeJS.ProcessEnv = process.env, peer = false): GraphClient {

@@ -15,10 +15,6 @@ const applicationAccess = z.object({
   m365CertificateSource: z.enum(["key-vault", "container-app"]).optional(),
   m365CertificateSecretUri: certificateSecretUri.optional(),
   m365CertificateRevision: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
-  botTenantId: z.string().uuid().optional(),
-  botClientId: z.string().uuid().optional(),
-  botCertificateSecretUri: certificateSecretUri.optional(),
-  teamsPublicClientId: z.string().uuid().optional(),
   botPeerClientId: z.string().uuid().optional(),
   botPeerManagedIdentityResourceId: z.string().regex(
     /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/resourceGroups\/[a-z0-9_().-]{1,90}\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[a-z0-9_-]{3,128}$/i,
@@ -27,7 +23,6 @@ const applicationAccess = z.object({
 const serviceAccessSchema = z.object({
   exchange: applicationAccess.optional(),
   teams: applicationAccess.optional(),
-  sharepoint: applicationAccess.optional(),
   onedrive: applicationAccess.optional(),
 }).strict();
 
@@ -47,14 +42,7 @@ async function readServiceAccess(file?: string): Promise<z.infer<typeof serviceA
 }
 
 async function readDeploymentService(project: ProjectConfig, type: ServiceConfig["type"], projectFile: string) {
-  let service: ServiceFileConfig;
-  try { service = await readServiceConfig(resolve(dirname(projectFile), project.services[type].configFile)); }
-  catch (error) {
-    if (type !== "onedrive" || project.services.onedrive.enabled ||
-        project.services.onedrive.configFile !== "synthetic-tests/onedrive/config.json" ||
-        !(error instanceof ConfigurationError) || error.message !== "Cannot read the service config file") throw error;
-    service = await readServiceConfig(fileURLToPath(new URL("../../onedrive/config.json", import.meta.url)));
-  }
+  const service: ServiceFileConfig = await readServiceConfig(resolve(dirname(projectFile), project.services[type].configFile));
   if (service.type !== type) throw new ConfigurationError(`Deployment requires a ${type} service config`);
   applyProjectConfig(project, service);
   return service;
@@ -70,34 +58,33 @@ export async function prepareDeploymentParameters(
   if (workerImage !== undefined && workerImage.trim().length === 0) {
     throw new ConfigurationError("workerImage must be a nonempty image reference");
   }
-  const [exchange, teams, sharepoint, onedrive] = await Promise.all([
+  const [exchange, teams, onedrive] = await Promise.all([
     readDeploymentService(project, "exchange", projectFile),
     readDeploymentService(project, "teams", projectFile),
-    readDeploymentService(project, "sharepoint", projectFile),
     readDeploymentService(project, "onedrive", projectFile),
   ]);
   const serviceAccess = await readServiceAccess(accessFile);
-  for (const service of [exchange, teams, sharepoint, onedrive]) {
-    const teamsMessages = project.services.teams.scenarios["publish-channel-message"] || project.services.teams.scenarios["reply-channel-message"];
+  for (const service of [exchange, teams, onedrive]) {
+    const teamsMessages = project.services.teams.scenarios["channel-conversation"];
     const access = serviceAccess[service.type];
-    const calling = service.type === "teams" && applyProjectConfig(project, service).enabled &&
-      service.mode === "live" && project.services.teams.scenarios["call-test-user"];
+    const live = service.type === "teams" && applyProjectConfig(project, service).enabled && service.mode === "live";
+    const needsPeer = live && project.services.teams.scenarios["scheduled-meeting"];
     const hasPeer = access?.botPeerClientId || access?.botPeerManagedIdentityResourceId;
-    if (hasPeer && (!calling || !access?.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
-      throw new ConfigurationError("Peer access requires both botPeerClientId and botPeerManagedIdentityResourceId for enabled live Teams meeting calls only");
+    if (hasPeer && (!needsPeer || !access?.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
+      throw new ConfigurationError("Peer access requires both botPeerClientId and botPeerManagedIdentityResourceId for an enabled live Teams scenario that needs the peer bot");
     }
-    if (calling && (service.botAuthentication !== "managed-identity" || service.teamsCallingPort !== 8080)) {
-      throw new ConfigurationError("Hosted meeting calls require managed-identity bot authentication and port 8080");
+    if (needsPeer && service.botAuthentication !== "managed-identity") {
+      throw new ConfigurationError("Hosted peer-bot scenarios require managed-identity bot authentication");
     }
-    if (calling && workerImage && !hasPeer) {
-      throw new ConfigurationError("Hosted meeting calls require serviceAccess.teams botPeerClientId and botPeerManagedIdentityResourceId for the existing approved peer UAMI");
+    if (needsPeer && service.teamsCallingPort !== 8080) {
+      throw new ConfigurationError("Hosted scheduled meetings require port 8080");
+    }
+    if (needsPeer && workerImage && !hasPeer) {
+      throw new ConfigurationError("Hosted peer-bot scenarios require serviceAccess.teams botPeerClientId and botPeerManagedIdentityResourceId for the existing approved peer UAMI");
     }
     if (hasPeer && project.services.teams.callTargets.some(target =>
       target.peerBotClientId.toLowerCase() !== access!.botPeerClientId!.toLowerCase())) {
       throw new ConfigurationError("Root callTargets peerBotClientId must match serviceAccess.teams.botPeerClientId");
-    }
-    if (access?.teamsPublicClientId && (service.type !== "teams" || service.teamsAuthentication !== "user-delegated")) {
-      throw new ConfigurationError("teamsPublicClientId requires Teams user-delegated authentication");
     }
     if (access && Object.values(access).some(value => value !== undefined)) {
       const hasM365 = access.m365TenantId || access.m365ClientId || access.m365CertificateSecretUri ||
@@ -113,55 +100,31 @@ export async function prepareDeploymentParameters(
       if (!nativeCertificate && access.m365CertificateRevision) {
         throw new ConfigurationError(`${service.type} native certificate revision requires container-app storage`);
       }
-      const hasBot = access.botTenantId || access.botClientId || access.botCertificateSecretUri;
-      if (hasBot && (service.type !== "teams" || !(access.botTenantId && access.botClientId && access.botCertificateSecretUri))) {
-        throw new ConfigurationError("Bot access requires all three bot settings and is supported only for teams");
-      }
-      if (hasBot && service.teamsAuthentication !== "bot" && !project.services.teams.scenarios["call-test-user"]) {
-        throw new ConfigurationError("Bot access requires explicit teamsAuthentication: bot");
-      }
-      if (hasBot && service.botAuthentication !== "certificate") {
-        throw new ConfigurationError("Bot certificate access requires explicit botAuthentication: certificate; managed identity metadata is supplied by infrastructure");
-      }
       if (hasM365 && service.graphAuthentication !== "certificate") {
         throw new ConfigurationError(`${service.type} M365 application settings require graphAuthentication: certificate`);
-      }
-      if (hasBot && access.m365TenantId && access.botTenantId?.toLowerCase() !== access.m365TenantId.toLowerCase()) {
-        throw new ConfigurationError("Teams bot and M365 application tenants must match");
       }
       if (service.type === "teams" && access.m365TenantId &&
           project.services.teams.targets.some(target => target.tenantId?.toLowerCase() !== access.m365TenantId?.toLowerCase())) {
         throw new ConfigurationError("Teams target and M365 application tenants must match");
-      }
-      if (hasBot && [...project.services.teams.targets, ...project.services.teams.callTargets].some(target =>
-        target.tenantId?.toLowerCase() !== access.botTenantId?.toLowerCase())) {
-        throw new ConfigurationError("Teams target and bot tenants must match");
       }
     }
     if (workerImage && applyProjectConfig(project, service).enabled && service.mode === "live") {
       if (service.healthReportAuthentication !== "managed-identity") {
         throw new ConfigurationError("Hosted workers require healthReportAuthentication: managed-identity");
       }
-      const needsApplicationGraph = service.type !== "teams" || (service.teamsAuthentication === "bot" && teamsMessages) ||
+      const needsApplicationGraph = service.type !== "teams" || teamsMessages ||
         service.serviceHealth || service.serviceActivity.enabled;
       if (needsApplicationGraph && service.graphAuthentication === "certificate" &&
           !(access?.m365CertificateSecretUri || access?.m365CertificateSource === "container-app")) {
         throw new ConfigurationError(`${service.type} hosted Graph certificate access requires --access-config with M365 application settings`);
       }
-      if (service.type === "teams" && teamsMessages && service.teamsAuthentication === "user-delegated" && !access?.teamsPublicClientId) {
-        throw new ConfigurationError("Hosted delegated Teams requires --access-config with teamsPublicClientId");
-      }
-      if (service.type === "teams" && (service.teamsAuthentication === "bot" || project.services.teams.scenarios["call-test-user"]) &&
-          service.botAuthentication === "certificate" && !access?.botCertificateSecretUri) {
-        throw new ConfigurationError("Hosted bot certificate access requires --access-config with bot certificate settings");
-      }
     }
   }
-  if (workerImage && !enableLiveProbes && [exchange, teams, sharepoint, onedrive].some(service =>
+  if (workerImage && !enableLiveProbes && [exchange, teams, onedrive].some(service =>
     applyProjectConfig(project, service).enabled && service.mode === "live")) {
     throw new ConfigurationError("Deploying live worker profiles requires explicit --enable-live");
   }
-  if (workerImage && !enableBetaServiceActivity && [exchange, teams, sharepoint, onedrive].some(service =>
+  if (workerImage && !enableBetaServiceActivity && [exchange, teams, onedrive].some(service =>
     applyProjectConfig(project, service).enabled && service.serviceActivity.enabled)) {
     throw new ConfigurationError("Deploying beta provider collection requires explicit --enable-beta-service-activity");
   }
@@ -170,7 +133,7 @@ export async function prepareDeploymentParameters(
     contentVersion: "1.0.0.0",
     parameters: {
       projectConfig: { value: project },
-      serviceConfigs: { value: { exchange, teams, sharepoint, onedrive } },
+      serviceConfigs: { value: { exchange, teams, onedrive } },
       serviceAccess: { value: serviceAccess },
       deployWorkers: { value: workerImage !== undefined },
       workerImage: { value: workerImage ?? "" },

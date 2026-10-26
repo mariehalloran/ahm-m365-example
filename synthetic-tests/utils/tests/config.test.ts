@@ -4,8 +4,8 @@ import { loadConfig } from "../src/config.js";
 describe("safe runtime configuration", () => {
   it("defaults to bot MI and rejects unrecognized authentication environment modes", () => {
     expect(loadConfig({})).toMatchObject({ TEAMS_AUTHENTICATION: "bot", BOT_AUTHENTICATION: "managed-identity" });
-    expect(loadConfig({ TEAMS_AUTHENTICATION: "user-delegated" }).TEAMS_AUTHENTICATION).toBe("user-delegated");
-    for (const value of ["", "cli", "default", "user-delegated"]) {
+    expect(() => loadConfig({ TEAMS_AUTHENTICATION: "user-delegated" })).toThrow("TEAMS_AUTHENTICATION");
+    for (const value of ["", "cli", "default", "user-delegated", "certificate"]) {
       expect(() => loadConfig({ BOT_AUTHENTICATION: value })).toThrow("BOT_AUTHENTICATION");
     }
     expect(() => loadConfig({ TEAMS_AUTHENTICATION: "automatic" })).toThrow("TEAMS_AUTHENTICATION");
@@ -24,7 +24,7 @@ describe("safe runtime configuration", () => {
     const probe = { id: "probe-001", type: "exchange-mail-flow", cohort: "cohort-global" };
     expect(() => loadConfig({ PROBES_JSON: JSON.stringify([probe, probe]) })).toThrow("unique");
     expect(() => loadConfig({
-      PROBES_JSON: JSON.stringify([probe, { ...probe, id: "probe-002", type: "sharepoint-file" }]),
+      PROBES_JSON: JSON.stringify([probe, { ...probe, id: "probe-002", type: "onedrive-roundtrip" }]),
     })).toThrow("mix");
   });
   it("allows the same opaque target ID and cohort across two journeys of one service", () => {
@@ -35,7 +35,7 @@ describe("safe runtime configuration", () => {
     expect(config.probes).toHaveLength(2);
   });
   it("keeps the expanded probe inventory bounded", () => {
-    const probes = Array.from({ length: 91 }, (_, index) => ({
+    const probes = Array.from({ length: 151 }, (_, index) => ({
       id: `probe-${index}`, type: "teams-channel-message", cohort: "teams-global",
     }));
     expect(() => loadConfig({ PROBES_JSON: JSON.stringify(probes) })).toThrow("Invalid PROBES_JSON");

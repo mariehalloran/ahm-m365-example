@@ -7,9 +7,6 @@ import { createTeamsCallingVerifier } from "./teams-calling-auth.js";
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
 import { TeamsCallOperations } from "./teams-call-operations.js";
 import { GraphClient } from "./graph.js";
-import { AuthenticatedHttp, IntegrationError } from "./http.js";
-import { createTeamsUserCredentials } from "./teams-user-auth.js";
-import { TeamsUserClient } from "./teams-user.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
 
 export function validateRuntimeConsent(service: ServiceConfig, env: NodeJS.ProcessEnv): void {
@@ -51,27 +48,14 @@ export async function serviceRuntime(
         target.peerBotClientId.toLowerCase() === probe.peerBotClientId?.toLowerCase()))) {
     throw new ConfigurationError("Calls may join only the selected root-configured dedicated meetings and peer bots");
   }
-  const messages = config.probes.some(probe => probe.type === "teams-channel-message" || probe.type === "teams-channel-reply");
-  let dependencies: RunnerDependencies;
-  if (live && service.type === "teams" && messages && service.teamsAuthentication === "user-delegated") {
-    const users = createTeamsUserCredentials(service, env);
-    const clients = new Map([...users].map(([username, credential]) => {
-      const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default"));
-      return [username, { graph, teamsBot: new TeamsUserClient(graph, credential) }] as const;
-    }));
-    dependencies = {
-      telemetry, results: suppliedResults ?? createResultOutput(telemetry),
-      clientsForProbe(probe) {
-        const target = service.targets.find(target => target.id === probe.id);
-        const selected = clients.get(target?.userPrincipalName?.toLowerCase() ?? "");
-        if (!target || !selected || probe.userPrincipalName?.toLowerCase() !== target.userPrincipalName?.toLowerCase() ||
-            probe.tenantId?.toLowerCase() !== target.tenantId?.toLowerCase()) {
-          throw new IntegrationError("configuration-failure");
-        }
-        return selected;
-      },
-    };
-  } else dependencies = {
+  if (service.type === "teams" && config.probes.some(probe => probe.type === "teams-channel-message" &&
+      !service.targets.some(target => target.id === probe.id &&
+        target.tenantId?.toLowerCase() === probe.tenantId?.toLowerCase() &&
+        target.teamId === probe.teamId && target.channelId === probe.channelId && target.serviceUrl === probe.serviceUrl))) {
+    throw new ConfigurationError("Teams messages may access only the selected root-configured tenants, teams and channels");
+  }
+  const messages = config.probes.some(probe => probe.type === "teams-channel-message");
+  const dependencies: RunnerDependencies = {
     telemetry, results: suppliedResults ?? createResultOutput(telemetry),
     ...(live && (service.type !== "teams" || messages) ? {
       graph: service.type === "teams" && service.teamsReadbackClientId
@@ -82,20 +66,21 @@ export async function serviceRuntime(
       teamsBot: createLiveTeamsBot(config, env, service.graphAuthentication),
     } : {}),
   };
-  if (live && service.type === "teams" && config.probes.some(probe => probe.type === "teams-call")) {
+  const needsCalling = config.probes.some(probe => probe.type === "teams-call");
+  if (live && service.type === "teams" && needsCalling) {
     const graph = createTeamsCallingGraph(config, env);
     const peerGraph = createTeamsCallingGraph(config, env, true);
+    dependencies.teamsCalling = graph;
+    dependencies.teamsCallingPeer = peerGraph;
     const verify = await createTeamsCallingVerifier(env);
     const operations = new TeamsCallOperations();
     const server = await startTeamsCallingCallback({
       port: config.TEAMS_CALLING_PORT, verify,
-      onNotification: notification => operations.accept(notification),
+      onNotification: (notification, identity) => operations.accept(notification, identity),
       onMediaServed: () => telemetry.emit("teams-call-tone-served", { bytes: 32044, sampleRateHz: 16000 }),
       onAccepted: () => telemetry.emit("teams-calling-callback-accepted", { authentication: "verified", tenantMatched: true }),
       onRejected: (httpStatus, stage, diagnostic) => telemetry.emit("teams-calling-callback-rejected", { httpStatus, stage, ...diagnostic }),
     });
-    dependencies.teamsCalling = graph;
-    dependencies.teamsCallingPeer = peerGraph;
     dependencies.teamsCallOperations = operations;
     dependencies.shutdown = async () => { operations.shutdown(); await server.shutdown(); };
   }

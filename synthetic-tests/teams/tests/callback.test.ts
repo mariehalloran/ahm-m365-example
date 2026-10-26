@@ -4,10 +4,14 @@ import { createTestTone, testToneUri } from "../../utils/src/teams-call-media.js
 import { TeamsCallOperations } from "../../utils/src/teams-call-operations.js";
 
 const servers: Awaited<ReturnType<typeof startTeamsCallingCallback>>[] = [];
+const identity = { botClientId: "11111111-1111-4111-8111-111111111111" };
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => server.shutdown())); });
 
 async function fixture(accept = true) {
-  const verify = vi.fn(async (_token: string) => { if (!accept) throw new Error("private verification details"); });
+  const verify = vi.fn(async (_token: string) => {
+    if (!accept) throw new Error("private verification details");
+    return identity;
+  });
   const server = await startTeamsCallingCallback({ port: 0, host: "127.0.0.1", verify });
   servers.push(server);
   return { verify, url: `http://127.0.0.1:${server.port}` };
@@ -45,11 +49,14 @@ describe("bounded Teams-only callback listener", () => {
   it("allows only verified callbacks to mutate active operation correlation", async () => {
     const store = new TeamsCallOperations();
     const clientContext = "d45324c1-fcb5-430a-902c-f20af696537c";
-    const attempt = store.register("owned-call", clientContext, 10000);
+    const attempt = store.register("owned-call", clientContext, 10000, identity.botClientId);
     attempt.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "owned-operation", clientContext, status: "running" });
-    const listener = vi.fn((body: unknown) => store.accept(body));
+    const listener = vi.fn((body: unknown, verified: typeof identity) => store.accept(body, verified));
     const server = await startTeamsCallingCallback({
-      port: 0, host: "127.0.0.1", verify: async token => { if (token !== "approved") throw new Error("denied"); },
+      port: 0, host: "127.0.0.1", verify: async token => {
+        if (token !== "approved") throw new Error("denied");
+        return identity;
+      },
       onNotification: listener,
     });
     servers.push(server);
@@ -63,6 +70,7 @@ describe("bounded Teams-only callback listener", () => {
     expect(listener).not.toHaveBeenCalled();
     expect(attempt.observation()).toBeUndefined();
     expect((await post(url, body, "approved")).status).toBe(200);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(JSON.parse(body), identity);
     expect(attempt.observation()?.status).toBe("completed");
     attempt.dispose();
   });
@@ -85,7 +93,7 @@ describe("bounded Teams-only callback listener", () => {
   it("bounds positive authenticated callback diagnostics independently from rejection diagnostics", async () => {
     const onAccepted = vi.fn();
     const server = await startTeamsCallingCallback({
-      port: 0, host: "127.0.0.1", verify: async () => undefined, onAccepted,
+      port: 0, host: "127.0.0.1", verify: async () => identity, onAccepted,
     });
     servers.push(server);
     const url = `http://127.0.0.1:${server.port}`;

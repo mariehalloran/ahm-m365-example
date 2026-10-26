@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exchangeProviders } from "../../exchange/src/providers.js";
-import { sharepointProviders } from "../../sharepoint/src/providers.js";
 import { teamsProviders } from "../../teams/src/providers.js";
+import { oneDriveProviders } from "../../onedrive/src/providers.js";
 import * as auth from "../src/auth.js";
 import * as resultOutput from "../src/results.js";
 import { ConfigurationError } from "../src/config.js";
@@ -34,8 +34,8 @@ const env = {
   ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222",
   AZURE_TENANT_ID: "11111111-1111-4111-8111-111111111111",
 };
-const collectors = { exchange: exchangeProviders, teams: teamsProviders, sharepoint: sharepointProviders };
-const serviceNames = { exchange: "Exchange Online", teams: "Microsoft Teams", sharepoint: "SharePoint Online" };
+const collectors = { exchange: exchangeProviders, teams: teamsProviders };
+const serviceNames = { exchange: "Exchange Online", teams: "Microsoft Teams" };
 const results = {
   record: vi.fn<(result: SyntheticResult, mode: ExecutionMode) => void>(),
   recordDiagnostic: vi.fn<(record: ProviderDiagnostic) => void>(),
@@ -55,9 +55,7 @@ function project(): ProjectConfig {
     id: "teams-one", tenantId: env.AZURE_TENANT_ID, teamId: "33333333-3333-4333-8333-333333333333",
     channelId: "approved-channel", serviceUrl: "https://smba.trafficmanager.net/teams/",
   }];
-  configured.services.teams.scenarios["call-test-user"] = false;
-  configured.services.sharepoint.targets = [{ id: "sharepoint-one", siteId: "site", driveId: "drive", folderId: "folder" }];
-  configured.services.sharepoint.enabled = true;
+  configured.services.teams.scenarios["scheduled-meeting"] = false;
   return configured;
 }
 function service(type: ServiceConfig["type"]): ServiceConfig {
@@ -98,10 +96,55 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("stable provider collection independent of live journey initialization", () => {
+  it.each([200, 403])("publishes OneDrive stable signals on one suppressed-context destination without changing journey success (Graph %s)", async status => {
+    vi.mocked(healthReports.createHealthReporter).mockRestore();
+    const configured = project();
+    configured.services.onedrive.targets = [{
+      id: "onedrive-one", userId: "33333333-3333-4333-8333-333333333333", userPrincipalName: "owned@example.invalid",
+      driveId: "owned-drive", folderId: "owned-folder", folderName: "synthetic-owned-folder",
+    }];
+    const publications: { url: string; body: Record<string, unknown> }[] = [];
+    const graphPaths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (url, init) => {
+      if (String(url).startsWith("https://management.azure.com/")) {
+        publications.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+        return new Response(null, { status: 204 });
+      }
+      graphPaths.push(String(url));
+      if (status !== 200) return new Response("PRIVATE-PROVIDER-ERROR", { status });
+      return new Response(JSON.stringify({
+        value: String(url).includes("healthOverviews")
+          ? [
+              { id: "OneDriveForBusiness", service: "Microsoft OneDrive", status: "serviceOperational" },
+              { id: "SharePoint", service: "SharePoint Online", status: "serviceInterruption" },
+            ] : [],
+      }));
+    }));
+    await runServiceWorker(service("onedrive"), {
+      project: configured, once: true, env, providers: oneDriveProviders, telemetry: output,
+      handler: async probe => successfulJourney(probe),
+    });
+    expect(graphPaths).toHaveLength(2);
+    expect(graphPaths.every(path => path.startsWith("https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/"))).toBe(true);
+    expect(graphPaths.some(path => path.includes("/healthOverviews/"))).toBe(false);
+    const provider = publications.filter(({ body }) => String(body.signalName).startsWith("microsoft-"));
+    expect(provider).toHaveLength(2);
+    expect(provider.every(({ url }) => url.includes("/healthmodels/m365-experience-poc-onedrive/entities/onedrive-service-health/"))).toBe(true);
+    expect(provider[0]?.body.healthState).toBe(status === 200 ? "Healthy" : "Unknown");
+    if (status === 200) expect(provider[0]?.body.value).toBe(100);
+    else expect(provider[0]?.body).not.toHaveProperty("value");
+    expect(provider[1]?.body.healthState).toBe("Unknown");
+    if (status === 200) expect(provider[1]?.body.value).toBe(0);
+    else expect(provider[1]?.body).not.toHaveProperty("value");
+    expect(results.record).toHaveBeenCalledTimes(3);
+    expect(results.record.mock.calls.every(([result]) => result.success)).toBe(true);
+    expect(JSON.stringify(publications)).not.toMatch(/PRIVATE-PROVIDER-ERROR|test-only-token|SharePoint/);
+  });
+
   it.each([200, 403])("publishes separate observed provider reports despite journey initialization failure (Graph %s)", async status => {
     vi.mocked(healthReports.createHealthReporter).mockRestore();
     const configured = project();
-    configured.services.sharepoint.targets = [{ id: "sharepoint-one" }];
+    configured.services.teams.targets = [{ id: "teams-one" }];
     const publications: { url: string; body: Record<string, unknown> }[] = [];
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (url, init) => {
       if (String(url).startsWith("https://management.azure.com/")) {
@@ -111,15 +154,15 @@ describe("stable provider collection independent of live journey initialization"
       if (status !== 200) return new Response("PRIVATE-PROVIDER-ERROR", { status });
       return new Response(JSON.stringify({
         value: String(url).includes("healthOverviews")
-          ? [{ id: "SharePoint", service: "SharePoint Online", status: "serviceDegradation" }] : [],
+          ? [{ id: "Teams", service: "Microsoft Teams", status: "serviceDegradation" }] : [],
       }));
     }));
-    await expect(runServiceWorker(service("sharepoint"), {
-      project: configured, once: true, env, providers: sharepointProviders, telemetry: output,
+    await expect(runServiceWorker(service("teams"), {
+      project: configured, once: true, env, providers: teamsProviders, telemetry: output,
     })).rejects.toThrow("Missing dedicated resources");
     const provider = publications.filter(({ body }) => body.signalName === "microsoft-reported-service-status");
     expect(provider).toHaveLength(1);
-    expect(provider[0]?.url).toContain("/healthmodels/m365-experience-poc-sharepoint/entities/sharepoint-service-health-health-overviews/");
+    expect(provider[0]?.url).toContain("/healthmodels/m365-experience-poc-teams/entities/teams-service-health/");
     expect(provider[0]?.body.healthState).toBe(status === 200 ? "Degraded" : "Unknown");
     if (status === 200) expect(provider[0]?.body.value).toBe(50);
     else {
@@ -131,16 +174,18 @@ describe("stable provider collection independent of live journey initialization"
     expect(JSON.stringify(publications)).not.toMatch(/PRIVATE-PROVIDER-ERROR|test-only-token/);
     const issues = publications.filter(({ body }) => body.signalName === "microsoft-reported-issue-count");
     expect(issues).toHaveLength(1);
+    expect(issues[0]?.url).toBe(provider[0]?.url);
     expect(issues[0]?.body.healthState).toBe("Unknown");
     if (status === 200) expect(issues[0]?.body.value).toBe(0);
     else expect(issues[0]?.body).not.toHaveProperty("value");
     const synthetic = publications.filter(({ body }) => String(body.signalName).startsWith("synthetic-"));
-    expect(synthetic.filter(({ body }) => body.healthState === "Unhealthy")).toHaveLength(2);
-    expect(synthetic.filter(({ url }) => !url.includes("/entities/sharepoint-global/") && !url.includes("/entities/sharepoint-rename/"))
+    expect(synthetic.filter(({ body }) => body.healthState === "Unhealthy")).toHaveLength(1);
+    expect(synthetic.filter(({ url }) => !url.includes("/entities/teams-global/"))
       .every(({ body }) => body.healthState === "Unknown" && body.value === undefined)).toBe(true);
   });
 
-  it.each(["teams", "sharepoint"] as const)("collects stable %s context when neither selected journey has dedicated resources", async type => {
+  it("collects stable Teams context when the selected channel journey has no dedicated resources", async () => {
+    const type = "teams";
     const configured = project();
     configured.services[type].targets = [{ id: `${type}-one` }];
     const fetcher = providerTraffic(type);
@@ -152,11 +197,8 @@ describe("stable provider collection independent of live journey initialization"
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(fetcher.mock.calls.every(([url, init]) =>
       String(url).includes("/v1.0/") && init?.method === "GET")).toBe(true);
-    expect(results.record).toHaveBeenCalledTimes(2);
-    expect(results.record.mock.calls.map(([result]) => result.testType)).toEqual(
-      Object.keys(probeServices).filter(typeName => typeName !== "teams-call" &&
-        probeServices[typeName as keyof typeof probeServices].service === type),
-    );
+    expect(results.record).toHaveBeenCalledOnce();
+    expect(results.record.mock.calls.map(([result]) => result.testType)).toEqual(["teams-channel-message"]);
     expect(results.record.mock.calls.every(([result]) =>
       !result.success && result.steps.length === 0 && result.diagnosticCategory === "configuration-failure")).toBe(true);
     expect(reportHealth).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
@@ -178,10 +220,10 @@ describe("stable provider collection independent of live journey initialization"
 
   it("emits sanitized permission-failure diagnostics, never healthy context, when the real Graph path denies collection", async () => {
     const configured = project();
-    configured.services.sharepoint.targets = [{ id: "sharepoint-one" }];
-    const fetcher = providerTraffic("sharepoint", 403);
-    await expect(runServiceWorker(service("sharepoint"), {
-      project: configured, once: true, env, providers: sharepointProviders, telemetry: output,
+    configured.services.teams.targets = [{ id: "teams-one" }];
+    const fetcher = providerTraffic("teams", 403);
+    await expect(runServiceWorker(service("teams"), {
+      project: configured, once: true, env, providers: teamsProviders, telemetry: output,
     })).rejects.toThrow("Missing dedicated resources");
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(results.recordDiagnostic.mock.calls.map(([record]) => record)).toEqual([
@@ -201,14 +243,14 @@ describe("stable provider collection independent of live journey initialization"
     }));
   });
 
-  it("recollects stable context on every cadence while both journeys remain unconfigured", async () => {
+  it("recollects stable context on every cadence while the channel journey remains unconfigured", async () => {
     const configured = project();
-    configured.services.sharepoint.targets = [{ id: "sharepoint-one" }];
-    const fetcher = providerTraffic("sharepoint");
-    const providers = vi.fn(sharepointProviders);
+    configured.services.teams.targets = [{ id: "teams-one" }];
+    const fetcher = providerTraffic("teams");
+    const providers = vi.fn(teamsProviders);
     const stop = new AbortController();
     let clock = 0;
-    await runServiceWorker(service("sharepoint"), {
+    await runServiceWorker(service("teams"), {
       project: configured, env, providers, telemetry: output, signal: stop.signal, now: () => clock,
       sleep: async milliseconds => { clock += milliseconds; if (clock >= 600000) stop.abort(); },
     });
@@ -221,11 +263,11 @@ describe("stable provider collection independent of live journey initialization"
 
   it("reports provider setup failures without creating credentials, making requests, or inventing snapshots", async () => {
     const configured = project();
-    configured.services.sharepoint.targets = [{ id: "sharepoint-one" }];
-    const fetcher = providerTraffic("sharepoint");
-    await expect(runServiceWorker(service("sharepoint"), {
+    configured.services.teams.targets = [{ id: "teams-one" }];
+    const fetcher = providerTraffic("teams");
+    await expect(runServiceWorker(service("teams"), {
       project: configured, once: true, env: { ...env, AZURE_CLIENT_ID: "" },
-      providers: sharepointProviders, telemetry: output,
+      providers: teamsProviders, telemetry: output,
     })).rejects.toBeInstanceOf(AggregateError);
     expect(results.recordDiagnostic.mock.calls.map(([record]) => record)).toEqual([
       expect.objectContaining({ kind: "failure", category: "collector-failure", apiVersion: "v1.0" }),
@@ -243,13 +285,13 @@ describe("stable provider collection independent of live journey initialization"
     }));
   });
 
-  it("collects Teams context even when both configured journeys lack Bot Connector credentials", async () => {
+  it("collects Teams context even when the channel journey lacks Bot Connector credentials", async () => {
     const fetcher = providerTraffic("teams");
     await expect(runServiceWorker(service("teams"), {
       project: project(), once: true, env, providers: teamsProviders, telemetry: output,
     })).rejects.toThrow("explicit bot settings");
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(results.record).toHaveBeenCalledTimes(2);
+    expect(results.record).toHaveBeenCalledOnce();
     expect(results.recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "overview" }));
     expect(credentials.managed).toHaveBeenCalledTimes(2);
     expect(credentials.certificate).not.toHaveBeenCalled();
@@ -269,7 +311,7 @@ describe("stable provider collection independent of live journey initialization"
     expect(results.record).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["exchange", "teams", "sharepoint"] as const)("runs both %s journeys but calls its stable collector only once", async type => {
+  it.each(["exchange", "teams"] as const)("runs selected %s journeys but calls its stable collector only once", async type => {
     const fetcher = providerTraffic(type);
     const providers = vi.fn(collectors[type]);
     const handler = vi.fn(successfulJourney);
@@ -280,8 +322,8 @@ describe("stable provider collection independent of live journey initialization"
       },
       providers, handler: async probe => handler(probe), telemetry: output,
     });
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(results.record).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledTimes(type === "exchange" ? 2 : 1);
+    expect(results.record).toHaveBeenCalledTimes(type === "exchange" ? 2 : 1);
     expect(results.record.mock.calls.every(([result]) =>
       result.success && result.steps.some(step => step.name === "authenticate") && result.steps.some(step => step.name === "cleanup"))).toBe(true);
     expect(providers).toHaveBeenCalledOnce();
@@ -291,16 +333,16 @@ describe("stable provider collection independent of live journey initialization"
     }));
   });
 
-  it("settles and publishes late provider failures even after both journeys fail initialization", async () => {
+  it("settles and publishes late provider failures even after the channel journey fails initialization", async () => {
     vi.useFakeTimers();
     const configured = project();
-    configured.services.sharepoint.targets = [{ id: "sharepoint-one" }];
-    const worker = runServiceWorker(service("sharepoint"), {
+    configured.services.teams.targets = [{ id: "teams-one" }];
+    const worker = runServiceWorker(service("teams"), {
       project: configured, once: true, env, telemetry: output,
       providers: async context => {
         await new Promise(resolve => setTimeout(resolve, 100));
         context.results.recordDiagnostic({
-          kind: "failure", service: "sharepoint", collectedAt: new Date().toISOString(),
+          kind: "failure", service: "teams", collectedAt: new Date().toISOString(),
           source: "serviceAnnouncement.issues", apiVersion: "v1.0", category: "collector-failure",
         });
         throw new Error("Provider execution failed");
@@ -311,7 +353,7 @@ describe("stable provider collection independent of live journey initialization"
         expect.objectContaining({ message: "Provider execution failed" })],
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(results.record).toHaveBeenCalledTimes(2);
+    expect(results.record).toHaveBeenCalledOnce();
     expect(reportHealth).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
     await rejected;

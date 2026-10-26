@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exchangeProviders } from "../../exchange/src/providers.js";
 import { teamsProviders } from "../../teams/src/providers.js";
-import { sharepointProviders } from "../../sharepoint/src/providers.js";
+import { oneDriveProviders } from "../../onedrive/src/providers.js";
 import { GraphClient } from "../src/graph.js";
+import { serviceHealthReport } from "../src/health-reports.js";
 import { AuthenticatedHttp } from "../src/http.js";
 import { baseResult, type ProbeHandler } from "../src/probes.js";
 import { collectProviderSources, PROVIDER_SOURCE_TIMEOUT_MS } from "../src/provider-collection.js";
@@ -23,12 +24,11 @@ const env = { ENABLE_LIVE_M365: "true", ENABLE_BETA_SERVICE_ACTIVITY: "true" };
 const functionNames = {
   exchange: "getConnectivityMetricsForExchange", teams: "getMessageVolumeMetricsForTeamsChat",
 } as const;
-const collectors = { exchange: exchangeProviders, teams: teamsProviders, sharepoint: sharepointProviders };
-const names = { exchange: "Exchange Online", teams: "Microsoft Teams", sharepoint: "SharePoint Online" };
+const collectors = { exchange: exchangeProviders, teams: teamsProviders };
+const names = { exchange: "Exchange Online", teams: "Microsoft Teams" };
 function rawConfig(type: ServiceConfig["type"] = "exchange") {
   const target = type === "exchange" ? { mailbox: "private@example.invalid" }
-    : type === "sharepoint" ? { siteId: "site", driveId: "drive", folderId: "folder" }
-      : {
+    : {
         tenantId: "11111111-1111-4111-8111-111111111111", teamId: "22222222-2222-4222-8222-222222222222",
         channelId: "channel", serviceUrl: "https://smba.trafficmanager.net/teams/",
       };
@@ -89,12 +89,12 @@ describe("strict optional provider configuration", () => {
       ...rawConfig(type), serviceActivity: { functions: [functionNames[type === "exchange" ? "teams" : "exchange"]] },
     })).toThrow("Unsupported serviceActivity");
   });
-  it("rejects SharePoint beta even without an explicit function, before initialization/mutations", async () => {
+  it("rejects removed SharePoint service before initialization/mutations", async () => {
     const createDependencies = vi.fn();
     const handler = vi.fn();
     await expect(runServiceWorker({
-      ...rawConfig("sharepoint"), serviceActivity: { enabled: true },
-    } as unknown as ServiceConfig, { createDependencies, handler, env })).rejects.toThrow("SharePoint");
+      ...rawConfig(), type: "sharepoint", serviceActivity: { enabled: true },
+    } as unknown as ServiceConfig, { createDependencies, handler, env })).rejects.toThrow("Invalid service config");
     expect(createDependencies).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
   });
@@ -314,10 +314,10 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     }));
     expect(results.record.mock.calls.every(([attempt]) => attempt.success)).toBe(true);
   });
-  it.each(["exchange", "teams", "sharepoint"] as const)("collects each %s source once with two targets and preserves journey counts", async type => {
+  it.each(["exchange", "teams"] as const)("collects each %s source once with two targets and preserves journey counts", async type => {
     const service = parseServiceConfig({
       ...rawConfig(type), serviceHealth: true, serviceActivity: {
-        enabled: type !== "sharepoint", ...(type === "sharepoint" ? {} : { functions: [functionNames[type]] }),
+        enabled: true, functions: [functionNames[type]],
       },
     });
     const http = client(url => json({
@@ -327,7 +327,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     }));
     vi.spyOn(Date, "now").mockReturnValue(now());
     const telemetry = memory();
-    const stepName = type === "exchange" ? "create-draft" : type === "teams" ? "post-message" : "verify-drive";
+    const stepName = type === "exchange" ? "create-draft" : "post-message";
     const handler = vi.fn<ProbeHandler>(async probe => ({
       ...baseResult(probe, now()), success: true, durationMs: 100,
       steps: [{ name: stepName, status: "succeeded" as const, observedAt: stamp, durationMs: 10 }],
@@ -338,18 +338,18 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         createDependencies: () => ({ ...telemetry, telemetry: telemetry.events, graph: http.graph }),
       });
       expect(handler).toHaveBeenCalledTimes(2);
-      expect(http.fetcher).toHaveBeenCalledTimes(type === "sharepoint" ? 2 : 3);
+      expect(http.fetcher).toHaveBeenCalledTimes(3);
       expect(http.fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
       const records = telemetry.events.emit.mock.calls.filter(([event]) => event === "provider-diagnostic").map(([, data]) => data);
       expect(records.filter(record => record.body === "m365-service-health-overview")).toHaveLength(1);
       expect(records.filter(record => record.body === "m365-service-health-issue")).toHaveLength(1);
-      expect(records.filter(record => record.body === "m365-service-activity")).toHaveLength(type === "sharepoint" ? 0 : 1);
+      expect(records.filter(record => record.body === "m365-service-activity")).toHaveLength(1);
       const observations = telemetry.events.emit.mock.calls.filter(([event]) => event === "synthetic-result").map(([, data]) => data.result);
       expect(observations).toHaveLength(2);
       expect(observations.every(result => result.success && result.steps.length === 1)).toBe(true);
       expect(JSON.stringify(observations)).not.toContain("provider.");
       expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
-        providers: { configured: type === "sharepoint" ? 2 : 3, succeeded: type === "sharepoint" ? 2 : 3, failed: 0, skipped: 0, records: type === "sharepoint" ? 3 : 4 },
+        providers: { configured: 3, succeeded: 3, failed: 0, skipped: 0, records: 4 },
       }));
     } finally {
       vi.restoreAllMocks();
@@ -498,6 +498,84 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     expect(events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
       providers: { configured: 3, succeeded: 0, failed: 0, skipped: 3, records: 0 },
     }));
+  });
+});
+
+describe("OneDrive stable provider mapping", () => {
+  const config = () => parseServiceConfig({
+    ...rawConfig("onedrive"), serviceHealth: true,
+    targets: [{ id: "owned-drive", userId: "11111111-1111-4111-8111-111111111111", driveId: "owned-drive" }],
+  });
+  const oneDrive = { id: "OneDriveForBusiness", service: "Microsoft OneDrive", status: "serviceOperational" };
+  const sharePoint = { id: "SharePoint", service: "SharePoint Online", status: "serviceInterruption" };
+
+  it("uses only the stable list endpoints and keeps OneDrive distinct from SharePoint", async () => {
+    const http = client(url => json({
+      value: url.includes("healthOverviews") ? [sharePoint, oneDrive]
+        : [
+            { id: "OD-test", service: "Microsoft OneDrive", status: "serviceDegradation" },
+            { id: "SP-test", service: "SharePoint Online", status: "serviceInterruption" },
+          ],
+    }));
+    const records: ProviderDiagnostic[] = [];
+    const summary = await oneDriveProviders({
+      service: config(), graph: http.graph, signal: signal(), now,
+      results: { recordDiagnostic: record => { records.push(record); } },
+    });
+    expect(summary).toEqual({ configured: 2, succeeded: 2, failed: 0, skipped: 0, records: 3 });
+    expect(http.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/healthOverviews?$top=100",
+      "https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/issues?$top=100",
+    ]);
+    expect(records).toEqual([
+      expect.objectContaining({ kind: "overview", service: "onedrive", serviceId: "OneDriveForBusiness", serviceName: "Microsoft OneDrive" }),
+      expect.objectContaining({ kind: "issue", service: "onedrive", issueId: "OD-test" }),
+      expect.objectContaining({ kind: "issue-summary", service: "onedrive", count: 1 }),
+    ]);
+    expect(records.every(record => providerLog(record).attributes["provider.api_version"] === "v1.0")).toBe(true);
+    expect(JSON.stringify(records)).not.toContain("SharePoint");
+    expect(serviceHealthReport("onedrive", { cycleId: "onedrive-stable", providerDiagnostics: records }, 15, now()))
+      .toMatchObject({
+        entityName: "onedrive-service-health",
+        body: { signalName: "microsoft-reported-service-status", healthState: "Healthy", value: 100 },
+      });
+  });
+
+  it.each([
+    { overviews: [{ id: "SharePoint", service: "SharePoint Online", status: "serviceOperational" }] },
+    { overviews: [{ id: "SharePoint", service: "Microsoft OneDrive", status: "serviceOperational" }] },
+    { overviews: [] },
+  ])("reports Unknown, not an alias or healthy fallback, for an absent exact overview $overviews", async ({ overviews }) => {
+    const http = client(url => json({ value: url.includes("healthOverviews") ? overviews : [] }));
+    const records: ProviderDiagnostic[] = [];
+    const summary = await oneDriveProviders({
+      service: config(), graph: http.graph, signal: signal(), now,
+      results: { recordDiagnostic: record => { records.push(record); } },
+    });
+    expect(summary).toMatchObject({ configured: 2, succeeded: 1, failed: 1, records: 1 });
+    expect(records).toContainEqual(expect.objectContaining({
+      kind: "failure", service: "onedrive", source: "serviceAnnouncement.healthOverviews", category: "no-data",
+    }));
+    const report = serviceHealthReport("onedrive", { cycleId: "onedrive-missing", providerDiagnostics: records }, 15, now());
+    expect(report.body.healthState).toBe("Unknown");
+    expect(report.body).not.toHaveProperty("value");
+    expect(JSON.parse(report.body.additionalContext).diagnosticCategories).toEqual(["no-data"]);
+  });
+
+  it("does not request provider data when disabled or invent beta functions", async () => {
+    const http = client(() => { throw new Error("No request expected"); });
+    const recordDiagnostic = vi.fn();
+    expect(await oneDriveProviders({
+      service: { ...config(), serviceHealth: false }, graph: http.graph, signal: signal(),
+      results: { recordDiagnostic },
+    })).toEqual({ configured: 0, succeeded: 0, failed: 0, skipped: 0, records: 0 });
+    expect(http.fetcher).not.toHaveBeenCalled();
+    expect(recordDiagnostic).not.toHaveBeenCalled();
+    expect(() => providerLog({
+      kind: "activity", service: "onedrive", collectedAt: stamp, function: "getConnectivityMetricsForExchange",
+      intervalStart: "2026-10-16T18:00:00.000Z", intervalEnd: "2026-10-16T18:15:00.000Z",
+      aggregationIntervalMinutes: 15, percentage: 100,
+    })).toThrow("Invalid provider diagnostic");
   });
 });
 

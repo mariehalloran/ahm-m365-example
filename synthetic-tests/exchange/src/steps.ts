@@ -61,7 +61,7 @@ export async function confirmDelivery(
     signal.throwIfAborted();
     const inbox = await graph.json(paths(attempt).inbox, messageListSchema, signal);
     for (const message of inbox.value) {
-      if (attempt.recipientMailbox && attempt.recipientMailbox !== attempt.mailbox) {
+      if (attempt.recipientMailbox && attempt.recipientMailbox.toLowerCase() !== attempt.mailbox.toLowerCase()) {
         (attempt.deliveredMessageIds ??= new Set()).add(message.id);
       } else attempt.ownedMessageIds.add(message.id);
     }
@@ -72,21 +72,26 @@ export async function confirmDelivery(
 }
 
 export async function cleanup(graph: GraphClient, attempt: MailAttempt, signal: AbortSignal): Promise<void> {
-  const collection = paths(attempt);
-  // The exact unguessable marker also finds a sent copy whose ID changed after submission.
-  const copies = await graph.json(collection.copies, messageListSchema, signal);
-  if (copies["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
-  for (const message of copies.value) attempt.ownedMessageIds.add(message.id);
-  for (const id of attempt.ownedMessageIds) {
-    await graph.request(`${collection.messages}/${encodeURIComponent(id)}`, signal, "DELETE");
+  const failures: unknown[] = [];
+  const mailboxes = [{ mailbox: attempt.mailbox, ids: attempt.ownedMessageIds }];
+  if (attempt.recipientMailbox && attempt.recipientMailbox.toLowerCase() !== attempt.mailbox.toLowerCase()) {
+    mailboxes.push({ mailbox: attempt.recipientMailbox, ids: attempt.deliveredMessageIds ??= new Set() });
   }
-  if (attempt.recipientMailbox && attempt.recipientMailbox !== attempt.mailbox) {
-    const recipient = { ...attempt, mailbox: attempt.recipientMailbox, recipientMailbox: undefined };
-    const delivered = await graph.json(paths(recipient).copies, messageListSchema, signal);
-    if (delivered["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
-    for (const message of delivered.value) (attempt.deliveredMessageIds ??= new Set()).add(message.id);
-    for (const id of attempt.deliveredMessageIds ?? []) {
-      await graph.request(`${paths(recipient).messages}/${encodeURIComponent(id)}`, signal, "DELETE");
+  // The exact unguessable marker also finds a sent copy whose ID changed after submission.
+  for (const { mailbox, ids } of mailboxes) {
+    try {
+      const collection = paths({ ...attempt, mailbox, recipientMailbox: undefined });
+      const copies = await graph.json(collection.copies, messageListSchema, signal);
+      for (const message of copies.value) ids.add(message.id);
+      if (copies["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
+    } catch (error) { failures.push(error); }
+  }
+  for (const { mailbox, ids } of mailboxes) {
+    for (const id of ids) {
+      try {
+        await graph.request(`/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(id)}`, signal, "DELETE");
+      } catch (error) { failures.push(error); }
     }
   }
+  if (failures.length) throw new IntegrationError("cleanup-failure");
 }

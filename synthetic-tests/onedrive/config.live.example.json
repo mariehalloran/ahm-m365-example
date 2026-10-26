@@ -6,7 +6,7 @@
   "cohort": "onedrive-global",
   "graphAuthentication": "managed-identity",
   "healthReportAuthentication": "managed-identity",
-  "serviceHealth": false,
+  "serviceHealth": true,
   "serviceActivity": { "enabled": false },
   "executionLanes": [
     { "name": "files", "intervalSeconds": 300, "timeoutSeconds": 120, "journeys": ["user-drive-roundtrip"] },

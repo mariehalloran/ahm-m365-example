@@ -40,8 +40,8 @@ export const projectConfigSchema = z.object({
       ...selection,
       scenarios: z.object({
         "send-receive-mail": z.boolean().default(true), "edit-reopen-draft": z.boolean().default(true),
-        "attachment-reply-mail": z.boolean().default(false), "distribution-list-mail": z.boolean().default(false),
-        "recurring-calendar": z.boolean().default(false), "meeting-invitation": z.boolean().default(false),
+        "attachment-reply-mail": z.boolean().default(true), "distribution-list-mail": z.boolean().default(true),
+        "recurring-calendar": z.boolean().default(true), "meeting-invitation": z.boolean().default(true),
       }).strict(),
       targets: z.array(target.extend({
         mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
@@ -51,12 +51,11 @@ export const projectConfigSchema = z.object({
     teams: z.object({
       ...selection,
       scenarios: z.object({
-        "publish-channel-message": z.boolean().default(true), "reply-channel-message": z.boolean().default(true),
-        "call-test-user": z.boolean().default(true),
+        "channel-conversation": z.boolean().default(true),
+        "scheduled-meeting": z.boolean().default(true),
       }).strict(),
       targets: z.array(target.extend({
         tenantId: probeSchema.shape.tenantId, teamId: probeSchema.shape.teamId,
-        userPrincipalName: probeSchema.shape.userPrincipalName,
         channelId: probeSchema.shape.channelId, serviceUrl: probeSchema.shape.serviceUrl,
       }).strict()).max(30),
       callTargets: z.array(target.extend({
@@ -65,31 +64,19 @@ export const projectConfigSchema = z.object({
         organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
       }).strict()).max(30).default([]),
     }).strict(),
-    sharepoint: z.object({
-      ...selection,
-      scenarios: z.object({
-        "save-reopen-file": z.boolean().default(true), "rename-reopen-file": z.boolean().default(true),
-      }).strict(),
-      targets: z.array(target.extend({
-        siteId: probeSchema.shape.siteId, driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
-      }).strict()).max(30),
-    }).strict(),
     onedrive: z.object({
       ...selection,
       scenarios: z.object({
-        "user-drive-roundtrip": z.boolean().default(false),
-        "app-folder-lifecycle": z.boolean().default(false),
-        "document-versions": z.boolean().default(false),
+        "user-drive-roundtrip": z.boolean().default(true),
+        "app-folder-lifecycle": z.boolean().default(true),
+        "document-versions": z.boolean().default(true),
       }).strict(),
       targets: z.array(target.extend({
         userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
         driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
         folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
       }).strict()).max(30),
-    }).strict().default({
-      enabled: false, configFile: "synthetic-tests/onedrive/config.json",
-      scenarios: { "user-drive-roundtrip": false, "app-folder-lifecycle": false, "document-versions": false }, targets: [],
-    }),
+    }).strict(),
   }).strict(),
 }).strict();
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;
@@ -109,8 +96,8 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
     const values = onedrive.targets.flatMap(item => item[field] ? [item[field]!.toLowerCase()] : []);
     if (new Set(values).size !== values.length) throw new ConfigurationError("OneDrive accounts and drives must be unique");
   }
-  if (teams.enabled && teams.scenarios["call-test-user"] && teams.callTargets.length === 0) {
-    throw new ConfigurationError("Enabled call-test-user requires root-configured callTargets");
+  if (teams.enabled && teams.scenarios["scheduled-meeting"] && teams.callTargets.length === 0) {
+    throw new ConfigurationError("Enabled scheduled-meeting requires root-configured callTargets");
   }
   if (new Set(teams.callTargets.map(item => item.id)).size !== teams.callTargets.length ||
       new Set(teams.callTargets.map(item => `${item.tenantId.toLowerCase()}:${item.meetingThreadId}`)).size !== teams.callTargets.length) {
@@ -131,7 +118,7 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
     if (new Set(selected.targets.map(item => item.id)).size !== selected.targets.length) {
       throw new ConfigurationError("Project target IDs must be unique within each service");
     }
-    const needsMessageTargets = selected !== teams || teams.scenarios["publish-channel-message"] || teams.scenarios["reply-channel-message"];
+    const needsMessageTargets = selected !== teams || teams.scenarios["channel-conversation"];
     if (selected.enabled && Object.values(selected.scenarios).some(Boolean) && needsMessageTargets && selected.targets.length === 0) {
       throw new ConfigurationError("Enabled project scenarios require at least one target");
     }

@@ -3,18 +3,18 @@ import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
 import {
-  createOwnedFolder, deleteOwnedFolder, deleteScratch, downloadFile, findPriorVersion, listVersions,
-  openAppFolder, payload, reopenOwnedFile, verifyBytes, verifyPersistedState, writeFile, type FileAttempt,
+  createOwnedFolder, deleteOwnedFolder, downloadFile, findPriorVersion, listVersions,
+  openAppFolder, payload, reopenOwnedFile, verifyBytes, writeFile, type FileAttempt,
 } from "./steps.js";
 
 export const oneDriveProbe: ProbeHandler = async (probe, context) => {
   const { signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const result = baseResult(probe, startedAt);
-  const persistent = probe.type === "onedrive-appfolder";
+  const appFolder = probe.type === "onedrive-appfolder";
   const attempt: FileAttempt = {
     probe, correlationId: result.correlationId, driveId: probe.driveId ?? "", parentId: probe.folderId ?? "",
-    folderName: persistent ? `${probe.folderName}-${probe.id}` : `ahm-synthetic-${result.correlationId}`,
+    folderName: `ahm-synthetic-${result.correlationId}`,
     mutationAttempted: false,
   };
   try {
@@ -29,7 +29,14 @@ export const oneDriveProbe: ProbeHandler = async (probe, context) => {
       return context.graph;
     }, now);
     result.diagnosticContext.testStage = "execution";
-    if (!persistent && (!probe.driveId || !probe.folderId)) throw new IntegrationError("configuration-failure");
+    if (!appFolder && (!probe.driveId || !probe.folderId)) {
+      telemetry.emit("onedrive-journey-blocked", {
+        testId: result.testId, correlationId: result.correlationId,
+        category: "configuration-failure", blocker: "selected-folder-binding-missing",
+        approvalRequired: "Administrator-provided drive/folder IDs and the already-approved write grant on the dedicated test folder.",
+      });
+      throw new IntegrationError("configuration-failure");
+    }
     const initial = payload(attempt, 1);
     const updated = payload(attempt, 2);
     if (probe.type === "onedrive-roundtrip") {
@@ -40,23 +47,20 @@ export const oneDriveProbe: ProbeHandler = async (probe, context) => {
       const bytes = await measureStep(result, "reopen-file", () => reopenOwnedFile(graph, attempt, signal), now);
       await measureStep(result, "verify-file-hash", async () => verifyBytes(bytes, initial), now);
       await measureStep(result, "delete-owned-artifacts", () => deleteOwnedFolder(graph, attempt, signal), now);
-    } else if (persistent) {
+    } else if (appFolder) {
       await measureStep(result, "write-app-data", async () => {
         await openAppFolder(graph, attempt, signal);
-        await verifyPersistedState(graph, attempt, signal);
         attempt.fileId = await writeFile(graph, attempt, initial, signal, "state.json");
-        attempt.scratchId = await writeFile(graph, attempt, initial, signal, `scratch-${result.correlationId}.json`);
       }, now);
       await measureStep(result, "read-app-data", async () => {
         verifyBytes(await downloadFile(graph, attempt, attempt.fileId!, signal), initial);
-        verifyBytes(await downloadFile(graph, attempt, attempt.scratchId!, signal), initial);
       }, now);
       await measureStep(result, "update-app-data", async () => {
         const fileId = await writeFile(graph, attempt, updated, signal, "state.json");
         if (fileId !== attempt.fileId) throw new IntegrationError("read-failure");
         verifyBytes(await downloadFile(graph, attempt, fileId, signal), updated);
       }, now);
-      await measureStep(result, "delete-app-scratch", () => deleteScratch(graph, attempt, signal), now);
+      await measureStep(result, "delete-app-scratch", () => deleteOwnedFolder(graph, attempt, signal), now);
     } else {
       await measureStep(result, "update-document", async () => {
         await createOwnedFolder(graph, attempt, signal);
@@ -95,10 +99,8 @@ export const oneDriveProbe: ProbeHandler = async (probe, context) => {
   } catch (error) {
     journeyFailure(result, error, telemetry);
   } finally {
-    await cleanupStep(result, attempt.mutationAttempted && (!persistent || Boolean(attempt.folderId)),
-      cleanupSignal => persistent
-        ? deleteScratch(context.graph!, attempt, cleanupSignal)
-        : deleteOwnedFolder(context.graph!, attempt, cleanupSignal), telemetry, now);
+    await cleanupStep(result, attempt.mutationAttempted,
+      cleanupSignal => deleteOwnedFolder(context.graph!, attempt, cleanupSignal), telemetry, now);
   }
   return finishJourney(result, startedAt, now);
 };

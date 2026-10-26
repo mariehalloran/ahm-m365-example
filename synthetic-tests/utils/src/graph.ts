@@ -104,9 +104,4 @@ export class GraphClient {
     }
     return Buffer.concat(chunks);
   }
-  async downloadJson(path: string, signal: AbortSignal): Promise<unknown> {
-    const text = (await this.downloadContent(path, signal)).toString("utf8");
-    try { return JSON.parse(text); }
-    catch { throw new IntegrationError("malformed-response"); }
-  }
 }

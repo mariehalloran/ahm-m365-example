@@ -19,6 +19,9 @@ export interface CallingAuthenticationDiagnostic {
   authClaim?: string;
   authReason?: string;
 }
+export interface CallingIdentity {
+  botClientId: string;
+}
 
 class CallingClaimError extends Error {
   constructor(readonly claim: "aud" | "nbf" | "tid" | typeof tenantClaim, readonly reason: "missing" | "invalid" | "mismatch") {
@@ -59,7 +62,7 @@ async function boundedFetch(fetcher: typeof fetch, url: string | URL, init?: Req
 
 export async function createTeamsCallingVerifier(
   env: NodeJS.ProcessEnv, fetcher: typeof fetch = fetch, now: () => number = Date.now,
-): Promise<(token: string) => Promise<void>> {
+): Promise<(token: string) => Promise<CallingIdentity>> {
   const parsed = z.object({
     BOT_CLIENT_ID: z.string().uuid(), BOT_TENANT_ID: z.string().uuid(),
     TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid(),
@@ -110,5 +113,6 @@ export async function createTeamsCallingVerifier(
         throw new CallingClaimError(claim, "mismatch");
       }
     }
+    return { botClientId: payload.aud.toLowerCase() };
   };
 }

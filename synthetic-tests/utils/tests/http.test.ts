@@ -30,18 +30,18 @@ describe("bounded HTTP", () => {
       expect(fetcher).toHaveBeenCalledTimes(1);
     }
   });
-  it("never sends Graph credentials to the SharePoint preauthenticated download URL", async () => {
+  it("never sends Graph credentials to a OneDrive preauthenticated download URL", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 302, headers: { location: "https://tenant.sharepoint.com/download" } }));
     const download = vi.fn<typeof fetch>().mockResolvedValue(new Response('{"safe":true}'));
     const client = new GraphClient(new AuthenticatedHttp(credential, "scope", { fetch: fetcher }), download);
-    await expect(client.downloadJson("/drives/test/items/test/content", signal())).resolves.toEqual({ safe: true });
+    await expect(client.downloadContent("/drives/test/items/test/content", signal())).resolves.toEqual(Buffer.from('{"safe":true}'));
     expect(download.mock.calls[0]?.[1]).not.toHaveProperty("headers");
   });
-  it("rejects non-SharePoint redirects", async () => {
+  it("rejects redirects outside the OneDrive content hosts", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 302, headers: { location: "https://untrusted.test/download" } }));
     const download = vi.fn<typeof fetch>();
     const client = new GraphClient(new AuthenticatedHttp(credential, "scope", { fetch: fetcher }), download);
-    await expect(client.downloadJson("/drives/test/items/test/content", signal())).rejects.toThrow();
+    await expect(client.downloadContent("/drives/test/items/test/content", signal())).rejects.toThrow();
     expect(download).not.toHaveBeenCalled();
   });
   it("accepts continuation only within the exact approved Graph collection", () => {
@@ -69,7 +69,7 @@ describe("bounded HTTP", () => {
       cancel,
     })));
     const client = new GraphClient(new AuthenticatedHttp(credential, "scope", { fetch: fetcher }), download);
-    await expect(client.downloadJson("/drives/test/items/test/content", signal())).rejects.toThrow("read-failure");
+    await expect(client.downloadContent("/drives/test/items/test/content", signal())).rejects.toThrow("read-failure");
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

@@ -6,6 +6,8 @@ import { runCycle } from "../src/runner.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
 import type { SyntheticResult } from "../src/contracts.js";
 import type { ProviderDiagnostic } from "../src/provider-diagnostics.js";
+import { activityFunctions, isPercentageActivity } from "../src/provider-catalog.js";
+import { serviceHealthNames } from "../src/service-health.js";
 
 const project = await readProjectConfig("../monitoring.config.json");
 const service = parseServiceConfig({
@@ -316,7 +318,7 @@ describe("independent reporting failure paths", () => {
   });
 
   describe("observed stable Microsoft Service Health reports", () => {
-    const diagnostic = (status: string): ProviderDiagnostic => ({
+    const diagnostic = (status: string): Extract<ProviderDiagnostic, { kind: "overview" }> => ({
       kind: "overview", service: "exchange", collectedAt: new Date().toISOString(),
       serviceId: "Exchange", serviceName: "Exchange Online", status,
     });
@@ -340,7 +342,7 @@ describe("independent reporting failure paths", () => {
       ["serviceDegradation", 50, "Degraded"] as const,
     ])("maps observed overview %s to %s (%s)", (status, value, healthState) => {
       expect(report([diagnostic(String(status))])).toMatchObject({
-        entityName: "exchange-service-health-health-overviews",
+        entityName: "exchange-service-health",
         body: { signalName: "microsoft-reported-service-status", value, healthState, expiresInMinutes: 15 },
       });
       expect(JSON.parse(report([diagnostic(String(status))]).body.additionalContext)).toMatchObject({ unit: "status-score" });
@@ -396,7 +398,7 @@ describe("independent reporting failure paths", () => {
       expect(credential.getToken).not.toHaveBeenCalled();
       expect(output.emit).not.toHaveBeenCalled();
     });
-    it.each(["exchange", "teams", "sharepoint"] as const)("uses the authenticated bounded publisher and selected %s model", async type => {
+    it.each(["exchange", "teams", "onedrive"] as const)("uses the authenticated bounded publisher and selected %s model", async type => {
       const requests: { url: string; body: unknown }[] = [];
       const credential = { getToken: vi.fn(async () => ({ token: "test-only", expiresOnTimestamp: Date.now() + 60000 })) };
       await createHealthReporter(project, { ...service, type, mode: "live", serviceHealth: true } as typeof service, { emit: vi.fn() }, {}, {
@@ -404,11 +406,14 @@ describe("independent reporting failure paths", () => {
           requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
           return new Response(null, { status: 204 });
         },
-      })({ cycleId: "provider-cycle", providerDiagnostics: [{ ...diagnostic("serviceOperational"), service: type }] });
+      })({ cycleId: "provider-cycle", providerDiagnostics: [{
+        ...diagnostic("serviceOperational"), service: type, serviceName: serviceHealthNames[type],
+        serviceId: type === "onedrive" ? "OneDriveForBusiness" : "reported-service",
+      }] });
       expect(requests).toHaveLength(2);
-      expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health-health-overviews/`);
+      expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health/`);
       expect(requests[0]?.body).toMatchObject({ signalName: "microsoft-reported-service-status", healthState: "Healthy", value: 100 });
-      expect(requests[1]?.url).toContain(`/entities/${type}-service-health-issues/`);
+      expect(requests[1]?.url).toBe(requests[0]?.url);
       expect(requests[1]?.body).toMatchObject({ signalName: "microsoft-reported-issue-count", healthState: "Unknown" });
       expect(credential.getToken).toHaveBeenCalledWith("https://management.azure.com/.default", expect.anything());
     });
@@ -424,7 +429,7 @@ describe("independent reporting failure paths", () => {
     it.each([0, 4])("displays a complete %i-issue snapshot without evaluating availability", count => {
       const observed = report([{ ...summary, count }]);
       expect(observed).toMatchObject({
-        entityName: "exchange-service-health-issues",
+        entityName: "exchange-service-health",
         body: { signalName: "microsoft-reported-issue-count", healthState: "Unknown", value: count },
       });
       expect(observed.body).not.toHaveProperty("evaluationRules");
@@ -444,6 +449,83 @@ describe("independent reporting failure paths", () => {
       ]) {
         expect(report(records).body.healthState).toBe("Unknown");
         expect(report(records).body).not.toHaveProperty("value");
+      }
+    });
+  });
+
+  describe("one supporting entity for stable and approved beta sources", () => {
+    const now = Date.parse("2026-10-26T12:30:00Z");
+    it.each(["exchange", "teams", "onedrive"] as const)("publishes distinct %s signals together without any per-API destinations", async type => {
+      const selected = parseServiceConfig({
+        ...service, type, cohort: `${type}-global`, mode: "live", serviceHealth: true,
+        serviceActivity: { enabled: type !== "onedrive" },
+      });
+      const providerDiagnostics: ProviderDiagnostic[] = [
+        {
+          kind: "overview", service: type, collectedAt: new Date(now).toISOString(),
+          serviceId: type === "onedrive" ? "OneDriveForBusiness" : "reported-service",
+          serviceName: serviceHealthNames[type], status: "serviceDegradation",
+        },
+        { kind: "issue-summary", service: type, collectedAt: new Date(now).toISOString(), count: 2 },
+        ...activityFunctions[type].map(functionName => ({
+          kind: "activity" as const, service: type, collectedAt: new Date(now).toISOString(), function: functionName,
+          intervalStart: "2026-10-26T12:15:00.000Z", intervalEnd: new Date(now).toISOString(),
+          aggregationIntervalMinutes: 15 as const, ...(isPercentageActivity(functionName) ? { percentage: 97 } : { value: 120 }),
+        })),
+      ];
+      const requests: { url: string; body: Record<string, unknown> }[] = [];
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        await createHealthReporter(project, selected, { emit: vi.fn() }, {}, {
+          credential: { getToken: async () => ({ token: "unit-test-token", expiresOnTimestamp: now + 60000 }) },
+          fetch: async (url, init) => {
+            requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+            return new Response(null, { status: 204 });
+          },
+        })({ cycleId: "all-provider-sources", providerDiagnostics });
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(requests).toHaveLength(2 + activityFunctions[type].length);
+      expect(new Set(requests.map(request => request.url)).size).toBe(1);
+      expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health/ingestHealthReport?`);
+      expect(new Set(requests.map(request => request.body.signalName))).toEqual(new Set([
+        "microsoft-reported-service-status", "microsoft-reported-issue-count",
+        ...activityFunctions[type].map(name => `microsoft-activity-${name}`),
+      ]));
+      expect(requests[0]?.body).toMatchObject({ healthState: "Degraded", value: 50 });
+      expect(requests[1]?.body).toMatchObject({ healthState: "Unknown", value: 2 });
+      expect(requests.slice(2).every(({ body }) =>
+        body.healthState === "Unknown" && !("evaluationRules" in body))).toBe(true);
+      for (const { body } of requests) {
+        const context = JSON.parse(String(body.additionalContext));
+        expect(context).toMatchObject({
+          cycleId: "all-provider-sources",
+          apiVersion: String(body.signalName).startsWith("microsoft-activity-") ? "beta" : "v1.0",
+        });
+        expect(context.source).toBe(String(body.signalName).startsWith("microsoft-activity-")
+          ? String(body.signalName).slice("microsoft-activity-".length)
+          : body.signalName === "microsoft-reported-service-status"
+            ? "serviceAnnouncement.healthOverviews" : "serviceAnnouncement.issues");
+        expect(body).not.toHaveProperty("dataUnit");
+      }
+      expect(requests.every(({ body }) => !String(body.signalName).startsWith("synthetic-"))).toBe(true);
+    });
+
+    it("retains honest OneDrive Unknown context when stable data is missing or denied", () => {
+      const failure: ProviderDiagnostic = {
+        kind: "failure", service: "onedrive", collectedAt: new Date(now).toISOString(),
+        source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0", category: "permission-failure", httpStatus: 403,
+      };
+      for (const providerDiagnostics of [[], [failure]]) {
+        const report = serviceHealthReport("onedrive", { cycleId: "onedrive-provider", providerDiagnostics }, 15, now);
+        expect(report).toMatchObject({
+          entityName: "onedrive-service-health",
+          body: { signalName: "microsoft-reported-service-status", healthState: "Unknown" },
+        });
+        expect(report.body).not.toHaveProperty("value");
+        expect(JSON.parse(report.body.additionalContext).diagnosticCategories)
+          .toEqual(providerDiagnostics.length ? ["permission-failure"] : ["no-data"]);
       }
     });
   });

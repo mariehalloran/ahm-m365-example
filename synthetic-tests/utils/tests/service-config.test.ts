@@ -35,7 +35,7 @@ describe("strict config-first service settings", () => {
     expect(serviceSettings(service, { BOT_AUTHENTICATION: "certificate" })).toMatchObject({
       TEAMS_AUTHENTICATION: "bot", BOT_AUTHENTICATION: "managed-identity",
     });
-    expect(parseServiceConfig({ ...service, botAuthentication: "certificate" }).graphAuthentication).toBe("certificate");
+    expect(() => parseServiceConfig({ ...service, botAuthentication: "certificate" })).toThrow("botAuthentication");
     expect(serviceSettings(service, { TEAMS_AUTHENTICATION: "user-delegated" }).TEAMS_AUTHENTICATION).toBe("bot");
   });
   it("expands only selected journeys while reusing the target without extra target inventories", () => {
@@ -45,7 +45,7 @@ describe("strict config-first service settings", () => {
     expect(serviceSettings(service, {}, { "send-receive-mail": false, "edit-reopen-draft": true }).probes.map(probe => probe.type))
       .toEqual(["exchange-draft"]);
   });
-  it("accepts every supported Teams target across both message journeys and dedicated bot-only meetings", () => {
+  it("accepts every supported Teams target across channel conversations and dedicated bot-only meetings", () => {
     const service = parseServiceConfig({
       ...raw, type: "teams", cohort: "teams-global",
       targets: Array.from({ length: 30 }, (_, index) => ({ id: `channel-${index}` })),
@@ -57,10 +57,10 @@ describe("strict config-first service settings", () => {
       })),
     });
     const config = serviceSettings(service, {}, {
-      "publish-channel-message": true, "reply-channel-message": true, "call-test-user": true,
+      "channel-conversation": true, "scheduled-meeting": true,
     });
-    expect(config.probes).toHaveLength(90);
-    for (const type of ["teams-channel-message", "teams-channel-reply", "teams-call"]) {
+    expect(config.probes).toHaveLength(60);
+    for (const type of ["teams-channel-message", "teams-call"]) {
       expect(config.probes.filter(probe => probe.type === type)).toHaveLength(30);
     }
   });
@@ -105,12 +105,15 @@ describe("strict config-first service settings", () => {
   ])("rejects derived, unknown or wrong-service target fields", target => {
     expect(() => parseServiceConfig({ ...raw, targets: [target] })).toThrow("targets");
   });
-  it("rejects Exchange fields on SharePoint and accepts complete SharePoint resources", () => {
-    expect(() => parseServiceConfig({ ...raw, type: "sharepoint", targets: [{ id: "sp-001", mailbox: "test@example.invalid" }] })).toThrow("targets");
-    const service = parseServiceConfig({ ...raw, type: "sharepoint", mode: "live",
-      targets: [{ id: "sp-001", siteId: "site", driveId: "drive", folderId: "folder", region: "eastus", scenario: "slow" }],
+  it("rejects Exchange fields on OneDrive and accepts its selected account metadata", () => {
+    expect(() => parseServiceConfig({ ...raw, type: "onedrive", targets: [{ id: "od-001", mailbox: "test@example.invalid" }] })).toThrow("targets");
+    const service = parseServiceConfig({ ...raw, type: "onedrive", mode: "live",
+      targets: [{
+        id: "od-001", userId: "11111111-1111-4111-8111-111111111111",
+        userPrincipalName: "test@example.invalid", folderName: "AHM-Synthetic-Tests", region: "eastus", scenario: "slow",
+      }],
     });
-    expect(serviceSettings(service, { ENABLE_LIVE_M365: "true" }).probes[0]).toMatchObject({ type: "sharepoint-file", region: "eastus", scenario: "slow" });
+    expect(serviceSettings(service, { ENABLE_LIVE_M365: "true" }).probes[0]).toMatchObject({ type: "onedrive-roundtrip", region: "eastus", scenario: "slow" });
   });
   it("requires unique IDs and enabled targets but accepts disabled empty targets", () => {
     expect(() => parseServiceConfig({ ...raw, targets: [{ id: "same" }, { id: "same" }] })).toThrow("unique");
@@ -151,19 +154,19 @@ describe("strict config-first service settings", () => {
     const service = parseServiceConfig({ ...raw, mode: "live" });
     expect(() => serviceSettings(service, {})).toThrow("ENABLE_LIVE_M365");
     expect(() => serviceSettings(service, { ENABLE_LIVE_M365: "true" })).toThrow("Missing dedicated resources");
-    const sharepoint = parseServiceConfig({ ...raw, type: "sharepoint", mode: "live", targets: [{ id: "sp-001", siteId: "site" }] });
-    expect(() => serviceSettings(sharepoint, { ENABLE_LIVE_M365: "true" })).toThrow("Missing dedicated resources");
+    const onedrive = parseServiceConfig({ ...raw, type: "onedrive", mode: "live", targets: [{ id: "od-001" }] });
+    expect(() => serviceSettings(onedrive, { ENABLE_LIVE_M365: "true" })).toThrow("Missing dedicated resources");
   });
   it("derives execution settings from JSON and only reads execution knobs from env", () => {
-    const config = serviceSettings(parseServiceConfig({ ...raw, type: "sharepoint", scenario: "slow" }), {
+    const config = serviceSettings(parseServiceConfig({ ...raw, type: "onedrive", scenario: "slow" }), {
       EXECUTION_MODE: "live", SYNTHETIC_SCENARIO: "invalid", PROBES_JSON: "not-json", PROBE_TIMEOUT_MS: "invalid", POLL_INTERVAL_MS: "50",
     });
     expect(config).toMatchObject({ EXECUTION_MODE: "simulation", SYNTHETIC_SCENARIO: "slow", PROBE_TIMEOUT_MS: 45000, POLL_INTERVAL_MS: 50 });
-    expect(config.probes.every(probe => probe.type === "sharepoint-file")).toBe(true);
+    expect(config.probes.every(probe => probe.type === "onedrive-roundtrip")).toBe(true);
   });
   it("keeps root-owned fields out of all simulation and live service files", async () => {
     await expect(readServiceConfig("utils/tests/nonexistent-config.json")).rejects.toThrow("Cannot read");
-    for (const type of ["exchange", "sharepoint", "teams"] as const) {
+    for (const type of ["exchange", "onedrive", "teams"] as const) {
       for (const suffix of ["", ".live.example"]) {
         const file = await readServiceConfig(`${type}/config${suffix}.json`);
         expect(file).toMatchObject({ type, mode: suffix ? "live" : "simulation" });
@@ -186,7 +189,7 @@ describe("explicit worker arguments", () => {
   });
   it("requires an explicit config and supports continuous or once mode", () => {
     expect(parseWorkerArguments(["--config", "exchange/config.json"])).toEqual({ config: "exchange/config.json", once: false });
-    expect(parseWorkerArguments(["--once", "--config", "sharepoint/config.json"])).toEqual({ config: "sharepoint/config.json", once: true });
+    expect(parseWorkerArguments(["--once", "--config", "onedrive/config.json"])).toEqual({ config: "onedrive/config.json", once: true });
   });
   it.each([[], ["--once"], ["--config"], ["--config", "--once"], ["--config", "a", "--config", "b"], ["--config", "a", "--once", "--once"], ["--config", "a", "--extra"]].map(args => ({ args })))(
     "rejects ambiguous CLI invocation $args", ({ args }) => expect(() => parseWorkerArguments(args)).toThrow(),
