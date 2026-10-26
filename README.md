@@ -13,6 +13,65 @@ This example combines **synthetic user journeys** with **Azure Monitor Health Mo
 
 *Earlier Exchange view showing two journeys; the current catalog contains six, with separate, impact-suppressed Service Health context.*
 
+## User journeys by service
+
+**Implemented** means probe code exists, not that every live attempt succeeds. **Planned** journeys have no working probe; their model entities remain **Unknown** and impact-suppressed. These are API-backed workflows, not proof of the browser experience.
+
+### Exchange
+
+All six core journeys are **implemented**:
+
+1. **Send and receive email** — send from mailbox A to B and verify delivery in B's Inbox. Runs every **minute**.
+2. **Create, edit and reopen a draft** — save a draft, reopen it, update it and verify the saved changes.
+3. **Send an attachment and receive a reply** — verify the received attachment's hash, reply and confirm the reply reaches the sender.
+4. **Send to a distribution list** — confirm delivery to every configured expected recipient.
+5. **Manage a recurring calendar event** — create a series, verify its occurrences and changes, then delete it.
+6. **Send and accept a meeting invitation** — invite the attendee, accept, verify the response and cancel the meeting.
+
+Journeys 2–6 run every **five minutes**. Mail delivery, drafts, attachment/reply and distribution-list delivery have been verified Healthy live; calendar journeys still have observed authorization/403 failures. **Planned variants:** mailbox search/organization, external mail and Outlook Web.
+
+[Exchange journey details and configuration](./synthetic-tests/exchange/README.md#journeys-and-scheduling)
+
+### Teams
+
+The five target journey families are:
+
+1. **Complete a channel conversation** — Bot A posts, Bot B receives and replies, then verify the persisted conversation. **Planned full flow**; implemented coverage is one bot posting/replying with Graph readback, not Bot B receipt.
+2. **Complete an answered audio call** — two parties answer and exchange a reference audio signal in both directions. **Planned full flow**; implemented coverage only places calls to configured users, waits and hangs up, without verifying an answer or media.
+3. **Join and leave a scheduled meeting** — verify joining, participant roster, bidirectional media and departure. **Planned**.
+4. **Share and open a file** — verify the intended recipient receives the reference, can access the file and reads matching content. **Planned**.
+5. **Complete an Adaptive Card workflow** — send a card, perform an action and verify its callback/result. **Planned**.
+
+The three implemented probes—channel post/readback, thread reply/readback and call placement/wait/hang-up—run every **two minutes** and have been verified Healthy live within those narrower boundaries. Teams Web messaging/meeting variants are **planned**.
+
+[Teams journey details and implementation boundaries](./synthetic-tests/teams/README.md#target-catalog-versus-current-implementation)
+
+### SharePoint
+
+The five target journey families are:
+
+1. **Save and reopen library content** — verify site/library access, folder hierarchy, upload, enumeration, download/hash and deletion. **Partially implemented**: save/reopen and a separate rename/reopen journey exist; the expanded folder workflow is planned.
+2. **Create, read, update and delete a list item** — verify each saved change. **Planned**.
+3. **Share content with a recipient** — verify recipient access, then revoke it. **Planned**.
+4. **Verify versions and recover content** — retrieve history/prior content and recover it; check-in/check-out is a variant. **Planned**.
+5. **Find content through search** — wait for indexing, locate the expected result and retrieve it. **Planned**.
+
+Implemented file journeys run every **five minutes**; live target/access setup is still incomplete. Browser variants are **planned**.
+
+[SharePoint journey details and implementation boundaries](./synthetic-tests/sharepoint/README.md#target-catalog-versus-current-implementation)
+
+### OneDrive
+
+All five journey families are **planned**, with no worker, execution cadence or live verification:
+
+1. **Save and reopen user-drive content** — create folders, upload a file, download/hash-check it and delete test content.
+2. **Persist content in an app folder** — save and reopen application-owned content; the exact authentication model remains to be selected.
+3. **Share content with a recipient** — verify recipient read access, then revoke it.
+4. **Retrieve file versions** — verify previous content, with optional restore.
+5. **Find and retrieve content through search** — locate the expected file and verify its contents.
+
+Browser variants are also **planned**. [OneDrive journey details](./synthetic-tests/README.md#onedrive-target-catalog-planned)
+
 ## Why synthetic tests?
 
 Provider status and infrastructure metrics are useful, but they do not exercise our approved identities, resources, permissions, and access paths together.
@@ -89,16 +148,7 @@ OTEL export failures are explicit and do not prevent direct report attempts. His
 
 ## Journey catalog and current coverage
 
-The target catalog describes completed workflows, **not a promise that every family is implemented**. Five families do not mean five API calls. Detailed contracts and planned variants live in the linked guides.
-
-| Service | Target catalog and implemented boundary |
-| --- | --- |
-| [Exchange](./synthetic-tests/exchange/README.md#journeys-and-scheduling) | Six core journeys implemented: A→B delivery every **60 seconds**; draft, attachment/hash/reply, DL fanout, recurring calendar and meeting invitation/accept/cancel every **300 seconds**. Mail, draft, attachment/reply and DL verified Healthy live; calendar journeys currently blocked by scoped-authorization cache/403. |
-| [Teams](./synthetic-tests/teams/README.md#target-catalog-versus-current-implementation) | Five target families: two-bot conversation, answered audio, scheduled meeting, recipient file sharing, Adaptive Card workflow. Current implementation is narrower: one bot posts/replies with Graph observation and signaling-only calls to three configured accounts, every **120 seconds**. Those narrower flows are live verified, not second-bot receipt or media. |
-| [SharePoint](./synthetic-tests/sharepoint/README.md#target-catalog-versus-current-implementation) | Five target families: library/folder roundtrip, list CRUD, recipient sharing, versions, search. Current save/read/verify/delete and supporting rename/reopen run every **300 seconds**; approved live targets remain missing. |
-| [OneDrive](./synthetic-tests/README.md#onedrive-target-catalog-planned) | Five planned families: user-drive roundtrip, app folder, recipient sharing, versions, search, plus a browser variant. Planned-only model with Unknown/suppressed coverage; no worker, configured cadence or live verification. |
-
-These are **API-backed journeys**, not Outlook/Teams/browser sign-in tests, employee read receipts, Teams media tests, or SharePoint coauthoring tests. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
+See [User journeys by service](#user-journeys-by-service) directly below the health-model image for the full catalog and implementation status. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
 
 The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
 

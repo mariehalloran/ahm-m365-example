@@ -77,6 +77,12 @@ def inspect(service):
                 assert properties["impact"] == "Suppressed", entity["name"]
     if implemented:
         assert by_name[f"{name}-service-health"]["properties"]["impact"] == "Suppressed"
+        for call in calls:
+            signals = by_name[call]["properties"].get("signalGroups", {}).get("external", {}).get("signals", [])
+            assert len(signals) == 1, (name, call, "provider child has no ingested signal")
+            assert signals[0]["status"]["reportedAt"] >= "2026-10-26T14:19:", (name, call, "stale provider report")
+    else:
+        assert by_name[model]["properties"]["healthState"] == "Unknown"
     return name, {
         "expectedEntityCount": len(expected), "deployedEntityCount": len(entities),
         "expectedRelationshipCount": len(expected_relationships), "deployedRelationshipCount": len(relationships),
@@ -103,6 +109,8 @@ for reference in root_entities:
         service = name.removesuffix("-experience")
         assert properties["signalGroups"]["azureResource"]["azureResourceId"].lower().endswith(f"/{prefix}-{service}")
         assert properties["impact"] == ("Suppressed" if service == "onedrive" else "Standard")
+        if service == "onedrive":
+            assert properties["healthState"] == "Unknown"
 evidence["root"] = {"entities": root_entities, "relationships": root_relationships}
 Path(".journey-live-evidence.json").write_text(json.dumps(evidence, indent=2))
 print(json.dumps({name: {key: value for key, value in data.items() if key.endswith("Count")} for name, data in evidence.items() if name != "root"}))

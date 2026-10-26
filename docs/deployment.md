@@ -4,7 +4,119 @@
 
 The [model templates](../health-model/README.md) define a root referencing independent service models. Exchange has six implemented journeys, SharePoint two and Teams three. Each implemented journey/business step receives aggregated direct **External Reports**, plus optional OTEL query signals. The full documented catalog also includes 23 explicitly planned/unimplemented Unknown journey roots and 78 planned steps, including a planned-only OneDrive model, without adding runtime scenarios or workers. All default selections give five models, 180 entities, 175 relationships, 34 journey roots and 118 business steps. Planned roots and the OneDrive reference are suppressed to preserve implemented synthetic rollup. Token acquisition and generic cleanup are internal; explicit deletion/cancellation/hang-up are business steps. Provider context is separately suppressed and runs on independent container-local lanes.
 
-### Recorded live acceptance evidence — 2026-10-26
+### Full documented catalog rollout — 2026-10-26
+
+Deployed to subscription `17a37fff-b1ef-4af7-9bd2-70898b286aaf`, tenant
+`5e7897a0-4a38-43f3-914d-195d5355e969`, resource group `rg-m365-consto`,
+root model `m365-experience-consto`. The original active private
+`monitoring.consto.json` and its existing service files were retained: no hidden
+profile, target/scenario override, Microsoft 365 permission change, new Reader
+grant or dependency upgrade. Model what-if showed no deletes or unrelated
+infrastructure changes. Models were deployed before the reporter update.
+
+All three existing Container Apps use ready revision **0000012**, with image-only
+updates preserving configured environment/root/service settings and assigned UAMIs:
+
+```text
+crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53
+```
+
+ACR build `cj5`, tag `journey-catalog-20261026`. No OneDrive worker, worker identity,
+schedule, runtime scenario, live target or fabricated health report was added.
+
+**Catalog reconciliation:** paginated live ARM entity/relationship inventories
+were compared with the implemented and planned catalogs, including every business
+step and relationship, not just deployment outputs.
+
+| Model | Implemented journeys expected / deployed | Planned roots expected / deployed | Entities expected / deployed | Relationships expected / deployed |
+| --- | --- | --- | --- | --- |
+| Exchange | 6 / 6 | 4 / 4 | 53 / 53 | 52 / 52 |
+| Teams | 3 / 3 | 7 / 7 | 50 / 50 | 49 / 49 |
+| SharePoint | 2 / 2 | 6 / 6 | 43 / 43 | 42 / 42 |
+| OneDrive | 0 / 0 | 6 / 6 | 29 / 29 | 28 / 28 |
+| Root references | — | — | 5 / 5 | 4 / 4 |
+| **Total** | **11 / 11** | **23 / 23** | **180 / 180** | **175 / 175** |
+
+Implemented names/IDs are unchanged: Exchange `exchange-global`, `exchange-draft`,
+`exchange-attachment`, `exchange-distribution`, `exchange-recurring`,
+`exchange-meeting`; Teams `teams-global`, `teams-reply`, `teams-call`; SharePoint
+`sharepoint-global`, `sharepoint-rename`.
+
+Every planned ID below was present with its documented display name prefixed
+`[Planned / unimplemented]`. The full display-name and workflow mapping is in the
+[model catalog](../health-model/README.md#catalog-versus-modeled-and-live-coverage)
+and [planned definitions](../health-model/infra/planned-catalog.bicep).
+
+| Entity prefix | Deployed planned suffixes (prefix + suffix is the exact ID) |
+| --- | --- |
+| `exchange-planned-` | `search-organize-mail`, `external-inbound`, `external-outbound`, `outlook-web` |
+| `teams-planned-` | `two-bot-conversation`, `answered-audio`, `scheduled-meeting`, `recipient-file-sharing`, `adaptive-card`, `teams-web-messaging`, `teams-web-meeting` |
+| `sharepoint-planned-` | `library-folder-roundtrip`, `list-item-lifecycle`, `recipient-sharing`, `document-versions`, `search-indexing`, `browser-upload` |
+| `onedrive-planned-` | `user-drive-roundtrip`, `app-folder-lifecycle`, `recipient-sharing`, `document-versions`, `search-retrieve`, `browser-upload` |
+
+All **34 journey roots** have native `properties.icon.iconName: UserFlow`, with no
+custom SVG; other entities have no journey icon. All **23 planned roots and 78
+planned steps** were Unknown, labeled unimplemented, and had no external/OTEL
+signals. Planned roots are impact-suppressed. All four root reference destinations
+match the deployed service model IDs; the OneDrive reference is Unknown/suppressed.
+No new Reader grant was authorized for that planned-only model, so native OneDrive
+health retrieval is not claimed. Existing implemented references retain Standard
+impact and existing read permissions.
+
+**Observed reporting, beginning 14:19 UTC on revision 12:**
+
+- All **16 provider-call children** had fresh ingested external signals: seven each
+  for Exchange/Teams, two for SharePoint. Stable overview values were Exchange **50 /
+  Degraded**, Teams **50 / Degraded**, SharePoint **100 / Healthy**. Their Service
+  Health parents remain suppressed, independent of synthetic rollup.
+- Issue-count reports were numeric **40 / Unknown**, **0 / Unknown**, **0 / Unknown**
+  respectively. Zero issues is not evaluated Healthy without a configured health
+  threshold. All ten beta functions still returned **403** and ingested
+  **Unknown without numeric values**, not fabricated success.
+- Exchange mail/draft/DL completed successfully. Attachment/hash/reply completed
+  successfully but one 15,359 ms journey sample breached the 15,000 ms degraded
+  duration threshold. Both calendar journeys still produced actual **403 /
+  Unhealthy** evidence.
+- Teams' first cycle completed messaging, reply and all three signaling-only calls.
+  A subsequent publication/readback attempt reported **read-failure / Unhealthy**;
+  reply and all three call attempts completed. Do not equate successful attempts
+  with an always-Healthy journey or infer audio/second-bot coverage.
+- SharePoint's two synthetic journeys remained **configuration-failure /
+  Unhealthy** because approved live targets are missing. Healthy provider context
+  does not repair or conceal this. Overall experience remained Unhealthy; planned
+  Unknown nodes did not replace implemented failure evidence.
+
+A final ARM recheck showed **all three Teams journeys and Teams Experience Healthy**
+despite its seven planned Unknown roots, directly confirming suppression does not
+poison implemented rollup. Exchange attachment/reply had also returned to Healthy;
+mail/draft/DL remained Healthy, both calendars Unhealthy, SharePoint's two journeys
+Unhealthy and OneDrive Unknown. The overall root remained Unhealthy. The intermittent
+Teams readback failure and earlier latency degradation above remain valid observed
+failures, not erased acceptance gaps.
+
+The previous provider-parent signals were still visible during bounded migration
+inspection: Exchange last reported at **14:15:36 UTC**, SharePoint **14:15:31 UTC**,
+Teams **14:20:28 UTC**. Their normal 15-minute TTLs end around **14:30:36**,
+**14:30:31**, **14:35:28 UTC** respectively. New reporters publish to the call
+children only; no fabricated cleanup report was posted. Until natural expiry,
+these old signals may coexist under the already-suppressed parent.
+
+Direct ingestion has **no native `dataUnit` field**: units are carried in
+`additionalContext.unit` (`Percent`, `Milliseconds`, `Count`, categorical
+`status-score`). This is not a promise of native external-signal unit labels.
+Optional OTEL retains native Percent/Milliseconds units; it remains disabled in
+this profile, and planned-only nodes create no OTEL query resources.
+
+Validation passed: **961 tests across 37 worker test files**, TypeScript typecheck
+and production build, **16 model template contracts**, **12 worker infrastructure
+contracts**, and `git diff --check`. Live checks additionally verified exact
+inventory, icons, Unknown/no-reports, suppression, root destinations, new revision
+readiness and real provider-child ingestion. Independent stalled-worker /
+broken-publication detection, end-to-end notifications, OTEL cloud validation,
+calendar authorization, beta backend access and approved SharePoint targets remain
+acceptance gaps. This rollout does not claim full enterprise monitoring acceptance.
+
+### Earlier revision-11 live acceptance evidence — 2026-10-26
 
 The same-tenant `m365-experience-consto` trial has all three workers at
 ready/desired revision **11**, using immutable image:

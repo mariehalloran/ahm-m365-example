@@ -18,7 +18,7 @@
       {
         "name": "exchange-attachment",
         "displayName": "Verify attachment and correlated reply",
-        "health": "Degraded"
+        "health": "Healthy"
       },
       {
         "name": "exchange-distribution",
@@ -76,7 +76,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Degraded",
-                  "reportedAt": "2026-10-26T14:19:29.8063906+00:00",
+                  "reportedAt": "2026-10-26T14:24:29.630053+00:00",
                   "value": 50.0
                 }
               }
@@ -101,7 +101,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.8243519+00:00",
+                  "reportedAt": "2026-10-26T14:24:29.7096516+00:00",
                   "value": 40.0
                 }
               }
@@ -126,7 +126,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.6850846+00:00"
+                  "reportedAt": "2026-10-26T14:24:29.6588551+00:00"
                 }
               }
             ]
@@ -150,7 +150,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.8883672+00:00"
+                  "reportedAt": "2026-10-26T14:24:29.8548921+00:00"
                 }
               }
             ]
@@ -174,7 +174,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:30.0263915+00:00"
+                  "reportedAt": "2026-10-26T14:24:30.0566611+00:00"
                 }
               }
             ]
@@ -198,7 +198,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:30.1018423+00:00"
+                  "reportedAt": "2026-10-26T14:24:30.0079477+00:00"
                 }
               }
             ]
@@ -222,7 +222,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:30.2404732+00:00"
+                  "reportedAt": "2026-10-26T14:24:30.0223985+00:00"
                 }
               }
             ]
@@ -285,7 +285,7 @@
       {
         "name": "teams-global",
         "displayName": "Publish channel message",
-        "health": "Unhealthy"
+        "health": "Healthy"
       },
       {
         "name": "teams-reply",
@@ -295,7 +295,7 @@
       {
         "name": "teams-call",
         "displayName": "Place test calls and hang up",
-        "health": "Unhealthy"
+        "health": "Healthy"
       }
     ],
     "plannedJourneys": [
@@ -338,8 +338,8 @@
     "providerCalls": {
       "teams-service-health-health-overviews": {
         "canvasPosition": {
-          "x": 250.0,
-          "y": 432.0
+          "x": 0.0,
+          "y": 440.0
         },
         "displayName": "serviceAnnouncement.healthOverviews (status score)",
         "healthState": "Degraded",
@@ -353,7 +353,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Degraded",
-                  "reportedAt": "2026-10-26T14:19:29.1690934+00:00",
+                  "reportedAt": "2026-10-26T14:24:28.3981573+00:00",
                   "value": 50.0
                 }
               }
@@ -364,7 +364,7 @@
       "teams-service-health-issues": {
         "canvasPosition": {
           "x": 0.0,
-          "y": 440.0
+          "y": 610.0
         },
         "displayName": "serviceAnnouncement.issues (Count)",
         "healthState": "Unknown",
@@ -378,7 +378,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.0305011+00:00",
+                  "reportedAt": "2026-10-26T14:24:28.4751401+00:00",
                   "value": 0.0
                 }
               }
@@ -388,8 +388,8 @@
       },
       "teams-service-health-getUsageMetricsForTeamsByMeetingsJoined": {
         "canvasPosition": {
-          "x": 500.0,
-          "y": 440.0
+          "x": 0.0,
+          "y": 780.0
         },
         "displayName": "getUsageMetricsForTeamsByMeetingsJoined",
         "healthState": "Unknown",
@@ -403,7 +403,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.1537106+00:00"
+                  "reportedAt": "2026-10-26T14:24:28.3410736+00:00"
                 }
               }
             ]
@@ -412,8 +412,8 @@
       },
       "teams-service-health-getUsageMetricsForTeamsByLaunch": {
         "canvasPosition": {
-          "x": 750.0,
-          "y": 440.0
+          "x": 0.0,
+          "y": 950.0
         },
         "displayName": "getUsageMetricsForTeamsByLaunch",
         "healthState": "Unknown",
@@ -427,7 +427,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.2252826+00:00"
+                  "reportedAt": "2026-10-26T14:24:28.5726403+00:00"
                 }
               }
             ]
@@ -436,8 +436,8 @@
       },
       "teams-service-health-getMessageVolumeMetricsForTeamsChat": {
         "canvasPosition": {
-          "x": 1000.0,
-          "y": 440.0
+          "x": 0.0,
+          "y": 1120.0
         },
         "displayName": "getMessageVolumeMetricsForTeamsChat",
         "healthState": "Unknown",
@@ -451,7 +451,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.3122172+00:00"
+                  "reportedAt": "2026-10-26T14:24:28.6193718+00:00"
                 }
               }
             ]
@@ -460,8 +460,8 @@
       },
       "teams-service-health-getAudioStreamQoEMetricsForTeams": {
         "canvasPosition": {
-          "x": 1500.0,
-          "y": 440.0
+          "x": 0.0,
+          "y": 1290.0
         },
         "displayName": "getAudioStreamQoEMetricsForTeams",
         "healthState": "Unknown",
@@ -475,7 +475,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.3768377+00:00"
+                  "reportedAt": "2026-10-26T14:24:28.80989+00:00"
                 }
               }
             ]
@@ -484,8 +484,8 @@
       },
       "teams-service-health-getAudioStreamsOverUdpMetricsForTeams": {
         "canvasPosition": {
-          "x": 1250.0,
-          "y": 440.0
+          "x": 0.0,
+          "y": 1460.0
         },
         "displayName": "getAudioStreamsOverUdpMetricsForTeams",
         "healthState": "Unknown",
@@ -499,7 +499,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:29.5658416+00:00"
+                  "reportedAt": "2026-10-26T14:24:28.7341653+00:00"
                 }
               }
             ]
@@ -509,11 +509,11 @@
     },
     "serviceRoot": {
       "canvasPosition": {
-        "x": 5125.0,
+        "x": 300.0,
         "y": 0.0
       },
       "displayName": "Teams Experience",
-      "healthState": "Unhealthy",
+      "healthState": "Healthy",
       "impact": "Standard",
       "provisioningState": "Succeeded",
       "signalGroups": {
@@ -525,8 +525,8 @@
     },
     "oldProviderParent": {
       "canvasPosition": {
-        "x": 750.0,
-        "y": 211.0
+        "x": 0.0,
+        "y": 240.0
       },
       "displayName": "Service Health",
       "healthState": "Degraded",
@@ -620,7 +620,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Healthy",
-                  "reportedAt": "2026-10-26T14:19:28.4125391+00:00",
+                  "reportedAt": "2026-10-26T14:24:27.8529723+00:00",
                   "value": 100.0
                 }
               }
@@ -645,7 +645,7 @@
                 "signalKind": "External",
                 "status": {
                   "healthState": "Unknown",
-                  "reportedAt": "2026-10-26T14:19:28.4641104+00:00",
+                  "reportedAt": "2026-10-26T14:24:27.9627311+00:00",
                   "value": 0.0
                 }
               }
@@ -784,7 +784,7 @@
                   "signalKind": "External",
                   "status": {
                     "healthState": "Unhealthy",
-                    "reportedAt": "2026-10-26T14:21:12.7454904+00:00"
+                    "reportedAt": "2026-10-26T14:25:13.5990032+00:00"
                   }
                 }
               ]
@@ -853,7 +853,7 @@
                   "status": {
                     "error": "Nested health model query failed: The client 'ab616372-c6b1-4895-806a-cfc0973864d0' with object id '44adba1a-1283-47c4-b4c7-be3bea3c4c53' does not have authorization to perform action 'Microsoft.CloudHealth/healthmodels/entities/read' over scope '/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-onedrive/entities/m365-experience-consto-onedrive' or the scope is invalid. If access was recently granted, please refresh your credentials.",
                     "healthState": "Unknown",
-                    "reportedAt": "2026-10-26T14:20:23.0949603+00:00"
+                    "reportedAt": "2026-10-26T14:25:23.1323091+00:00"
                   }
                 }
               ]
@@ -895,7 +895,7 @@
                   "signalKind": "External",
                   "status": {
                     "healthState": "Unhealthy",
-                    "reportedAt": "2026-10-26T14:21:12.6420531+00:00"
+                    "reportedAt": "2026-10-26T14:25:13.2017198+00:00"
                   }
                 }
               ]
@@ -937,7 +937,7 @@
                   "signalKind": "External",
                   "status": {
                     "healthState": "Unhealthy",
-                    "reportedAt": "2026-10-26T14:21:12.7993702+00:00"
+                    "reportedAt": "2026-10-26T14:25:13.5821647+00:00"
                   }
                 }
               ]

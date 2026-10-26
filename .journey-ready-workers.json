@@ -1,0 +1,20 @@
+{
+  "exchange": {
+    "revision": "m365-ctbcoa-exchange--0000012",
+    "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+    "configUnchanged": true,
+    "identityUnchanged": true
+  },
+  "teams": {
+    "revision": "m365-ctbcoa-teams--0000012",
+    "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+    "configUnchanged": true,
+    "identityUnchanged": true
+  },
+  "sharepoint": {
+    "revision": "m365-ctbcoa-sharepoint--0000012",
+    "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+    "configUnchanged": true,
+    "identityUnchanged": true
+  }
+}

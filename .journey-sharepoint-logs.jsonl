@@ -1,5 +1,5 @@
-{"TimeStamp": "2026-10-26T14:20:02.81447", "Log": "Connecting to the container 'sharepoint-synthetic'..."}
-{"TimeStamp": "2026-10-26T14:20:02.88132", "Log": "Successfully Connected to container: 'sharepoint-synthetic' [Revision: 'm365-ctbcoa-sharepoint--0000012', Replica: 'm365-ctbcoa-sharepoint--0000012-76f947794f-d2hzf']"}
+{"TimeStamp": "2026-10-26T14:22:15.87491", "Log": "Connecting to the container 'sharepoint-synthetic'..."}
+{"TimeStamp": "2026-10-26T14:22:15.96073", "Log": "Successfully Connected to container: 'sharepoint-synthetic' [Revision: 'm365-ctbcoa-sharepoint--0000012', Replica: 'm365-ctbcoa-sharepoint--0000012-76f947794f-d2hzf']"}
 {"TimeStamp": "2026-10-26T14:19:26.8614988+00:00", "Log": "F {\"event\":\"service-worker-started\",\"intervalSeconds\":300,\"timeoutSeconds\":45,\"once\":false,\"probeCount\":2,\"type\":\"sharepoint\",\"mode\":\"live\",\"cohort\":\"sharepoint-global\",\"simulation\":false,\"durationMeaning\":\"measured-probe-duration\"}"}
 {"TimeStamp": "2026-10-26T14:19:26.8618959+00:00", "Log": "F {\"event\":\"execution-lane-started\",\"lane\":\"sharepoint\",\"slot\":0,\"type\":\"sharepoint\",\"mode\":\"live\",\"cohort\":\"sharepoint-global\",\"simulation\":false,\"durationMeaning\":\"measured-probe-duration\"}"}
 {"TimeStamp": "2026-10-26T14:19:26.8630463+00:00", "Log": "F {\"event\":\"execution-lane-started\",\"lane\":\"provider-context\",\"slot\":0,\"type\":\"sharepoint\",\"mode\":\"live\",\"cohort\":\"sharepoint-global\",\"simulation\":false,\"durationMeaning\":\"measured-probe-duration\"}"}
