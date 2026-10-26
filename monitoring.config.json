@@ -9,7 +9,8 @@
     "successDegradedPercent": 99,
     "successUnhealthyPercent": 95,
     "latencyDegradedMilliseconds": 15000,
-    "latencyUnhealthyMilliseconds": 60000
+    "latencyUnhealthyMilliseconds": 60000,
+    "callQualityThresholds": {}
   },
   "services": {
     "exchange": {
@@ -46,13 +47,38 @@
         }
       ],
       "callTargets": [
-        { "id": "teams-call-user-001", "tenantId": "00000000-0000-0000-0000-000000000000", "callUserId": "11111111-1111-4111-8111-111111111111" },
-        { "id": "teams-call-user-002", "tenantId": "00000000-0000-0000-0000-000000000000", "callUserId": "22222222-2222-4222-8222-222222222222" },
-        { "id": "teams-call-user-003", "tenantId": "00000000-0000-0000-0000-000000000000", "callUserId": "33333333-3333-4333-8333-333333333333" }
+        {
+          "id": "teams-meeting-001",
+          "tenantId": "00000000-0000-0000-0000-000000000000",
+          "meetingThreadId": "19:meeting_DEDICATED_TEST_MEETING@thread.v2",
+          "organizerUserId": "11111111-1111-4111-8111-111111111111",
+          "peerBotClientId": "22222222-2222-4222-8222-222222222222"
+        }
+      ]
+    },
+    "onedrive": {
+      "enabled": true,
+      "configFile": "synthetic-tests/onedrive/config.json",
+      "scenarios": { "user-drive-roundtrip": true, "app-folder-lifecycle": true, "document-versions": true },
+      "targets": [
+        {
+          "id": "onedrive-probe-001",
+          "userId": "11111111-1111-4111-8111-111111111111",
+          "userPrincipalName": "dedicated-onedrive-1@example.invalid",
+          "folderName": "AHM-Synthetic-Tests",
+          "restoreVersion": false
+        },
+        {
+          "id": "onedrive-probe-002",
+          "userId": "22222222-2222-4222-8222-222222222222",
+          "userPrincipalName": "dedicated-onedrive-2@example.invalid",
+          "folderName": "AHM-Synthetic-Tests",
+          "restoreVersion": false
+        }
       ]
     },
     "sharepoint": {
-      "enabled": true,
+      "enabled": false,
       "configFile": "synthetic-tests/sharepoint/config.json",
       "scenarios": { "save-reopen-file": true, "rename-reopen-file": true },
       "targets": [

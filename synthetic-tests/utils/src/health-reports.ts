@@ -1,15 +1,33 @@
 import type { TokenCredential } from "@azure/identity";
 import { createHealthReportCredential } from "./auth.js";
-import { isReportedStep, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { isReportedStep, oneDriveStepEntities, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import { activityFunctions, isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
+import { callQualityMetricNames, type CallQualityMetric, type CallQualityObservation } from "./teams-call-quality.js";
 
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
 const REPORT_BATCH_TIMEOUT_MS = 30000;
+
+export const teamsCallSignals = [
+  "teams-call-connection-success-percentage", "teams-call-mean-connection-duration",
+  "teams-call-playback-success-percentage", "teams-call-mean-playback-duration",
+  "teams-call-disconnection-success-percentage", "teams-call-mean-disconnection-duration",
+] as const;
+export const callQualitySignals: Record<CallQualityMetric, { signalName: `teams-call-quality-${string}`; unit: string }> = {
+  packetLossPercent: { signalName: "teams-call-quality-packet-loss", unit: "Percent" },
+  maxPacketLossPercent: { signalName: "teams-call-quality-max-packet-loss", unit: "Percent" },
+  jitterMs: { signalName: "teams-call-quality-jitter", unit: "Milliseconds" },
+  maxJitterMs: { signalName: "teams-call-quality-max-jitter", unit: "Milliseconds" },
+  roundTripTimeMs: { signalName: "teams-call-quality-round-trip-time", unit: "Milliseconds" },
+  maxRoundTripTimeMs: { signalName: "teams-call-quality-max-round-trip-time", unit: "Milliseconds" },
+  audioDegradation: { signalName: "teams-call-quality-audio-degradation", unit: "MOSDegradation" },
+  concealedSamplesPercent: { signalName: "teams-call-quality-concealed-samples", unit: "Percent" },
+  maxConcealedSamplesPercent: { signalName: "teams-call-quality-max-concealed-samples", unit: "Percent" },
+};
 
 type HealthState = "Healthy" | "Degraded" | "Unhealthy" | "Unknown";
 type Policy = ProjectConfig["healthModel"];
@@ -20,7 +38,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}`;
+    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}` | (typeof teamsCallSignals)[number] | `teams-call-quality-${string}`;
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -30,7 +48,12 @@ export interface HealthReport {
 }
 export interface CycleResults { cycleId: string; results: SyntheticResult[] }
 export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[] }
-export type HealthReporter = (cycle: CycleResults | ProviderCycle) => Promise<void>;
+export type CallQualitySample =
+  | { status: "available"; observation: CallQualityObservation }
+  | { status: "pending" | "unavailable"; callChainId?: string }
+  | { status: "failed"; callChainId: string; category: DiagnosticCategory; httpStatus?: number };
+export interface CallQualityCycle { cycleId: string; collectedAt: string; callQuality: CallQualitySample[] }
+export type HealthReporter = (cycle: CycleResults | ProviderCycle | CallQualityCycle) => Promise<void>;
 
 interface MeasurementSample {
   success: boolean;
@@ -97,7 +120,7 @@ function collectEntitySamples(service: ServiceConfig["type"], results: Synthetic
       ...journey.steps.filter(isReportedStep).map(name => {
         const samples = collectActionSamples(name, journeyResults);
         return {
-          entityName: `${journey.entityName}-${name}`, samples,
+          entityName: `${journey.entityName}-${oneDriveStepEntities[testType]?.[name] ?? name}`, samples,
           skipped: journeyResults.length - samples.length,
         };
       }),
@@ -153,8 +176,110 @@ function createEntityReports(group: EntitySamples, cycleId: string, policy: Poli
 export function aggregateHealthReports(
   service: ServiceConfig["type"], cycle: CycleResults, policy: Policy,
 ): HealthReport[] {
-  return collectEntitySamples(service, cycle.results).flatMap(group =>
-    createEntityReports(group, cycle.cycleId, policy));
+  return [
+    ...collectEntitySamples(service, cycle.results).flatMap(group =>
+      createEntityReports(group, cycle.cycleId, policy)),
+    ...(service === "teams" ? callMeasurementReports(cycle, policy) : []),
+  ];
+}
+
+function callMeasurementReports(cycle: CycleResults, policy: Policy): HealthReport[] {
+  const calls = cycle.results.filter(result => result.testType === "teams-call");
+  if (!calls.length) return [];
+  const phases = [
+    { step: "wait-for-answer", success: teamsCallSignals[0], duration: teamsCallSignals[1] },
+    { step: "play-audio", success: teamsCallSignals[2], duration: teamsCallSignals[3] },
+    { step: "end-call", success: teamsCallSignals[4], duration: teamsCallSignals[5] },
+  ] as const;
+  return phases.flatMap(phase => {
+    const samples = calls.flatMap(result => {
+      const step = result.steps.find(step => step.name === phase.step);
+      if (!step || step.status === "skipped") return [];
+      const placed = result.steps.find(step => step.name === "place-call");
+      const submissionMs = phase.step === "wait-for-answer" && placed && placed.status !== "skipped" ? placed.durationMs : 0;
+      return [{ success: step.status === "succeeded", durationMs: step.durationMs + submissionMs, observedAt: step.observedAt }];
+    });
+    const attempted = samples.length;
+    const succeeded = samples.filter(sample => sample.success).length;
+    const context = JSON.stringify({
+      aggregation: "single-cycle", cycleId: cycle.cycleId, attempted, succeeded,
+      skipped: calls.length - attempted,
+      observedAt: samples.map(sample => sample.observedAt).sort().at(-1) ?? null,
+      callChainIds: calls.flatMap(result => result.call?.callChainId ? [result.call.callChainId] : []),
+      resultCodes: [...new Set(calls.flatMap(result => result.call?.resultCodes ?? []))],
+      evidence: "service-confirmed-not-received-audio",
+    });
+    return [
+      createMeasurementReport("teams-call", {
+        signalName: phase.success, unit: "Percent",
+        rules: {
+          degradedRule: { operator: "LessThan", threshold: policy.successDegradedPercent },
+          unhealthyRule: { operator: "LessThan", threshold: policy.successUnhealthyPercent },
+        },
+        value: attempted ? 100 * succeeded / attempted : undefined,
+      }, context, policy.reportTtlMinutes),
+      createMeasurementReport("teams-call", {
+        signalName: phase.duration, unit: "Milliseconds",
+        rules: {
+          degradedRule: { operator: "GreaterThan", threshold: policy.latencyDegradedMilliseconds },
+          unhealthyRule: { operator: "GreaterThan", threshold: policy.latencyUnhealthyMilliseconds },
+        },
+        value: attempted ? samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
+      }, context, policy.reportTtlMinutes),
+    ];
+  });
+}
+
+export function callQualityMeasurements(cycle: CallQualityCycle) {
+  return callQualityMetricNames.map(metric => {
+    const observations = cycle.callQuality.flatMap(sample => sample.status === "available" ? [sample.observation] : []);
+    const samples = observations.flatMap(observation => observation.metrics[metric] ? [observation.metrics[metric]!] : []);
+    const sampleCount = samples.reduce((sum, sample) => sum + sample.sampleCount, 0);
+    const maximum = metric.startsWith("max");
+    const value = sampleCount ? maximum
+      ? Math.max(...samples.map(sample => sample.value))
+      : samples.reduce((sum, sample) => sum + sample.value * sample.sampleCount, 0) / sampleCount : undefined;
+    const complete = cycle.callQuality.length > 0 && cycle.callQuality.every(sample => sample.status === "available") &&
+      observations.every(observation => observation.audioStreamCount > 0 && observation.metrics[metric]?.sampleCount === observation.audioStreamCount);
+    return { metric, value, sampleCount, complete, maximum };
+  });
+}
+
+export function callQualityReports(cycle: CallQualityCycle, policy: Policy): HealthReport[] {
+  const observations = cycle.callQuality.flatMap(sample => sample.status === "available" ? [sample.observation] : []);
+  return callQualityMeasurements(cycle).map<HealthReport>(({ metric, value, sampleCount, complete, maximum }) => {
+    const signal = callQualitySignals[metric];
+    const thresholds = policy.callQualityThresholds[metric];
+    const rules: EvaluationRules | undefined = thresholds ? {
+      degradedRule: { operator: "GreaterThan", threshold: thresholds.degradedAbove },
+      unhealthyRule: { operator: "GreaterThan", threshold: thresholds.unhealthyAbove },
+    } : undefined;
+    return {
+      entityName: "teams-call",
+      body: {
+        signalName: signal.signalName, expiresInMinutes: policy.reportTtlMinutes,
+        healthState: value !== undefined && rules && complete ? evaluateHealthState(value, rules) : "Unknown",
+        ...(value === undefined ? {} : { value }),
+        ...(rules && complete ? { evaluationRules: rules } : {}),
+        additionalContext: JSON.stringify({
+          cycleId: cycle.cycleId, collectedAt: cycle.collectedAt, source: "microsoft.graph.callRecords",
+          unit: signal.unit, aggregation: maximum ? "maximum-of-stream-maxima" : "mean-of-stream-averages",
+          sampleCount, complete, expectedCalls: cycle.callQuality.length, availableCalls: observations.length,
+          pendingCalls: cycle.callQuality.filter(sample => sample.status === "pending").length,
+          unavailableCalls: cycle.callQuality.filter(sample => sample.status === "unavailable").length,
+          failures: cycle.callQuality.flatMap(sample => sample.status === "failed" ? [{
+            category: sample.category, ...(sample.httpStatus === undefined ? {} : { httpStatus: sample.httpStatus }),
+          }] : []),
+          observedFrom: observations.map(observation => observation.startDateTime).sort()[0] ?? null,
+          observedThrough: observations.map(observation => observation.endDateTime).sort().at(-1) ?? null,
+          codecs: [...new Set(observations.flatMap(observation => observation.codecs))],
+          streamDirections: [...new Set(observations.flatMap(observation => observation.streamDirections))],
+          callRecords: observations.map(observation => ({ callChainId: observation.callChainId, version: observation.version })),
+          evidence: "provider-reported-not-independent-audio-analysis",
+        }),
+      },
+    };
+  });
 }
 
 const serviceStatusScores: Readonly<Record<string, number>> = {
@@ -330,7 +455,9 @@ export function createHealthReporter(
   const modelPath = `https://management.azure.com/subscriptions/${encodeURIComponent(policy.subscriptionId)}`
     + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(modelName)}`;
   return async cycle => {
+    if ("callQuality" in cycle && service.type !== "teams") throw new IntegrationError("configuration-failure");
     const reports = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
+      : "callQuality" in cycle ? callQualityReports(cycle, policy)
       : service.mode === "live" ? [
         ...(service.serviceHealth ? [
           serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),

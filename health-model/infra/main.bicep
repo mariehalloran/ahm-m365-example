@@ -23,26 +23,28 @@ var selectedServices ServiceDefinition[] = map(
     union(service, {
       journeys: filter(
         service.journeys,
-        journey => projectConfig.services[service.service].scenarios[?journey.name] ?? false
+        journey => projectConfig.services[?service.service].?scenarios[?journey.name] ?? false
       )
     })
 )
 var runtimeServices = filter(
   selectedServices,
-  service => projectConfig.services[service.service].enabled && !empty(service.journeys)
+  service => (projectConfig.services[?service.service].?enabled ?? false) && !empty(service.journeys)
 )
 var modelServices ServiceDefinition[] = map(plannedServiceDefinitions, plannedService => {
   service: plannedService.service
   displayName: plannedService.displayName
   journeys: concat(
     flatten(map(filter(runtimeServices, runtime => runtime.service == plannedService.service), runtime => runtime.journeys)),
-    includePlannedJourneys ? plannedService.journeys : []
+    includePlannedJourneys ? filter(plannedService.journeys, plannedJourney =>
+      empty(filter(flatten(map(runtimeServices, runtime => runtime.journeys)), activeJourney =>
+        activeJourney.entityName == plannedJourney.entityName))) : []
   )
 })
 var enabledServices = filter(modelServices, service => !empty(service.journeys))
 var journeys = flatten(map(enabledServices, service => service.journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
-var providerCallCount = reduce(runtimeServices, 0, (count, service) => count + 2 + length(providerActivityFunctions[service.service]))
+var providerCallCount = reduce(runtimeServices, 0, (count, service) => count + (service.service == 'onedrive' ? 0 : 2 + length(providerActivityFunctions[service.service])))
 var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(runtimeServices)
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
@@ -95,6 +97,10 @@ module serviceModels './service.bicep' = [
       location: location
       service: service
       policy: projectConfig.healthModel
+      suppressOneDriveRestore: service.service == 'onedrive' && empty(filter(
+        projectConfig.services[?'onedrive'].?targets ?? [],
+        target => target.?restoreVersion ?? false
+      ))
       enableOtel: useOtel && !empty(filter(service.journeys, journey => !(journey.?planned ?? false)))
       workspaceName: workspaceName
       applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''

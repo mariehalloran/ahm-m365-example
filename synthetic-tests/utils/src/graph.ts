@@ -64,7 +64,10 @@ export class GraphClient {
     if (!parsed.success) throw new IntegrationError("malformed-response");
     return parsed.data;
   }
-  async downloadJson(path: string, signal: AbortSignal): Promise<unknown> {
+  async downloadContent(path: string, signal: AbortSignal): Promise<Buffer> {
+    if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /[\r\n#]/.test(path)) {
+      throw new IntegrationError("collector-failure");
+    }
     const response = await this.http.request(`${graphBase}${path}`, { method: "GET", redirect: "manual" }, signal);
     const location = response.headers.get("location");
     if (response.status !== 302 || !location) throw new IntegrationError("read-failure");
@@ -99,7 +102,10 @@ export class GraphClient {
     } finally {
       reader.releaseLock();
     }
-    const text = Buffer.concat(chunks).toString("utf8");
+    return Buffer.concat(chunks);
+  }
+  async downloadJson(path: string, signal: AbortSignal): Promise<unknown> {
+    const text = (await this.downloadContent(path, signal)).toString("utf8");
     try { return JSON.parse(text); }
     catch { throw new IntegrationError("malformed-response"); }
   }

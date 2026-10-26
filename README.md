@@ -30,7 +30,7 @@ All six core journeys are **implemented**:
 | Manage a recurring calendar event | Create a series, verify its occurrences and changes, then delete it | Implemented | 5 minutes |
 | Send and accept a meeting invitation | Invite the attendee, accept, verify the response and cancel the meeting | Implemented | 5 minutes |
 
-Journeys 2–6 run every **five minutes**. Mail delivery, drafts, attachment/reply and distribution-list delivery have been verified Healthy live; calendar journeys still have observed authorization/403 failures. **Planned variants:** mailbox search/organization, external mail and Outlook Web.
+The other five journeys run every **five minutes**. Mail delivery, drafts, attachment/reply and distribution-list delivery have been verified Healthy live. Calendar authorization now permits real operations; response-validation and completion-evidence fixes still require live journey acceptance. **Planned variants:** mailbox search/organization, external mail and Outlook Web.
 
 [Exchange journey details and configuration](./synthetic-tests/exchange/README.md#journeys-and-scheduling)
 
@@ -41,18 +41,18 @@ The five target journey families are:
 | User journey | Completion evidence | Status / current boundary |
 | --- | --- | --- |
 | Complete a channel conversation | Bot A posts, Bot B receives and replies, then verify the persisted conversation | Full flow planned; implemented: one bot posting/replying with Graph readback, not Bot B receipt |
-| Complete an answered audio call | Two parties answer and exchange a reference audio signal in both directions | Full flow planned; implemented: call placement, wait and hang-up, without answer or media verification |
-| Join and leave a scheduled meeting | Verify joining, participant roster, bidirectional media and departure | Planned |
+| Complete an answered audio call | Two bots join and exchange a reference audio signal in both directions | Bounded two-bot meeting join, both rosters, primary tone completion and both departures implemented; no received-audio/bidirectional proof; live acceptance pending |
+| Join and leave a scheduled meeting | Verify joining, participant roster, bidirectional media and departure | Narrow bot-only join/roster/playback/departure implemented; full meeting experience planned |
 | Share and open a file | Verify the intended recipient receives the reference, can access the file and reads matching content | Planned |
 | Complete an Adaptive Card workflow | Send a card, perform an action and verify its callback/result | Planned |
 
-The three implemented probes—channel post/readback, thread reply/readback and call placement/wait/hang-up—run every **two minutes** and have been verified Healthy live within those narrower boundaries. Teams Web messaging/meeting variants are **planned**.
+The three implemented probes—channel post/readback, thread reply/readback and two-bot meeting audio—run every **two minutes**. Messaging has recorded live acceptance; the new meeting topology requires independent live verification. Teams Web messaging/meeting variants are **planned**.
 
 [Teams journey details and implementation boundaries](./synthetic-tests/teams/README.md#target-catalog-versus-current-implementation)
 
 ### SharePoint
 
-The five target journey families are:
+**Disabled in the current configuration; OneDrive is the selected file service.** Existing SharePoint code is retained, but expanding or provisioning it is outside the current rollout. The five target journey families remain documented:
 
 | User journey | Completion evidence | Status / current boundary |
 | --- | --- | --- |
@@ -68,17 +68,17 @@ Implemented file journeys run every **five minutes**; live target/access setup i
 
 ### OneDrive
 
-All five journey families are **planned**, with no worker, execution cadence or live verification:
+Three API-backed journey families are **implemented**, with independent lanes every **five minutes** for every selected account. Live execution and ingestion must be verified separately.
 
 | User journey | Completion evidence | Status |
 | --- | --- | --- |
-| Save and reopen user-drive content | Create folders, upload a file, download/hash-check it and delete test content | Planned |
-| Persist content in an app folder | Save and reopen application-owned content; authentication model remains to be selected | Planned |
+| Save and reopen user-drive content | Create a nested folder/file within an approved test folder, enumerate, download/hash-check, delete owned content and verify absence | Implemented |
+| Persist content in an app folder | Use app-only managed identity to reopen persistent test state, write/read/update/reread it, and remove the run's scratch file | Implemented |
 | Share content with a recipient | Verify recipient read access, then revoke it | Planned |
-| Retrieve file versions | Verify previous content, with optional restore | Planned |
+| Retrieve file versions | Download and hash-verify earlier bytes from actual version history; optionally write those bytes back and verify them | Implemented; optional byte restore, not native restoreVersion semantics |
 | Find and retrieve content through search | Locate the expected file and verify its contents | Planned |
 
-Browser variants are also **planned**. [OneDrive journey details](./synthetic-tests/README.md#onedrive-target-catalog-planned)
+Recipient sharing requires independently authenticated recipient evidence; search is not replaced by folder enumeration. Browser variants are also **planned**. [OneDrive journey details and scoped setup](./synthetic-tests/onedrive/README.md)
 
 ## How authentication works
 
@@ -91,7 +91,7 @@ Hosted workers use an **explicitly selected user-assigned managed identity** to 
 | Teams | Managed-identity bot for messaging/calls; a separate Entra application trusts the worker identity through federation for team-scoped Graph readback. Default bot mode requires no user sign-in or MFA |
 | Microsoft-reported Service Health | Separate application-only provider access, optionally using managed-identity federation, with approved Service Health/beta activity permissions |
 | Azure health reports | Worker managed identity with ingest-only access to its own service health model, independent of M365 permissions |
-| OneDrive | Planned; no worker authentication flow is implemented |
+| OneDrive | Separate managed identity with `Files.SelectedOperations.Selected` and write grants only on dedicated test folders; the app-folder journey separately needs `Files.ReadWrite.AppFolder`, which is not tenant-enforced to just the configured users |
 
 Optional delegated Teams coverage requires test-user sign-in and may require MFA/reauthentication. Certificate authentication is an explicitly configured alternative for approved Graph scenarios, not a silent fallback. See [access setup](./docs/cross-tenant-access.md) and [administrator configuration](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests).
 
@@ -120,7 +120,7 @@ Azure Monitor Health Models lets us:
 - **Roll up health without losing detail:** start at the overall experience and follow the model to the affected journey or action.
 - **Separate different evidence sources:** evaluated synthetic health reports coexist with impact-suppressed Microsoft-reported context.
 - **Keep evidence gaps visible:** no observations are not the same as successful observations, and a skipped action is not a failed request.
-- **Compose independent models:** Exchange, Teams, and SharePoint can each have their own model while a root model brings their health together.
+- **Compose independent models:** Exchange, Teams, and OneDrive each have their own model while a root model brings their health together; SharePoint remains an optional disabled service.
 
 The model complements logs, metrics, and dashboards; it does not replace detailed investigation or establish the root cause of a failure. Its value is relating evidence to dependencies and potential experience impact.
 
@@ -148,15 +148,16 @@ Root experience model
 +-- Teams model
 |   +-- Publish channel message journey -> business-step entities
 |   +-- Reply in channel thread journey -> business-step entities
-|   `-- Place test calls/wait/hang up -> business-step entities
-`-- SharePoint model
-    +-- Save/reopen file journey -> business-step entities
-    `-- Rename/reopen file journey -> business-step entities
+|   `-- Two-bot meeting/roster/tone/departure -> business-step entities
+`-- OneDrive model
+    +-- Folder/file roundtrip journey -> business-step entities
+    +-- App-folder persistence journey -> business-step entities
+    `-- Version retrieval/optional byte restore journey -> business-step entities
 ```
 
-Workers aggregate each settled lane cycle's journey/action results and submit health reports directly. Each implemented journey/business step has **External Reports**, plus optional **OpenTelemetry** when Azure export is enabled. The full [model catalog](./health-model/README.md#catalog-versus-modeled-and-live-coverage) gives **five models, 180 entities and 175 relationships**: eleven implemented and 23 explicitly planned/unimplemented journey roots, with 40 implemented and 78 planned business steps. Planned coverage stays Unknown and impact-suppressed, without workers or fabricated reports. Microsoft-reported Service Health stays impact-suppressed under each implemented Experience, with separate children for each provider call. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps.
+Workers aggregate each settled lane cycle's journey/action results and submit health reports directly. Each implemented journey/business step has **External Reports**, plus optional **OpenTelemetry** when Azure export is enabled. The [model catalog](./health-model/README.md#catalog-versus-modeled-and-live-coverage) distinguishes implemented workflows from explicitly planned/unimplemented journey roots and business steps. Planned coverage stays Unknown and impact-suppressed, without fabricated reports. Microsoft-reported Service Health stays impact-suppressed, with separate children for each supported provider call; OneDrive does not invent a provider-service mapping. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps.
 
-Reports replace the previous cycle's aggregates; they are not a full metrics store, percentile history, or arbitrary log-query interface. Workers retain no cross-cycle journey history or durable outbox; only optional delegated Teams persists sensitive authentication state in its protected Blob cache. Default bot mode needs no user cache. Console diagnostics remain available for investigation.
+Reports replace the previous cycle's aggregates; they are not a full metrics store, percentile history, or arbitrary log-query interface. Workers retain no local cross-cycle journey history or durable outbox. The OneDrive app-folder journey deliberately verifies test state persisted in OneDrive; optional delegated Teams stores sensitive authentication state in its protected Blob cache. Default bot mode needs no user cache. Console diagnostics remain available for investigation.
 
 **Recommended for enterprise customers:** deploy workers and health models in the customer's Azure subscription associated with the M365 tenant, using customer-owned managed identities and scoped grants. Approved cross-tenant labs can instead use M365 application certificates for Graph, independently of Azure managed-identity reporting. Follow the [short setup instructions](./docs/cross-tenant-access.md); the temporary lab option is not the default recommendation for restrictive customers.
 
@@ -173,16 +174,18 @@ OTEL export failures are explicit and do not prevent direct report attempts. His
 
 See [User journeys by service](#user-journeys-by-service) directly below the health-model image for the full catalog and implementation status. A successful test is not tenant-wide availability or a guarantee of every employee's experience.
 
-The checked-in settings enable all supported services and journey scenarios, but use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
+The checked-in settings select Exchange, Teams and OneDrive with all their implemented journey scenarios; SharePoint is disabled. Workers use **safe simulation** by default. A controlled live failure-path trial can exercise real authentication/operations before the test resources work: observed failures make journeys Unhealthy, not artificially healthy. Successful journeys, scoped permissions, and end-to-end notifications still require validation. See the [shared worker deployment guide](./synthetic-tests/infra/README.md) for hosting and rollout.
 
-Selected live Teams calls recur alongside messaging at the Teams cadence. Application
-`Calls.Initiate.All` requires administrator approval on the **bot** identity, not the Graph observer; its
-tenant-wide permission is constrained in this worker by the root individual-user
-allowlist. Healthy calling means successful placement, configured wait and verified
-hang-up—not proof that a recipient rang, received or answered the call, employee
-sign-in, or media quality. Actual API execution/report ingestion and human-observed
-notifications remain separate evidence. See the
-[calling setup and exact endpoints](./synthetic-tests/teams/README.md#individual-test-user-calls).
+Teams monitoring is **bot-only**, without human call answers, user sign-in or MFA.
+The new source-tested meeting architecture requires two distinct managed-identity
+bots, both established legs, both bot identities in both rosters, authenticated
+correlated prompt completion and verified departure of both legs. There is no
+human calling or direct app-to-app P2P fallback; live media acceptance remains pending.
+Connection/playback/departure measurements and optional post-call quality reports
+attach to the existing call entity, not per-target entities. Quality requires
+separately approved `CallRecords.Read.All`, remains off by default, and is not
+independent received-audio analysis. See
+[call measurements and limits](./synthetic-tests/teams/README.md#call-measurements-on-the-existing-entity).
 
 The [recorded live baseline](./docs/deployment.md#deployment-status-and-order) contains
 execution and health-ingestion evidence and remaining deployment gaps. Implemented,
@@ -205,20 +208,21 @@ Edit [monitoring.config.json](./monitoring.config.json), or keep a private copy 
 
 | What to update | Where |
 | --- | --- |
-| Services to monitor | `services.exchange.enabled`, `services.teams.enabled`, `services.sharepoint.enabled` |
+| Services to monitor | `services.exchange.enabled`, `services.teams.enabled`, `services.onedrive.enabled`; optional `services.sharepoint.enabled` |
 | Journeys to run | Each service's `scenarios` switches |
 | Dedicated mailbox addresses | `services.exchange.targets[].mailbox` |
 | Approved Teams messaging resources | `services.teams.targets[]`: tenant, team, standard channel, Bot Connector service URL; userPrincipalName only for optional delegated mode |
-| Approved individual call accounts | `services.teams.callTargets[]`: unique test alias `id`, `tenantId`, `callUserId` (user object UUID); three targets in the sample, no repeated channel metadata |
+| Approved bot-only meetings | `services.teams.callTargets[]`: `id`, `tenantId`, `meetingThreadId`, `organizerUserId` (owner metadata only), `peerBotClientId`; one placeholder meeting, no human call targets |
+| Approved OneDrive accounts/folders | `services.onedrive.targets[]`: user ID/UPN, real drive/folder IDs, test folder name and optional byte restore |
 | Approved SharePoint resources | `services.sharepoint.targets[]`: site, drive, and folder IDs |
 | Health-report destination and policy | `healthModel`: replace the subscription placeholder and confirm resource group, model name, thresholds, and report TTL |
 | Optional OTEL export | `otel.enabled` and `otel.destination`; disabled by default |
 
-All supported services/scenarios are selected by default. Target placeholders are not provisioned resources. Keep credentials, certificates, and connection strings out of configuration files and source control.
+All implemented scenarios for Exchange, Teams and OneDrive are selected by default; SharePoint is disabled. Target placeholders are not provisioned resources. Keep credentials, certificates, and connection strings out of configuration files and source control.
 
 ### 2. Adjust service-specific behavior
 
-The [Exchange](./synthetic-tests/exchange/config.json), [Teams](./synthetic-tests/teams/config.json), and [SharePoint](./synthetic-tests/sharepoint/config.json) files contain **only service-specific settings**: independent cadence, timeout, simulation/live mode, authentication, cohort, and optional provider collection. Selection, targets, and report policy are configured **only at the root**, not duplicated in these files.
+The [Exchange](./synthetic-tests/exchange/config.json), [Teams](./synthetic-tests/teams/config.json), [OneDrive](./synthetic-tests/onedrive/config.json), and optional [SharePoint](./synthetic-tests/sharepoint/config.json) files contain **only service-specific settings**: independent cadence, timeout, simulation/live mode, authentication, cohort, and optional supported provider collection. Selection, targets, and report policy are configured **only at the root**, not duplicated in these files.
 
 The service config's `scenario` chooses a deterministic simulation outcome; root `scenarios` chooses which user journey to monitor.
 
@@ -234,7 +238,8 @@ with isolated credentials/cache partitions and [human bootstrap](./docs/teams-us
 Reports remain journey/action aggregates, not per-account signal inventories.
 
 Teams also selects `call-test-user` by default. Approve the dedicated test users,
-bot application `Calls.Initiate.All` and [Teams-only authenticated HTTPS callback](./synthetic-tests/teams/README.md#individual-test-user-calls).
+application `Calls.JoinGroupCall.All` on both bots, an explicit existing peer UAMI, and
+[Teams-only authenticated HTTPS callback](./synthetic-tests/teams/README.md#two-bot-meeting-audio-setup).
 Keep that root scenario `false` for messaging-only rollout. No user tokens or
 runtime meeting-creation/admin rights are used for calls. Validate each deployment's
 actual API execution and report ingestion before relying on it.
@@ -251,7 +256,7 @@ With Node.js 22 or 24, run from the repository root:
 npm --prefix synthetic-tests ci
 npm --prefix synthetic-tests run exchange -- --once
 npm --prefix synthetic-tests run teams -- --once
-npm --prefix synthetic-tests run sharepoint -- --once
+npm --prefix synthetic-tests run onedrive -- --once
 ```
 
 These defaults make no Microsoft 365 or Azure calls. Inspect result records and `health-report-preview` output. Each command runs only its selected service; omit `--once` to repeat on that service's cadence. For a private root config, append `--project-config /absolute/path/monitoring.config.json`.

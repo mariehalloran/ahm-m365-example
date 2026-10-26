@@ -16,6 +16,7 @@
     "exchange/src/**/*.ts", "exchange/tests/**/*.ts",
     "teams/src/**/*.ts", "teams/tests/**/*.ts",
     "sharepoint/src/**/*.ts", "sharepoint/tests/**/*.ts",
+    "onedrive/src/**/*.ts", "onedrive/tests/**/*.ts",
     "utils/src/**/*.ts", "utils/tests/**/*.ts",
     "vitest.config.ts"
   ]

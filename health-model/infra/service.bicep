@@ -8,6 +8,7 @@ param modelName string
 param location string
 param service ServiceDefinition
 param policy object
+param suppressOneDriveRestore bool = false
 param enableOtel bool = false
 param workspaceName string
 param applicationInsightsResourceId string
@@ -45,7 +46,7 @@ func sourceGroup(name string, displayName string, members string[]) object => {
 
 var contextName = '${service.service}-service-health'
 var hasRuntime = !empty(filter(service.journeys, journey => !(journey.?planned ?? false)))
-var providerCalls = !hasRuntime ? [] : concat(
+var providerCalls = !hasRuntime || service.service == 'onedrive' ? [] : concat(
   [
     { name: 'health-overviews', displayName: 'serviceAnnouncement.healthOverviews (status score)', signalName: 'microsoft-reported-service-status' }
     { name: 'issues', displayName: 'serviceAnnouncement.issues (Count)', signalName: 'microsoft-reported-issue-count' }
@@ -57,6 +58,23 @@ var providerCalls = !hasRuntime ? [] : concat(
   })
 )
 var telemetryQuery = loadTextContent('../queries/synthetic.kql')
+var teamsCallSignals = [
+  'teams-call-connection-success-percentage'
+  'teams-call-mean-connection-duration'
+  'teams-call-playback-success-percentage'
+  'teams-call-mean-playback-duration'
+  'teams-call-disconnection-success-percentage'
+  'teams-call-mean-disconnection-duration'
+  'teams-call-quality-packet-loss'
+  'teams-call-quality-max-packet-loss'
+  'teams-call-quality-jitter'
+  'teams-call-quality-max-jitter'
+  'teams-call-quality-round-trip-time'
+  'teams-call-quality-max-round-trip-time'
+  'teams-call-quality-audio-degradation'
+  'teams-call-quality-concealed-samples'
+  'teams-call-quality-max-concealed-samples'
+]
 var telemetryMetrics = [
   {
     name: 'otel-success-percentage'
@@ -139,9 +157,9 @@ var nodes = concat(
         kind: 'step'
         planned: journey.?planned ?? false
         journey: journey.name
-        step: step.name
+        step: step.?telemetryName ?? step.name
         rollup: false
-        impact: 'Standard'
+        impact: suppressOneDriveRestore && service.service == 'onedrive' && journey.name == 'document-versions' && step.name == 'step-4' ? 'Suppressed' : 'Standard'
         x: 400 + indexOf(service.journeys, journey) * 500
         y: 440 + indexOf(journey.steps, step) * 170
       })
@@ -240,7 +258,10 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                   'External Reports',
                   node.kind == 'provider-call'
                     ? [node.signalName]
-                    : ['synthetic-success-percentage', 'synthetic-mean-duration']
+                    : concat(
+                        ['synthetic-success-percentage', 'synthetic-mean-duration'],
+                        node.name == 'teams-call' ? teamsCallSignals : []
+                      )
                 )
               ],
               enableOtel && (node.kind == 'journey' || node.kind == 'step')

@@ -1,9 +1,12 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { callingAuthenticationDiagnostic, callingDiscoveryUrl, callingKeysUrl, createTeamsCallingVerifier } from "../../utils/src/teams-calling-auth.js";
+import { startTeamsCallingCallback } from "../../utils/src/teams-calling-callback.js";
+import { TeamsCallOperations } from "../../utils/src/teams-call-operations.js";
 
 const clientId = "11111111-1111-4111-8111-111111111111";
 const tenantId = "22222222-2222-4222-8222-222222222222";
+const peerClientId = "44444444-4444-4444-8444-444444444444";
 const tenantClaim = "http://schemas.microsoft.com/identity/claims/tenantid";
 let keys: Awaited<ReturnType<typeof generateKeyPair>>;
 let other: Awaited<ReturnType<typeof generateKeyPair>>;
@@ -26,10 +29,47 @@ async function fixture() {
     if (String(input) === callingKeysUrl) return Response.json({ keys: [publicJwk] });
     throw new Error("Untrusted signing metadata URL");
   });
-  return { fetcher, verify: await createTeamsCallingVerifier({ BOT_CLIENT_ID: clientId, BOT_TENANT_ID: tenantId }, fetcher) };
+  return { fetcher, verify: await createTeamsCallingVerifier({
+    BOT_CLIENT_ID: clientId, BOT_TENANT_ID: tenantId, TEAMS_CALLING_PEER_CLIENT_ID: peerClientId,
+  }, fetcher) };
 }
 
 describe("canonical Microsoft communications callback JWT verification", () => {
+  it("rejects an authentically signed wrong-audience callback before it can complete a registered operation", async () => {
+    const { verify } = await fixture();
+    const store = new TeamsCallOperations();
+    const clientContext = "55555555-5555-4555-8555-555555555555";
+    const pending = store.register("owned-call", clientContext, 10000);
+    pending.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "owned-operation", status: "running", clientContext });
+    const listener = vi.fn((body: unknown) => store.accept(body));
+    const server = await startTeamsCallingCallback({ port: 0, host: "127.0.0.1", verify, onNotification: listener });
+    try {
+      const resource = "/communications/calls/owned-call/operations/owned-operation";
+      const post = async (aud: string) => fetch(`http://127.0.0.1:${server.port}/api/calls`, {
+        method: "POST", headers: { Authorization: `Bearer ${await token({ aud })}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: [{ changeType: "deleted", resourceUrl: resource, resourceData: {
+          "@odata.type": "#microsoft.graph.playPromptOperation", "@odata.id": resource, status: "completed", clientContext,
+        } }] }),
+      });
+      expect((await post(tenantId)).status).toBe(401);
+      expect(listener).not.toHaveBeenCalled();
+      expect(pending.observation()).toBeUndefined();
+      expect((await post(peerClientId)).status).toBe(200);
+      expect(pending.observation()?.status).toBe("completed");
+    } finally { pending.dispose(); store.shutdown(); await server.shutdown(); }
+  });
+  it("accepts only either explicit bot's verified signed audience, never an audience array or forged peer", async () => {
+    const { verify } = await fixture();
+    await expect(verify(await token({ aud: peerClientId }))).resolves.toBeUndefined();
+    await expect(verify(await token({ aud: peerClientId }, other.privateKey))).rejects.toThrow();
+    await expect(verify(await token({ aud: [clientId, peerClientId] }))).rejects.toThrow();
+    await expect(verify(await token({ aud: peerClientId, tid: clientId }))).rejects.toThrow();
+  });
+  it.each([undefined, clientId, "not-a-client"])("requires a distinct explicit peer audience: %s", async peer => {
+    await expect(createTeamsCallingVerifier({
+      BOT_CLIENT_ID: clientId, BOT_TENANT_ID: tenantId, TEAMS_CALLING_PEER_CLIENT_ID: peer,
+    })).rejects.toThrow("two distinct");
+  });
   it.each(["https://graph.microsoft.com", "https://api.botframework.com"])("accepts signed %s tokens for only this bot/tenant", async iss => {
     const { verify, fetcher } = await fixture();
     await expect(verify(await token({ iss }))).resolves.toBeUndefined();
@@ -112,7 +152,9 @@ describe("canonical Microsoft communications callback JWT verification", () => {
   });
   it("rejects discovery pointing outside the fixed trusted calling keys endpoint", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json({ jwks_uri: "https://attacker.invalid/keys" }));
-    await expect(createTeamsCallingVerifier({ BOT_CLIENT_ID: clientId, BOT_TENANT_ID: tenantId }, fetcher)).rejects.toThrow();
+    await expect(createTeamsCallingVerifier({
+      BOT_CLIENT_ID: clientId, BOT_TENANT_ID: tenantId, TEAMS_CALLING_PEER_CLIENT_ID: peerClientId,
+    }, fetcher)).rejects.toThrow();
     expect(fetcher).toHaveBeenCalledOnce();
   });
 });

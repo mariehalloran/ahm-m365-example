@@ -52,7 +52,7 @@ const memory = () => {
   const events = { emit: vi.fn() };
   return { events, results: createResultOutput(events) };
 };
-const overview = (type: ServiceConfig["type"] = "exchange") => ({ id: "reported-service", service: names[type], status: "serviceOperational" });
+const overview = (type: Exclude<ServiceConfig["type"], "onedrive"> = "exchange") => ({ id: "reported-service", service: names[type], status: "serviceOperational" });
 const activity = (type: "exchange" | "teams" = "exchange") => ({
   intervalStartDateTime: "2026-10-16T18:00:00Z", ...(type === "exchange" ? { percentage: 97.5 } : { value: 42 }),
 });

@@ -13,6 +13,7 @@ export const testTypes = [
   "exchange-mail-flow", "exchange-draft", "exchange-attachment-reply", "exchange-distribution-list",
   "exchange-recurring-calendar", "exchange-meeting", "sharepoint-file", "sharepoint-rename",
   "teams-channel-message", "teams-channel-reply", "teams-call",
+  "onedrive-roundtrip", "onedrive-appfolder", "onedrive-versions",
 ] as const;
 export type TestType = (typeof testTypes)[number];
 
@@ -55,23 +56,45 @@ export const probeServices = {
   },
   "teams-call": {
     service: "teams", target: "Microsoft Teams", journey: "call-test-user", entityName: "teams-call",
-    steps: ["authenticate", "place-call", "wait-before-hangup", "end-call", "cleanup"],
+    steps: ["authenticate", "place-call", "wait-for-answer", "verify-participants", "play-audio", "end-call", "cleanup"],
   },
   "sharepoint-rename": {
     service: "sharepoint", target: "SharePoint Online", journey: "rename-reopen-file", entityName: "sharepoint-rename",
     steps: ["authenticate", "verify-drive", "upload-file", "rename-file", "read-file", "cleanup"],
   },
+  "onedrive-roundtrip": {
+    service: "onedrive", target: "OneDrive for Business", journey: "user-drive-roundtrip", entityName: "onedrive-planned-user-drive-roundtrip",
+    steps: ["authenticate", "create-folder-file", "reopen-file", "verify-file-hash", "delete-owned-artifacts", "cleanup"],
+  },
+  "onedrive-appfolder": {
+    service: "onedrive", target: "OneDrive for Business", journey: "app-folder-lifecycle", entityName: "onedrive-planned-app-folder-lifecycle",
+    steps: ["authenticate", "write-app-data", "read-app-data", "update-app-data", "delete-app-scratch", "cleanup"],
+  },
+  "onedrive-versions": {
+    service: "onedrive", target: "OneDrive for Business", journey: "document-versions", entityName: "onedrive-planned-document-versions",
+    steps: ["authenticate", "update-document", "list-versions", "read-prior-version", "restore-version", "cleanup"],
+  },
 } as const;
+
+// Preserve the already-deployed planned business-step entity IDs when promoting OneDrive coverage.
+export const oneDriveStepEntities: Partial<Record<TestType, Readonly<Record<string, string>>>> = {
+  "onedrive-roundtrip": { "create-folder-file": "step-1", "reopen-file": "step-2", "verify-file-hash": "step-3", "delete-owned-artifacts": "step-4" },
+  "onedrive-appfolder": { "write-app-data": "step-1", "read-app-data": "step-2", "update-app-data": "step-3", "delete-app-scratch": "step-4" },
+  "onedrive-versions": { "update-document": "step-1", "list-versions": "step-2", "read-prior-version": "step-3", "restore-version": "step-4" },
+};
 
 const isoDate = z.string().datetime({ offset: true });
 export const stepNames = [
   "authenticate", "create-draft", "send", "confirm-delivery", "cleanup",
   "post-message", "confirm-publication", "verify-drive", "upload-file", "read-file",
   "update-draft", "read-draft", "post-reply", "confirm-reply", "rename-file",
-  "place-call", "wait-before-hangup", "end-call",
+  "place-call", "wait-for-answer", "verify-participants", "play-audio", "end-call",
   "read-initial-draft", "delete-draft", "send-attachment", "verify-attachment", "reply-mail", "confirm-reply-mail",
   "send-group-mail", "confirm-group-delivery", "create-event", "read-occurrence", "update-event", "verify-event", "delete-event",
   "create-meeting", "confirm-invitation", "verify-attendee-calendar", "accept-meeting", "confirm-acceptance", "cancel-meeting",
+  "create-folder-file", "reopen-file", "verify-file-hash", "delete-owned-artifacts",
+  "write-app-data", "read-app-data", "update-app-data", "delete-app-scratch",
+  "update-document", "list-versions", "read-prior-version", "restore-version",
 ] as const;
 export type StepName = (typeof stepNames)[number];
 export type ReportedStepName = Exclude<StepName, "authenticate" | "cleanup">;
@@ -89,7 +112,7 @@ export const stepResultSchema = z.discriminatedUnion("status", [
   }).strict(),
   z.object({
     name: z.enum(stepNames), status: z.literal("skipped"), observedAt: isoDate,
-    reason: z.enum(["prerequisite-failed", "no-mutation", "cleanup-disabled"]),
+    reason: z.enum(["prerequisite-failed", "no-mutation", "cleanup-disabled", "variant-disabled"]),
   }).strict(),
 ]);
 export type StepResult = z.infer<typeof stepResultSchema>;
@@ -98,7 +121,7 @@ export const resultSchema = z.object({
   testType: z.enum(testTypes),
   testId: z.string().regex(/^[a-zA-Z0-9-]{1,80}$/),
   cohort: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,78}[a-zA-Z0-9]$/).optional(),
-  targetService: z.enum(["Exchange Online", "SharePoint Online", "Microsoft Teams"]),
+  targetService: z.enum(["Exchange Online", "SharePoint Online", "Microsoft Teams", "OneDrive for Business"]),
   success: z.boolean(),
   durationMs: z.number().finite().nonnegative(),
   sendDurationMs: z.number().finite().nonnegative().optional(),
@@ -106,6 +129,12 @@ export const resultSchema = z.object({
   publicationDurationMs: z.number().finite().nonnegative().optional(),
   uploadDurationMs: z.number().finite().nonnegative().optional(),
   readDurationMs: z.number().finite().nonnegative().optional(),
+  call: z.object({
+    callChainId: z.string().uuid().optional(),
+    peerCallChainId: z.string().uuid().optional(),
+    endedAt: isoDate.optional(),
+    resultCodes: z.array(z.number().int()).max(12).default([]),
+  }).strict().optional(),
   observedAt: isoDate,
   correlationId: z.string().uuid(),
   steps: z.array(stepResultSchema).max(12).default([]),
@@ -122,12 +151,17 @@ export const resultSchema = z.object({
   if (new Set(value.steps.map(step => step.name)).size !== value.steps.length ||
       value.steps.some(step => step.status === "skipped" && step.reason === "cleanup-disabled" &&
         (!["cleanup", "delete-draft"].includes(step.name) || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
+      value.steps.some(step => step.status === "skipped" && step.reason === "variant-disabled" &&
+        (value.testType !== "onedrive-versions" || step.name !== "restore-version")) ||
       value.steps.some((step, index) => !allowedSteps.includes(step.name) ||
         (index > 0 && allowedSteps.indexOf(step.name) <= allowedSteps.indexOf(value.steps[index - 1]!.name))) ||
       (value.success && value.steps.some(step => step.status === "failed"))) {
     ctx.addIssue({ code: "custom", message: "Inconsistent journey steps" });
   }
   const target = probeServices[value.testType].target;
+  if (value.call && value.testType !== "teams-call") {
+    ctx.addIssue({ code: "custom", message: "Call evidence belongs only to the Teams call journey" });
+  }
   if (value.targetService !== target ||
       (value.success && (value.diagnosticCategory !== null || value.diagnosticContext.cleanupSucceeded === false))) {
     ctx.addIssue({ code: "custom", message: "Inconsistent synthetic result" });
@@ -149,7 +183,7 @@ export const resultSchema = z.object({
     ctx.addIssue({ code: "custom", message: "Invalid publication duration" });
   }
   for (const duration of [value.uploadDurationMs, value.readDurationMs]) {
-    if (duration !== undefined && (probeServices[value.testType].service !== "sharepoint" || duration > value.durationMs)) {
+    if (duration !== undefined && (!["sharepoint", "onedrive"].includes(probeServices[value.testType].service) || duration > value.durationMs)) {
       ctx.addIssue({ code: "custom", message: "Invalid document phase duration" });
     }
   }
@@ -179,10 +213,15 @@ export const probeSchema = z.object({
   folderId: z.string().min(1).optional(),
   tenantId: z.string().uuid().optional(),
   userPrincipalName: z.string().email().optional(),
+  userId: z.string().uuid().optional(),
+  folderName: z.string().min(1).max(100).regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/).optional(),
+  restoreVersion: z.boolean().optional(),
   teamId: z.string().uuid().optional(),
   channelId: z.string().min(1).max(300).optional(),
   serviceUrl: z.string().url().optional(),
-  callUserId: z.string().uuid().optional(),
+  meetingThreadId: z.string().min(1).max(300).regex(/^19:meeting_[^\s]+@thread\.v2$/).optional(),
+  organizerUserId: z.string().uuid().optional(),
+  peerBotClientId: z.string().uuid().optional(),
   region: z.string().max(80).optional(),
   scenario: z.enum(scenarios).optional(),
 }).strict();

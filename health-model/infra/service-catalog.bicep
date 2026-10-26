@@ -21,6 +21,7 @@ var providerActivityFunctions = {
 type ServiceStep = {
   name: string
   displayName: string
+  telemetryName: string?
 }
 
 @export()
@@ -140,11 +141,52 @@ var serviceDefinitions ServiceDefinition[] = [
       {
         name: 'call-test-user'
         entityName: 'teams-call'
-        displayName: 'Place test calls and hang up'
+        displayName: 'Two bots join a meeting, verify roster, play audio and leave'
         steps: [
-          { name: 'place-call', displayName: 'Call dedicated test user' }
-          { name: 'wait-before-hangup', displayName: 'Wait before hang-up' }
-          { name: 'end-call', displayName: 'Hang up and confirm disconnected' }
+          { name: 'place-call', displayName: 'Join dedicated meeting as two distinct bots' }
+          { name: 'wait-for-answer', displayName: 'Verify both owned calls established' }
+          { name: 'verify-participants', displayName: 'Verify both bot identities in both meeting rosters' }
+          { name: 'play-audio', displayName: 'Play test tone and verify operation completion' }
+          { name: 'end-call', displayName: 'Leave both owned calls and verify disconnected' }
+        ]
+      }
+    ]
+  }
+  {
+    service: 'onedrive'
+    displayName: 'OneDrive Experience'
+    journeys: [
+      {
+        name: 'user-drive-roundtrip'
+        entityName: 'onedrive-planned-user-drive-roundtrip'
+        displayName: 'Create, reopen, verify and delete user-drive file'
+        steps: [
+          { name: 'step-1', telemetryName: 'create-folder-file', displayName: 'Create owned folder and file in selected folder' }
+          { name: 'step-2', telemetryName: 'reopen-file', displayName: 'Enumerate and download owned file' }
+          { name: 'step-3', telemetryName: 'verify-file-hash', displayName: 'Verify exact content hash' }
+          { name: 'step-4', telemetryName: 'delete-owned-artifacts', displayName: 'Delete owned artifacts and verify removal' }
+        ]
+      }
+      {
+        name: 'app-folder-lifecycle'
+        entityName: 'onedrive-planned-app-folder-lifecycle'
+        displayName: 'Persist, reopen and update app-folder data'
+        steps: [
+          { name: 'step-1', telemetryName: 'write-app-data', displayName: 'Verify prior state and write app-folder data' }
+          { name: 'step-2', telemetryName: 'read-app-data', displayName: 'Read and verify data' }
+          { name: 'step-3', telemetryName: 'update-app-data', displayName: 'Update, reread and verify persisted state' }
+          { name: 'step-4', telemetryName: 'delete-app-scratch', displayName: 'Delete owned scratch data; retain safe state' }
+        ]
+      }
+      {
+        name: 'document-versions'
+        entityName: 'onedrive-planned-document-versions'
+        displayName: 'Update document and retrieve prior version'
+        steps: [
+          { name: 'step-1', telemetryName: 'update-document', displayName: 'Write and verify two document revisions' }
+          { name: 'step-2', telemetryName: 'list-versions', displayName: 'Enumerate actual document version history' }
+          { name: 'step-3', telemetryName: 'read-prior-version', displayName: 'Download prior version and verify bytes' }
+          { name: 'step-4', telemetryName: 'restore-version', displayName: 'Optional: restore downloaded prior bytes and verify' }
         ]
       }
     ]

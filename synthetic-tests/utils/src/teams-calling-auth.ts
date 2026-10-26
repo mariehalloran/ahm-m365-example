@@ -60,8 +60,14 @@ async function boundedFetch(fetcher: typeof fetch, url: string | URL, init?: Req
 export async function createTeamsCallingVerifier(
   env: NodeJS.ProcessEnv, fetcher: typeof fetch = fetch, now: () => number = Date.now,
 ): Promise<(token: string) => Promise<void>> {
-  const parsed = z.object({ BOT_CLIENT_ID: z.string().uuid(), BOT_TENANT_ID: z.string().uuid() }).safeParse(env);
-  if (!parsed.success) throw new ConfigurationError("Calling callback requires BOT_CLIENT_ID and BOT_TENANT_ID");
+  const parsed = z.object({
+    BOT_CLIENT_ID: z.string().uuid(), BOT_TENANT_ID: z.string().uuid(),
+    TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid(),
+  }).safeParse(env);
+  if (!parsed.success || parsed.data.BOT_CLIENT_ID.toLowerCase() === parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase()) {
+    throw new ConfigurationError("Calling callback requires BOT_TENANT_ID and two distinct explicit bot client IDs");
+  }
+  const audiences = [parsed.data.BOT_CLIENT_ID, parsed.data.TEAMS_CALLING_PEER_CLIENT_ID];
   let keys: ReturnType<typeof createRemoteJWKSet> | undefined;
   let refreshAt = 0;
   let refreshing: Promise<ReturnType<typeof createRemoteJWKSet>> | undefined;
@@ -85,13 +91,13 @@ export async function createTeamsCallingVerifier(
   await signingKeys();
   return async token => {
     const { payload } = await jwtVerify(token, await signingKeys(), {
-      algorithms: ["RS256"], issuer: issuers, audience: parsed.data.BOT_CLIENT_ID,
+      algorithms: ["RS256"], issuer: issuers, audience: audiences,
       requiredClaims: ["exp"], clockTolerance: 5,
     });
     if (typeof payload.nbf === "number" && typeof payload.exp === "number" && payload.nbf > payload.exp) {
       throw new CallingClaimError("nbf", "invalid");
     }
-    if (payload.aud !== parsed.data.BOT_CLIENT_ID) throw new CallingClaimError("aud", "invalid");
+    if (typeof payload.aud !== "string" || !audiences.includes(payload.aud)) throw new CallingClaimError("aud", "invalid");
     // JwtSecurityTokenHandler maps signed "tid" to the URI claim; jose preserves raw claim names.
     const tenantClaims = ([tenantClaim, "tid"] as const).filter(claim => Object.hasOwn(payload, claim));
     if (!tenantClaims.length) throw new CallingClaimError(tenantClaim, "missing");

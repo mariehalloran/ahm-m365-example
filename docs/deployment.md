@@ -2,6 +2,60 @@
 
 ## Deployment status and order
 
+### Current bot-only safety change and call measurements — 2026-10-26
+
+The active original `monitoring.consto.json` now disables `call-test-user` and has
+no user call targets. Teams revision `m365-ctbcoa-teams--bot-only-20261026t165244`
+is ready, still using image `486b6b4b4fc56b2ea8047dc1cc53a41f2d1b4b2d1f051fffe4adcec0bbcbf4c3`.
+This config-only rollout preserves the bot messaging/provider paths, removes the
+unused calling readiness/ingress configuration, and stops the legacy user-directed
+calls. Two observed cycles each ran only the two messaging probes, with zero call
+attempts and real health-report publication. One initial publication readback
+failed honestly; the following observed publication and reply both succeeded.
+No new calling permission, bot identity or resource was added.
+
+Source now declares six immediate connection/playback/departure measurements and
+nine optional post-call quality signals on the existing `teams-call` entity's
+External Reports group. Bounded quality retrieval uses only actual returned
+`callChainId` values. Missing data is not zero/Healthy; quality has no evaluation
+thresholds by default. Console and optional OTEL paths are wired. These new signals
+and the interrupted playback changes are **not deployed or live-verified**.
+The tested bounded enrichment does not guarantee retrieval of records arriving
+after its configured window; no cross-cycle retry queue was introduced.
+
+Direct application-target bot-to-bot P2P calling is not a verified supported
+replacement. The documented alternative is bots independently joining the same
+dedicated meeting. The user subsequently approved the second bot/identity and
+meeting-join permissions, then explicitly approved tenant-wide
+`CallRecords.Read.All` after confirmation that it cannot be natively scoped per
+bot. Exact-ID collection is a runtime safeguard, not a narrower permission grant.
+
+Approved live preparation completed:
+- Created and attached `uami-m365-experience-consto-teams-peer`; registered
+  `ahm-m365-consto-peer` with managed-identity authentication and its Teams calling
+  channel pointing at the same callback host.
+- Assigned `Calls.JoinGroupCall.All` to both bot identities and
+  `CallRecords.Read.All` only to the existing caller.
+- Used existing scoped Exchange calendar access to create a dedicated
+  `teamsForBusiness` meeting (POST 201, subsequent GET 200), with **zero human
+  attendees**, scheduled through 2026-11-25 17:20 UTC. No OnlineMeetings permission
+  or application-access-policy addition was needed. The organizer is resource
+  ownership metadata, not a participant or authenticated user.
+- Verified both managed identities can obtain Graph tokens. The existing caller's
+  legacy GUID-resource token still has cached old roles; its standard
+  `https://graph.microsoft.com/.default` token has all approved roles. A real
+  call-record lookup for a nonexistent ID returned authenticated 404, not 401/403.
+  The replacement uses the standard Graph audience explicitly, not credential or
+  audience fallback.
+
+Bot-only join/roster/playback/dual-leg cleanup source integration and its rollout
+are still pending. The private meeting target and peer access metadata are prepared;
+live calling stays disabled until the validated replacement image is deployed.
+No human participant, answer, delegated sign-in or MFA is part of the intended
+runtime. Actual bot-media success and quality-field availability are not yet claimed.
+
+### Earlier deployment baseline (historical)
+
 The [model templates](../health-model/README.md) define a root referencing independent service models. Exchange has six implemented journeys, SharePoint two and Teams three. Each implemented journey/business step receives aggregated direct **External Reports**, plus optional OTEL query signals. The full documented catalog also includes 23 explicitly planned/unimplemented Unknown journey roots and 78 planned steps, including a planned-only OneDrive model, without adding runtime scenarios or workers. All default selections give five models, 180 entities, 175 relationships, 34 journey roots and 118 business steps. Planned roots and the OneDrive reference are suppressed to preserve implemented synthetic rollup. Token acquisition and generic cleanup are internal; explicit deletion/cancellation/hang-up are business steps. Provider context is separately suppressed and runs on independent container-local lanes.
 
 ### Full documented catalog rollout — 2026-10-26

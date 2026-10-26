@@ -23,18 +23,19 @@ Provider issue/history and beta observations remain structured console diagnosti
 ## Teams: bot-backed channel journey
 
 [Teams](../synthetic-tests/teams/README.md) implements bot publication/replies,
-Graph correlation/author readback, optional owned-message cleanup and individual
-call placement/wait/hang-up. The default bot uses a same-tenant UAMI; a separate
+Graph correlation/author readback, optional owned-message cleanup and two-bot
+meeting join/roster/playback/departure. The default bot uses a same-tenant UAMI; a separate
 Entra readback application uses team-scoped RSC and worker-UAMI federation.
-These journeys have [recorded live acceptance](./deployment.md#deployment-status-and-order);
+Messaging has [recorded live acceptance](./deployment.md#deployment-status-and-order);
+the new meeting architecture is source-tested, not live media acceptance;
 validate every new deployment's resources, grants and actual reports independently.
 
 | Candidate | Requirements / limitations |
 | --- | --- |
 | Read approved team/channel metadata | Lightweight API reachability only, not messaging/calls |
 | Implemented post/reply/readback | Separate Connector/Graph identities, exact correlation and expected author, optional bot-owned cleanup; not human-to-human receipt |
-| Implemented individual calls | Approved `Calls.Initiate.All`, root-selected users, authenticated callback and verified termination; not recipient answer or media proof |
-| Future meeting/answered-call/media journeys | Additional supported APIs/permissions, answering/media implementation, appropriate hosting, privacy and cleanup; see the [capability catalog](./m365-automation-capabilities.md) |
+| Implemented two-bot meeting audio | Two explicit UAMIs with approved `Calls.JoinGroupCall.All`, root-selected meeting, both-leg roster proof, authenticated primary tone completion and both departures; no human participants or received-audio proof |
+| Future full meeting/bidirectional media journeys | Additional supported APIs/permissions, media implementation, appropriate hosting, privacy and cleanup; see the [capability catalog](./m365-automation-capabilities.md) |
 
 Do not block initial Exchange work on a full media synthetic or bypass controls with password/browser automation.
 

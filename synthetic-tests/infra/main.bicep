@@ -7,6 +7,7 @@ param serviceConfigs object = {
   exchange: loadJsonContent('../exchange/config.json')
   teams: loadJsonContent('../teams/config.json')
   sharepoint: loadJsonContent('../sharepoint/config.json')
+  onedrive: loadJsonContent('../onedrive/config.json')
 }
 @description('Nonsecret M365/bot/public-client access metadata and Key Vault secret URIs; never private keys, tokens or user caches.')
 param serviceAccess object = {}
@@ -14,6 +15,8 @@ param serviceAccess object = {}
 @description('Approved Container Apps native certificate PEMs keyed by service. Supply separately as a protected secure parameter, never in ordinary config/parameter files.')
 param serviceCertificates object = {}
 param location string = resourceGroup().location
+@description('Reuse the already-approved registry/environment without issuing foundation PUTs. They must already exist with this model naming.')
+param reuseExistingFoundation bool = false
 @description('First deploy false to establish the private registry and identities; then deploy the built image.')
 param deployWorkers bool = false
 param workerImage string = ''
@@ -25,10 +28,10 @@ param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
 var modelName = projectConfig.healthModel.name
 var services = filter(
-  ['exchange', 'teams', 'sharepoint'],
+  ['exchange', 'teams', 'sharepoint', 'onedrive'],
   service =>
-    projectConfig.services[service].enabled && !empty(filter(
-      items(projectConfig.services[service].scenarios),
+    (projectConfig.services[?service].?enabled ?? false) && !empty(filter(
+      items(projectConfig.services[?service].?scenarios ?? {}),
       scenario => scenario.value
     ))
 )
@@ -85,7 +88,7 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing
   name: applicationInsightsName
 }
 
-resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
+resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (!reuseExistingFoundation) {
   name: registryName
   location: location
   tags: tags
@@ -98,7 +101,7 @@ resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   }
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2026-07-01' = {
+resource environment 'Microsoft.App/managedEnvironments@2026-07-01' = if (!reuseExistingFoundation) {
   name: 'cae-${modelName}'
   location: location
   tags: tags
@@ -175,7 +178,7 @@ module workers './worker.bicep' = [
       location: location
       tags: tags
       environmentId: environment.id
-      registryServer: registry.properties.loginServer
+      registryServer: registry!.properties.loginServer
       identityResourceId: identities[index].id
       identityClientId: identities[index].properties.clientId
       tenantId: subscription().tenantId
@@ -196,7 +199,7 @@ module workers './worker.bicep' = [
 ]
 
 output registryName string = registry.name
-output registryServer string = registry.properties.loginServer
+output registryServer string = registry!.properties.loginServer
 output environmentId string = environment.id
 output appNames array = [for service in services: 'm365-${take(resourceToken, 6)}-${service}']
 output identityIds array = [for (service, index) in services: identities[index].id]

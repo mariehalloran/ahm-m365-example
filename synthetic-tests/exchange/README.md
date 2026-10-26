@@ -4,9 +4,12 @@ One Exchange worker runs six independent API-backed journey families. Business s
 
 **Implementation versus live evidence:** all six core journeys below are implemented.
 Mail, draft, attachment/hash/correlated reply and distribution-list fanout have been
-verified Healthy live. Recurring calendar and meeting invitation currently receive
-403, blocked by scoped-authorization cache propagation; they are implemented, not
-live-successful. See [recorded acceptance](../../docs/deployment.md#deployment-status-and-order)
+verified Healthy live. Calendar journeys previously received 403 despite the scoped
+grant; authorization-cache propagation was suspected but not established. The latest
+meeting attempt completed all six business steps but failed redundant organizer
+cleanup (400 after cancellation moved it to Deleted Items). The ownership fix below
+requires a new live acceptance run; business-step success alone is not journey success.
+See [recorded acceptance](../../docs/deployment.md#deployment-status-and-order)
 for execution and report-ingestion evidence.
 
 ## Primary setup
@@ -42,8 +45,8 @@ Older root profiles omitting the four new scenario keys keep those journeys disa
 | `edit-reopen-draft` | `exchange-draft` | Create, initial read, update, reopen/verify, delete owned draft | 300 seconds |
 | `attachment-reply-mail` | `exchange-attachment` | Send attachment A→B, verify downloaded SHA-256, reply B→A, verify transport reply headers/sender/body marker | 300 seconds |
 | `distribution-list-mail` | `exchange-distribution` | Send to explicit list, verify every expected Inbox | 300 seconds |
-| `recurring-calendar` | `exchange-recurring` | Create daily series, read occurrence, update series, verify series/occurrence, delete series | 300 seconds |
-| `meeting-invitation` | `exchange-meeting` | Create invitation, B receives, verify B calendar by iCalUId, B accepts, A observes accepted attendee, A cancels | 300 seconds |
+| `recurring-calendar` | `exchange-recurring` | Create daily series, verify all three distinct occurrences, update series, verify all three updated occurrences, delete series | 300 seconds |
+| `meeting-invitation` | `exchange-meeting` | Create invitation, B receives, verify B calendar by iCalUId, B accepts, A observes accepted attendee, A cancels and verifies B's calendar is cancelled or the event is absent | 300 seconds |
 
 The 60-second mail flow stays simple: no attachment or reply is required. Draft
 deletion may be disabled explicitly for trial retention as described below.
@@ -82,12 +85,12 @@ All endpoints use `https://graph.microsoft.com/v1.0`; mailbox and artifact IDs/q
 | Create recurring series/invite | `POST /users/{A}/events` with `transactionId`; recurring daily numbered series or explicit B attendee |
 | Read occurrences | `GET /users/{A}/events/{ownedSeriesId}/instances?startDateTime=...&endDateTime=...` |
 | Update/verify/delete series | `PATCH`, `GET`, `DELETE /users/{A}/events/{ownedSeriesId}`; verify updated occurrence as well |
-| Verify attendee calendar | `GET /users/{B}/calendarView?startDateTime=...&endDateTime=...`; match organizer `iCalUId` and UUID subject |
-| Accept/observe/cancel | `POST /users/{B}/events/{ownedAttendeeId}/accept` (`sendResponse: true`); `GET /users/{A}/events/{ownedOrganizerId}` (B status accepted); `POST .../{ownedOrganizerId}/cancel` |
+| Verify attendee calendar | `GET /users/{B}/calendarView?startDateTime=...&endDateTime=...`; match organizer `iCalUId` and UUID subject. Follow at most ten same-origin, exact-mailbox collection pages; normalize only the mailbox's literal/encoded `@`. A current-page match does not require following the continuation |
+| Accept/observe/cancel | `POST /users/{B}/events/{ownedAttendeeId}/accept` (`sendResponse: true`); `GET /users/{A}/events/{ownedOrganizerId}` (B status accepted); `POST .../{ownedOrganizerId}/cancel`, then poll `GET /users/{B}/events/{ownedAttendeeId}` for matching `iCalUId` and `isCancelled: true`, or an observed 404 |
 | Cleanup mail | Exact UUID subject discovery `GET /users/{participant}/messages?$filter=subject eq '...'`; `DELETE /users/{participant}/messages/{ownedId}` |
-| Mandatory calendar cleanup | `DELETE /users/{participant}/events/{ownedReturnedId}`; never delete an unrelated search match |
+| Mandatory calendar cleanup | `DELETE /users/{participant}/events/{ownedReturnedId}`; never delete an unrelated search match. Successful organizer cancellation already moves that event to Deleted Items, so do not delete its immutable ID through `/events` again; still delete the attendee event |
 
-Mail/draft retention opt-out `exchangeCleanupEnabled: false` suppresses mail discovery/deletion and draft's delete business step; it emits a retention diagnostic. **Calendar deletion/cancellation remains mandatory** even with mail retention disabled. Failed prerequisites still run bounded owned-ID cleanup. Ambiguous mutation responses are not retried; a create that succeeds server-side without returning an ID, or late delivery after cleanup, can leave an artifact requiring ownership-checked operator reconciliation. Deleted Items/compliance retention may retain copies; cleanup is not a purge.
+Mail/draft retention opt-out `exchangeCleanupEnabled: false` suppresses mail discovery/deletion and draft's delete business step; it emits a retention diagnostic. **Calendar deletion/cancellation remains mandatory** even with mail retention disabled. Failed prerequisites still run bounded owned-ID cleanup with a separate signal/budget. A rejected cancellation leaves both event IDs eligible for cleanup; successful cancellation releases only the organizer ID, even if attendee readback subsequently fails. Attendee cleanup errors still fail the journey. Ambiguous mutation responses are not retried; a create that succeeds server-side without returning an ID, or late delivery after cleanup, can leave an artifact requiring ownership-checked operator reconciliation. Deleted Items/compliance retention may retain copies; cleanup is not a purge.
 
 `sendDurationMs`/`deliveryDurationMs` are retained for the simple mail journey; total duration includes cleanup. Token acquisition and generic cleanup are internal, not business-step entities. Explicit delete-draft/delete-event/cancel-meeting operations are business steps. Each journey and business step has External Reports; optional root OTEL adds query signals without affecting synthetic success.
 

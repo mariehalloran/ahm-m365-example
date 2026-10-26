@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../../utils/src/graph.js";
 import { AuthenticatedHttp } from "../../utils/src/http.js";
-import { leaveCall, waitBeforeHangup } from "../src/call-steps.js";
+import { leaveCall, verifyParticipants, waitForAnswer } from "../src/call-steps.js";
 
 function fixture(responses: Response[]) {
   let now = 0;
@@ -14,15 +14,48 @@ function fixture(responses: Response[]) {
 const call = (state: string, id = "owned-call") => Response.json({ id, state });
 const signal = () => new AbortController().signal;
 
-describe("owned call placement dwell and verified disconnection", () => {
-  it.each(["establishing", "ringing", "established", "hold"])(
-    "waits the configured duration in %s without claiming recipient receipt", async state => {
+describe("owned call answer and verified disconnection", () => {
+  const bots: [string, string] = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+  const participant = (id: string, application: string) => ({
+    id, isInLobby: false, info: { identity: { application: { id: application } } },
+  });
+  it("waits for both application identities, ignoring a user with the same directory ID", async () => {
+    const current = fixture([
+      Response.json({ value: [{ id: "human", info: { identity: { user: { id: bots[1] } } } }] }),
+      Response.json({ value: bots.map((bot, i) => participant(String(i), bot)) }),
+    ]);
+    await verifyParticipants(current.graph, "owned-call", bots, signal(), 30, 10, current.now, current.sleep);
+    expect(current.now()).toBe(10);
+  });
+  it.each([
+    { value: [], "@odata.nextLink": "https://graph.microsoft.com/v1.0/communications/calls/foreign/participants" },
+    { value: Array.from({ length: 201 }, (_, i) => participant(String(i), bots[0])) },
+    { value: [{ id: "malformed", info: { identity: { application: { id: "not-an-id" } } } }] },
+  ])("rejects partial, oversized or malformed rosters without following arbitrary pages", async response => {
+    const current = fixture([Response.json(response)]);
+    await expect(verifyParticipants(current.graph, "owned-call", bots, signal(), 30, 10, current.now, current.sleep)).rejects.toThrow();
+    expect(current.fetcher).toHaveBeenCalledOnce();
+  });
+  it("rejects two application IDs masquerading as the same participant", async () => {
+    const current = fixture(Array.from({ length: 3 }, () =>
+      Response.json({ value: bots.map(bot => participant("same-participant", bot)) })));
+    await expect(verifyParticipants(current.graph, "owned-call", bots, signal(), 30, 10, current.now, current.sleep))
+      .rejects.toMatchObject({ category: "delivery-timeout" });
+  });
+  it.each(["establishing", "ringing", "hold", "unknownFutureValue"])(
+    "fails unanswered %s rather than treating elapsed time as success", async state => {
       const current = fixture(Array.from({ length: 3 }, () => call(state)));
-      await waitBeforeHangup(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep);
+      await expect(waitForAnswer(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep))
+        .rejects.toMatchObject({ category: "delivery-timeout" });
       expect(current.now()).toBe(30);
       expect(current.fetcher).toHaveBeenCalledTimes(3);
     },
   );
+  it("requires established state, not merely ringing", async () => {
+    const current = fixture([call("ringing"), call("established")]);
+    await waitForAnswer(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep);
+    expect(current.now()).toBe(10);
+  });
   it.each(["terminated", "404"])("DELETE acceptance requires subsequent GET proof: %s", async state => {
     const current = fixture([
       new Response(null, { status: 202 }), call("terminating"),
@@ -37,9 +70,9 @@ describe("owned call placement dwell and verified disconnection", () => {
       .rejects.toMatchObject({ category: "delivery-timeout" });
   });
   it.each([call("terminated"), call("terminating"), new Response(null, { status: 404 }), call("established", "other-call")])(
-    "fails dwell honestly on early termination, missing or mismatched call", async response => {
+    "fails answer honestly on early termination, missing or mismatched call", async response => {
       const current = fixture([response]);
-      await expect(waitBeforeHangup(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep))
+      await expect(waitForAnswer(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep))
         .rejects.toMatchObject({ category: "read-failure" });
     },
   );
@@ -55,16 +88,16 @@ describe("owned call placement dwell and verified disconnection", () => {
       targets: [{ identity: { user: { id: "PRIVATE-USER-ID" } } }],
     })]);
     const onState = vi.fn();
-    await expect(waitBeforeHangup(current.graph, "owned-call", signal(), 30, 10,
+    await expect(waitForAnswer(current.graph, "owned-call", signal(), 30, 10,
       current.now, current.sleep, onState)).rejects.toMatchObject({ category: "read-failure" });
-    expect(onState).toHaveBeenCalledExactlyOnceWith("terminated", 480, 12345);
+    expect(onState).toHaveBeenCalledExactlyOnceWith("terminated", 480, 12345, undefined);
     expect(JSON.stringify(onState.mock.calls)).not.toContain("PRIVATE");
   });
   it("fails a numeric service failure even before terminal state", async () => {
     const current = fixture([Response.json({
       id: "owned-call", state: "establishing", resultInfo: { code: 500, subcode: 42 },
     })]);
-    await expect(waitBeforeHangup(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep))
+    await expect(waitForAnswer(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep))
       .rejects.toMatchObject({ category: "read-failure" });
   });
   it("does not echo unknown state strings or malformed numeric diagnostics", async () => {
@@ -73,8 +106,8 @@ describe("owned call placement dwell and verified disconnection", () => {
       resultInfo: { code: "PRIVATE-MESSAGE", subcode: 12 },
     }), call("establishing")]);
     const onState = vi.fn();
-    await waitBeforeHangup(current.graph, "owned-call", signal(), 20, 10,
-      current.now, current.sleep, onState);
-    expect(onState.mock.calls).toEqual([["unknown", undefined, undefined], ["establishing", undefined, undefined]]);
+    await expect(waitForAnswer(current.graph, "owned-call", signal(), 20, 10,
+      current.now, current.sleep, onState)).rejects.toMatchObject({ category: "delivery-timeout" });
+    expect(onState.mock.calls).toEqual([["unknown", undefined, undefined, undefined], ["establishing", undefined, undefined, undefined]]);
   });
 });

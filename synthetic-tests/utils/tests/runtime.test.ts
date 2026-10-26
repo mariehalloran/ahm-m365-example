@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
-import { createLiveGraphClient, createLiveTeamsBot, createTeamsReadbackGraph } from "../src/auth.js";
+import { createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "../src/auth.js";
 import { createHealthReporter } from "../src/health-reports.js";
 import { readProjectConfig } from "../src/project-config.js";
 import { providerGraphClient, serviceRuntime } from "../src/runtime.js";
@@ -43,43 +43,78 @@ const certificate = {
 const project = await readProjectConfig("../monitoring.config.json");
 
 describe("independent Graph and health-report identities", () => {
-  it("rejects a substituted call recipient before credentials, discovery, listener or Graph I/O", async () => {
+  it.each(["id", "tenantId", "meetingThreadId", "organizerUserId", "peerBotClientId"] as const)(
+    "rejects substituted meeting %s before credentials, discovery, listener or Graph I/O", async field => {
     const service = parseServiceConfig({
       ...raw, type: "teams", targets: [], callTargets: [{
-        id: "approved-call", tenantId: certificate.AZURE_TENANT_ID, callUserId: certificate.M365_CLIENT_ID,
+        id: "approved-call", tenantId: certificate.AZURE_TENANT_ID,
+        meetingThreadId: "19:meeting_test@thread.v2", organizerUserId: certificate.M365_CLIENT_ID,
+        peerBotClientId: certificate.M365_CLIENT_ID,
       }],
     });
     const config = serviceSettings(service, {}, { "call-test-user": true });
-    config.probes[0]!.callUserId = certificate.AZURE_CLIENT_ID;
-    await expect(serviceRuntime(service, config, output, {})).rejects.toThrow("root-configured individual users");
+    config.probes[0]![field] = field === "meetingThreadId" ? "19:meeting_unapproved@thread.v2" : certificate.AZURE_CLIENT_ID;
+    await expect(serviceRuntime(service, config, output, {})).rejects.toThrow("root-configured dedicated meetings");
     expect(credentials.managed).not.toHaveBeenCalled();
     expect(credentials.token).not.toHaveBeenCalled();
     expect(calling.start).not.toHaveBeenCalled();
+  });
+  it.each([
+    { BOT_CLIENT_ID: undefined }, { TEAMS_CALLING_PEER_CLIENT_ID: undefined }, { BOT_TENANT_ID: undefined },
+    { AZURE_TENANT_ID: undefined }, { AZURE_TENANT_ID: certificate.M365_TENANT_ID },
+    { TEAMS_CALLING_PEER_CLIENT_ID: certificate.M365_CLIENT_ID },
+    { TEAMS_CALLING_PEER_CLIENT_ID: "77777777-7777-4777-8777-777777777777" },
+    { BOT_CLIENT_ID: certificate.M365_TENANT_ID },
+  ])("calling rejects invalid/unselected environment identities without fallback: %j", overrides => {
+    const env = {
+      AZURE_TENANT_ID: certificate.AZURE_TENANT_ID, BOT_TENANT_ID: certificate.AZURE_TENANT_ID,
+      BOT_CLIENT_ID: certificate.M365_CLIENT_ID, TEAMS_CALLING_PEER_CLIENT_ID: certificate.AZURE_CLIENT_ID,
+    };
+    const service = parseServiceConfig({ ...raw, type: "teams", targets: [], callTargets: [{
+      id: "meeting", tenantId: certificate.AZURE_TENANT_ID, meetingThreadId: "19:meeting_test@thread.v2",
+      organizerUserId: certificate.M365_TENANT_ID, peerBotClientId: certificate.AZURE_CLIENT_ID,
+    }] });
+    const config = serviceSettings(service, env, { "call-test-user": true });
+    expect(() => createTeamsCallingGraph(config, { ...certificate, ...env, ...overrides }, true)).toThrow();
+    expect(credentials.managed).not.toHaveBeenCalled();
+    expect(credentials.certificate).not.toHaveBeenCalled();
+    expect(credentials.default).not.toHaveBeenCalled();
+    expect(credentials.assertion).not.toHaveBeenCalled();
   });
   it("uses only BOT identity for call-only Graph access and closes its authenticated callback on shutdown", async () => {
     const service = parseServiceConfig({
       ...raw, type: "teams", mode: "live", teamsAuthentication: "user-delegated",
       graphAuthentication: "certificate", teamsCallingCallbackUrl: "https://approved.example.invalid/api/calls",
+      teamsCallingPlaybackEnabled: true,
       targets: [],
       callTargets: [{
         id: "call-only", tenantId: certificate.AZURE_TENANT_ID,
-        callUserId: certificate.M365_CLIENT_ID,
+        meetingThreadId: "19:meeting_test@thread.v2", organizerUserId: certificate.M365_CLIENT_ID,
+        peerBotClientId: certificate.AZURE_CLIENT_ID,
       }],
     });
-    const config = serviceSettings(service, { ENABLE_LIVE_M365: "true" }, {
-      "publish-channel-message": false, "reply-channel-message": false, "call-test-user": true,
-    });
     const env = {
+      ENABLE_LIVE_M365: "true",
       AZURE_TENANT_ID: certificate.AZURE_TENANT_ID, AZURE_CLIENT_ID: certificate.AZURE_CLIENT_ID,
       BOT_TENANT_ID: certificate.AZURE_TENANT_ID, BOT_CLIENT_ID: certificate.M365_CLIENT_ID,
+      TEAMS_CALLING_PEER_CLIENT_ID: certificate.AZURE_CLIENT_ID,
     };
+    const config = serviceSettings(service, env, {
+      "publish-channel-message": false, "reply-channel-message": false, "call-test-user": true,
+    });
     const runtime = await serviceRuntime(service, config, output, env);
     expect(runtime.graph).toBeUndefined();
     expect(runtime.teamsBot).toBeUndefined();
     expect(runtime.clientsForProbe).toBeUndefined();
     await runtime.teamsCalling!.authenticate(new AbortController().signal);
-    expect(credentials.managed).toHaveBeenCalledExactlyOnceWith({ clientId: env.BOT_CLIENT_ID });
-    expect(credentials.token).toHaveBeenCalledWith("00000003-0000-0000-c000-000000000000/.default", expect.anything());
+    expect(credentials.managed.mock.calls).toEqual([
+      [{ clientId: env.BOT_CLIENT_ID }], [{ clientId: env.TEAMS_CALLING_PEER_CLIENT_ID }],
+    ]);
+    await runtime.teamsCallingPeer!.authenticate(new AbortController().signal);
+    expect(credentials.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
+    expect(credentials.token.mock.calls.map(([scope]) => scope)).toEqual([
+      "https://graph.microsoft.com/.default", "https://graph.microsoft.com/.default",
+    ]);
     expect(credentials.certificate).not.toHaveBeenCalled();
     expect(calling.start).toHaveBeenCalledWith(expect.objectContaining({ port: 8080, verify: calling.verify }));
     await runtime.shutdown!();

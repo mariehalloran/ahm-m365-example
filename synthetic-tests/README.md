@@ -4,12 +4,12 @@
 
 This directory is the self-contained Node project. For why synthetic journeys complement Microsoft-reported health and how Azure Monitor Health Models exposes experience gaps, see the [repository overview](../README.md).
 
-Start with the service-owned journey guides: [Exchange six core mail/calendar journeys](./exchange/README.md), [Teams target families and current bot/signaling coverage](./teams/README.md#target-catalog-versus-current-implementation), and [SharePoint target families and current save/rename coverage](./sharepoint/README.md#target-catalog-versus-current-implementation). Each separates implemented operations from the target catalog and live evidence. These are API-backed journeys, not browser/desktop or employee sign-in tests. HTTP-level tests assume approved access; no successful tenant journey or employee receipt is established by those tests. Calling health does not prove that each recipient rang.
+Start with the service-owned journey guides: [Exchange six core mail/calendar journeys](./exchange/README.md), [Teams bot-only meeting/messaging coverage](./teams/README.md#target-catalog-versus-current-implementation), and [OneDrive roundtrip, app-folder persistence and document versions](./onedrive/README.md). Existing [SharePoint save/rename handlers](./sharepoint/README.md#target-catalog-versus-current-implementation) remain available but are disabled in the root sample. These are API-backed journeys, not browser/desktop or employee sign-in tests. Mocked HTTP tests do not establish successful tenant access or employee receipt. Bot roster presence and playback completion do not prove received audio.
 
 ```text
 Exchange Container App   [mail 60s; five other journeys 300s]    --+
 Teams Container App      [test + aggregation, every 120 seconds] --+
-SharePoint Container App [test + aggregation, every 300 seconds] --+
+OneDrive Container App  [three independent lanes, every 300s]    --+
                                                                 |
                             Direct health reports to service model entities
                                                                 |
@@ -17,7 +17,7 @@ SharePoint Container App [test + aggregation, every 300 seconds] --+
 
 ```
 
-The [health model templates](../health-model/README.md) create a root referencing service models, including a planned-only OneDrive model. The complete catalog has **five models, 180 entities and 175 relationships**: eleven implemented and 23 planned journey roots, with 40 implemented and 78 planned steps. Target attempts aggregate without per-user signal inventories; existing IDs stay unchanged. Implemented journeys/steps have **External Reports**, plus optional **OpenTelemetry**; planned nodes have no reports, stay Unknown and are suppressed from synthetic rollup. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps. Use the [shared worker deployment](./infra/README.md) and [model migration](../health-model/README.md#apply-and-migrate).
+The [health model templates](../health-model/README.md) create a root referencing service models. The checked-in selection has **five models, 171 entities and 166 relationships**: twelve active and 20 planned journey roots, with 47 active and 66 planned steps; SharePoint is planned-only in this selection. OneDrive promotes existing planned root/step IDs without duplicates. Target attempts aggregate without per-user signal inventories. Active journeys/steps have **External Reports**, plus optional **OpenTelemetry**; planned nodes have no reports, remain Unknown and are suppressed from synthetic rollup. Token acquisition and generic cleanup remain internal; deliberate deletion/cancellation/hang-up are business steps. Use the [shared worker deployment](./infra/README.md) and [model migration](../health-model/README.md#apply-and-migrate).
 
 Each service has its own Container App and cadence. Console diagnostics remain in that same process; no separate telemetry service or Kubernetes requirement is introduced.
 
@@ -28,9 +28,11 @@ implements six core families; Teams and SharePoint each have five target familie
 but only narrower implemented coverage, detailed in their service guides. Live
 Exchange mail, draft, attachment/reply and DL fanout are verified Healthy; its two
 calendar journeys currently fail with 403 pending scoped-authorization cache propagation.
-Teams live verification covers one-bot publication/reply with a Graph observer and
-signaling-only calls to three accounts, not a second bot receiving or answered audio.
-SharePoint save/rename handlers exist but approved live targets are missing.
+Teams live verification covers one-bot publication/reply with a Graph observer.
+The new bot-only two-leg meeting/roster/playback/departure architecture is source-tested,
+not live media acceptance; no human calling or direct app-to-app P2P fallback exists.
+OneDrive implements roundtrip, app-folder persistence and actual prior-version retrieval;
+live permissions/provisioning and ingestion must be verified separately. SharePoint is disabled.
 See [live evidence](../docs/deployment.md#deployment-status-and-order), not unit tests,
 for execution and ingestion acceptance.
 
@@ -39,21 +41,23 @@ call signaling is not media; APIs are not browser experience. Future families an
 optional variants below and in service guides are **not implemented or selectable**
 unless explicitly listed as current root scenarios.
 
-### OneDrive target catalog (planned)
+### OneDrive target catalog
 
-There is no OneDrive worker, root scenario selection or live verification
-yet. Keep this catalog here until implementation exists; no empty service folder is needed.
+The [OneDrive service guide](./onedrive/README.md) documents exact APIs,
+authorization limits, root target fields, cleanup and live acceptance.
 
-| Planned family | Completed-workflow target |
+| Family | Completed-workflow target and status |
 | --- | --- |
-| User-drive roundtrip | Create folder/file in an approved user's drive, reopen/download, verify hash, delete owned artifacts |
-| App-folder lifecycle | Write, read, update, verify and delete app-folder data; exact authentication/authorization model pending validation |
-| Recipient sharing | Create sharing link/grant, read as the intended recipient, verify content, revoke and verify access removal |
-| Document versions | Update, enumerate history, retrieve/verify an earlier version; restore is optional |
-| Search and retrieve | Wait for indexing, find the owned file, retrieve it and verify content |
+| User-drive roundtrip | Implemented: create folder/file under selected folder, enumerate/download, verify exact hash, delete and confirm absence |
+| App-folder lifecycle | Implemented: app-only approot persistence, prior-state verification, update/readback and scratch deletion; no root deletion |
+| Recipient sharing | Planned: needs independent recipient credentials, not owner-token readback |
+| Document versions | Implemented: update, enumerate actual history, retrieve/verify earlier bytes; optional restore rewrites those bytes |
+| Search and retrieve | Planned: approved selected/AppFolder permissions are not documented for Graph search; enumeration is not search |
 
-An optional browser variant is also planned. Cadences, permissions and host design
-are not yet implemented; SharePoint API coverage must not be relabeled as OneDrive coverage.
+An optional browser variant remains planned. All three implemented families run
+on independent configurable 300-second lanes in a separate Container App.
+AppFolder application permission is not Entra-account-scoped; runtime account
+allowlisting is a safeguard, not a tenant-enforced two-user boundary.
 
 ## Run locally
 
@@ -65,8 +69,8 @@ npm ci
 npm run exchange -- --once
 # Remove --once to repeat on Exchange's cadence.
 npm run exchange
-# Another terminal/process runs SharePoint independently.
-npm run sharepoint
+# Another terminal/process runs OneDrive independently.
+npm run onedrive
 # Or run one safe Teams simulation.
 npm run teams -- --once
 ```
@@ -81,10 +85,11 @@ All remaining npm and compiled-worker commands in this guide run from `synthetic
 
 | Root setting | Meaning |
 | --- | --- |
-| `services.<service>.enabled` | Enable Exchange, Teams, or SharePoint; all default to `true` |
-| `services.<service>.scenarios` | Select journeys independently: Exchange `send-receive-mail`/`edit-reopen-draft`/`attachment-reply-mail`/`distribution-list-mail`/`recurring-calendar`/`meeting-invitation`, Teams `publish-channel-message`/`reply-channel-message`/`call-test-user`, SharePoint `save-reopen-file`/`rename-reopen-file`; checked-in root selects all |
+| `services.<service>.enabled` | Checked-in root enables Exchange, Teams and OneDrive, explicitly disables SharePoint; omitted OneDrive in older profiles stays disabled |
+| `services.<service>.scenarios` | Select implemented journeys independently; OneDrive: `user-drive-roundtrip`, `app-folder-lifecycle`, `document-versions`; see service guides for Exchange/Teams and legacy SharePoint selections |
 | `services.<service>.targets` | Account email addresses or approved site/team/channel IDs, never credentials |
-| `services.teams.callTargets` | Separate individual user allowlist: `id`, `tenantId`, `callUserId` (object UUID), three users in the sample; no channel metadata |
+| `services.teams.callTargets` | Dedicated meeting allowlist: `id`, `tenantId`, `meetingThreadId`, `organizerUserId` (owner metadata only), `peerBotClientId`; one sample meeting; no human call targets |
+| `services.onedrive.targets` | Every selected account: `id`, `userId`, `userPrincipalName`, `folderName`; real `driveId`/`folderId` for selected-folder workflows, optional `restoreVersion`; no directory discovery or delegated sign-in |
 | `services.<service>.configFile` | Service-owned file for independent cadence, timeout, mode, authentication and provider settings; relative to the root config's directory |
 | `healthModel` | Root model name, subscription/resource group, report TTL, and success/mean-duration thresholds |
 | `otel` | Optional export: `enabled: false` by default; destination `console` or `azure-monitor` |
@@ -99,7 +104,8 @@ attempts in one cycle, aggregated into fixed journey/action signals.
 | Config | Cadence | Default |
 | --- | --- | --- |
 | [Exchange](./exchange/config.json) | Mail 60 seconds; five other core journeys 300 seconds | Simulated mail/calendar results |
-| [SharePoint](./sharepoint/config.json) | 300 seconds | Simulated file result |
+| [OneDrive](./onedrive/config.json) | Three independent 300-second lanes | Simulated roundtrip/app-folder/version results |
+| [SharePoint](./sharepoint/config.json) | 300 seconds | Disabled in root; retained simulation handlers |
 | [Teams](./teams/config.json) | 120 seconds | Simulation; live defaults to an installed same-tenant managed-identity bot |
 
 ```json
@@ -303,9 +309,9 @@ uses explicit `certificate` mode and `M365_*`; it does not change Azure reportin
 
 | Surface | Current state |
 | --- | --- |
-| Exchange, Teams, SharePoint journeys and named steps | Eleven implemented journeys, safe simulation defaults and HTTP-mocked tests. Exchange mail/draft/attachment-reply/DL verified Healthy; calendar currently 403-blocked. Teams single-bot messaging/readback and signaling-only calls live verified; SharePoint lacks approved live targets. Target catalogs are broader than implementation. |
+| Exchange, Teams, OneDrive journeys and named steps | Twelve selected journeys, safe simulation defaults and mocked-Graph tests; legacy SharePoint handlers remain disabled. OneDrive supports selected-folder roundtrip, app-folder persistence and real prior-version retrieval; see dated deployment evidence for live verification. Target catalogs remain broader than implementation. |
 | Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
-| Root model of service models and journey/step entities | Five models, 180 entities, 175 relationships: eleven implemented and 23 planned journey roots, 118 business steps. Implemented External Reports always, OTEL optional; planned coverage stays Unknown/suppressed with no reports or workers. See [catalog](../health-model/README.md#catalog-versus-modeled-and-live-coverage). |
+| Root model of service models and journey/step entities | Checked-in selection: five models, 171 entities, 166 relationships; twelve active and 20 planned journey roots, 113 business steps. External Reports always for active nodes, OTEL optional; planned coverage stays Unknown/suppressed without reports. See [catalog](../health-model/README.md#catalog-versus-modeled-and-live-coverage). |
 | Stable provider context / beta diagnostics | Independent 300-second provider lanes; direct suppressed status/threshold reports, counts diagnostic absent thresholds, issues diagnostic. Beta currently 403; failed/missing data stays Unknown, never synthetic success samples. See [provider evidence](../docs/provider-monitoring.md). |
 | Worker hosting and packaging | Separate Container Apps reuse one immutable image; see the dated [live baseline](../docs/deployment.md#deployment-status-and-order) rather than treating sample settings as deployed state |
 | Tenant authorization and runtime settings | Mailbox-scoped Exchange and team-scoped Teams readback verified in the baseline; each new deployment must validate its own allowed/denied grants, targets and ingestion |
@@ -322,6 +328,7 @@ infer tenant-wide availability, employee UI success or alert delivery from API t
 | [health-model/](../health-model/) | Independently deployed topology and external report signals |
 | [exchange/](./exchange/) | Exchange worker, config, journeys/actions and tests |
 | [teams/](./teams/) | Teams worker, config, journeys/actions and tests |
+| [onedrive/](./onedrive/README.md) | OneDrive worker, selected-folder/app-folder/version journeys, independent lanes and tests |
 | [sharepoint/](./sharepoint/) | SharePoint worker, config, journeys/actions and tests |
 | [utils/](./utils/README.md) | Shared root/service config, clients, measured steps, execution/scheduling, aggregation/health reports and console diagnostics |
 | [package.json](./package.json), [package-lock.json](./package-lock.json) | npm scripts and pinned dependency graph for this project |
@@ -337,7 +344,7 @@ npm test
 npm run build
 node dist/exchange/src/worker.js --once
 node dist/teams/src/worker.js --once
-node dist/sharepoint/src/worker.js --once
+node dist/onedrive/src/worker.js --once
 ```
 
-This npm package builds all three entries into `dist/`; tests are excluded from production output. See [shared worker configuration](./utils/README.md), [operations](../docs/operations.md), and [deployment boundaries](../docs/deployment.md). Direct health reporting is required for live execution.
+This npm package builds all four service entries into `dist/`; tests are excluded from production output. See [shared worker configuration](./utils/README.md), [operations](../docs/operations.md), and [deployment boundaries](../docs/deployment.md). Direct health reporting is required for live execution.

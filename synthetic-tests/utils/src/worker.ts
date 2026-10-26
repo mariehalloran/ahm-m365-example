@@ -15,6 +15,7 @@ import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-di
 import type { ResultTelemetry } from "./otel.js";
 import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
 import { probeServices } from "./contracts.js";
+import { collectCycleCallQuality } from "./teams-call-quality-collection.js";
 
 export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
   let config: string | undefined;
@@ -27,7 +28,7 @@ export function parseWorkerArguments(args: readonly string[], defaultConfig?: st
     } else if (argument === "--project-config" && !projectConfig && args[index + 1] && !args[index + 1]!.startsWith("--")) {
       projectConfig = args[++index];
     } else if (argument === "--once" && !once) once = true;
-    else throw new ConfigurationError("Usage: npm run <exchange|teams|sharepoint> -- [--project-config <monitoring.config.json>] [--config <service-config.json>] [--once]");
+    else throw new ConfigurationError("Usage: npm run <exchange|teams|sharepoint|onedrive> -- [--project-config <monitoring.config.json>] [--config <service-config.json>] [--once]");
   }
   if (!config && defaultConfig === undefined) throw new ConfigurationError("An explicit --config is required");
   return { config: config ?? defaultConfig!, once, ...(projectConfig ? { projectConfig } : {}) };
@@ -70,6 +71,14 @@ async function initializeService(
     config,
     dependencies: {
       ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
+      ...(service.type === "teams" && service.teamsCallQuality.enabled ? {
+        async reportCallQuality(cycle, signal) {
+          if (!cycle.results.some(result => result.testType === "teams-call")) return;
+          const quality = await collectCycleCallQuality(cycle, runtime.teamsCalling, service.teamsCallQuality, telemetry, signal);
+          suppliedResults.recordCallQuality?.(quality);
+          await reportHealth?.(quality);
+        },
+      } : {}),
     },
   };
 }
@@ -153,7 +162,7 @@ export async function collectAndReportServiceProviders(
   } catch (error) {
     errors.push(error);
     try {
-      providerOutput.recordDiagnostic({
+      if (service.type !== "onedrive") providerOutput.recordDiagnostic({
         kind: "failure", service: service.type, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
         collectedAt: new Date().toISOString(), category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
         ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
@@ -238,6 +247,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
         telemetry.emit("telemetry-output-failed", { category: "collector-failure" });
       }
     },
+    recordCallQuality(cycle) { otel?.recordCallQuality?.(cycle); },
   };
   let initialized: InitializedService | undefined;
   const now = options.now ?? (() => performance.now());

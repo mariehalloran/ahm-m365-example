@@ -57,6 +57,7 @@ function project(): ProjectConfig {
   }];
   configured.services.teams.scenarios["call-test-user"] = false;
   configured.services.sharepoint.targets = [{ id: "sharepoint-one", siteId: "site", driveId: "drive", folderId: "folder" }];
+  configured.services.sharepoint.enabled = true;
   return configured;
 }
 function service(type: ServiceConfig["type"]): ServiceConfig {
@@ -65,7 +66,7 @@ function service(type: ServiceConfig["type"]): ServiceConfig {
     cohort: `${type}-global`, intervalSeconds: 60, timeoutSeconds: 45, targets: [{ id: `${type}-one` }],
   });
 }
-function providerTraffic(type: ServiceConfig["type"], status = 200) {
+function providerTraffic(type: Exclude<ServiceConfig["type"], "onedrive">, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async url => {
     if (!String(url).startsWith("https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/")) {
       throw new Error("Unexpected endpoint");

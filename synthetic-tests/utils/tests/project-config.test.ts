@@ -19,6 +19,18 @@ const service = parseServiceConfig({
 });
 
 describe("project-root monitoring configuration", () => {
+  it("keeps call quality diagnostic unless explicit, ordered root thresholds are supplied", () => {
+    expect(checkedIn.healthModel.callQualityThresholds).toEqual({});
+    for (const thresholds of [
+      { jitterMs: { degradedAbove: 30, unhealthyAbove: 20 } },
+      { packetLossPercent: { degradedAbove: 1, unhealthyAbove: 101 } },
+      { notAMetric: { degradedAbove: 1, unhealthyAbove: 2 } },
+    ]) {
+      expect(() => parseProjectConfig({
+        ...checkedIn, healthModel: { ...checkedIn.healthModel, callQualityThresholds: thresholds },
+      })).toThrow();
+    }
+  });
   it("preserves legacy single-mailbox selection while expanding all explicit pairs independently", () => {
     const project = structuredClone(checkedIn);
     const old = {
@@ -48,15 +60,17 @@ describe("project-root monitoring configuration", () => {
     expect(serviceProbes(configured, project.services.exchange.scenarios)).toHaveLength(180);
     expect(serviceSettings(configured, {}, project.services.exchange.scenarios).probes).toHaveLength(180);
   });
-  it("enables every implemented service/scenario without enabling live I/O", async () => {
+  it("selects Exchange, Teams and OneDrive; explicitly disables SharePoint without enabling live I/O", async () => {
     expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "services"]);
     expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
-    for (const type of ["exchange", "teams", "sharepoint"] as const) {
+    for (const type of ["exchange", "teams", "onedrive"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
-      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 6 : type === "teams" ? 3 : 2).fill(true));
+      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 6 : 3).fill(true));
       const selected = await readProjectService(type, "../monitoring.config.json");
       expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
+    expect(checkedIn.services.sharepoint.enabled).toBe(false);
+    expect((await readProjectService("sharepoint", "../monitoring.config.json")).service.enabled).toBe(false);
   });
   it("defaults omitted OTEL settings off and rejects unsupported destinations and service-owned settings", () => {
     const { otel, ...previousConfig } = checkedIn;

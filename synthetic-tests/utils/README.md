@@ -14,7 +14,7 @@ Run from the `synthetic-tests/` project directory:
 npm run exchange -- --once
 npm run exchange
 # Separate process, separate cadence:
-npm run sharepoint
+npm run onedrive
 npm run teams -- --once
 ```
 
@@ -34,10 +34,10 @@ Separate service processes do not block each other. Keep one authoritative insta
 
 | Field | Meaning |
 | --- | --- |
-| `type` | `exchange`, `sharepoint`, or `teams` |
+| `type` | `exchange`, `sharepoint`, `teams`, or `onedrive` |
 | `intervalSeconds` | Start-to-start cadence, 1-86,400 seconds |
 | `timeoutSeconds` | Probe execution timeout, up to 120 seconds; cleanup has a separate bounded budget |
-| `executionLanes` | Optional array of `{ name, intervalSeconds, timeoutSeconds, journeys }`; unique lanes assign every supported service journey exactly once. Exchange defaults to legacy-interval mail (60 seconds checked in) and 300-second extended lanes, both using legacy timeout; other services default to one lane |
+| `executionLanes` | Optional array of `{ name, intervalSeconds, timeoutSeconds, journeys }`; unique lanes assign every supported service journey exactly once. Exchange defaults to mail/extended lanes; OneDrive explicitly configures three independent 300-second lanes; other services default to one lane |
 | `mode` | `simulation` or `live` |
 | `graphAuthentication` | `managed-identity` by default for same-tenant Graph; explicit `certificate` uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for hosted cross-tenant or local access |
 | `teamsAuthentication` | Default `bot`; `user-delegated` is explicitly opt-in and requires approved human bootstrap |
@@ -48,8 +48,11 @@ Separate service processes do not block each other. Keep one authoritative insta
 | `teamsCleanupEnabled` | Default `true`; set `false` in the Teams service file to retain channel posts and replies for inspection |
 | `teamsCallingCallbackUrl` | Required for selected live calls: real public HTTPS URL with exact `/api/calls` path; only the Teams app gets ingress |
 | `teamsCallingPort` | Callback listener port, default 8080 |
-| `teamsCallingWaitSeconds` | Dwell after individual call placement, default 10 seconds (1–30); does not prove ringing/receipt, and hang-up is never disabled by message retention |
-| `serviceHealth` | Optional boolean, default `false`; stable Microsoft service health context only |
+| `teamsCallingPlaybackEnabled` | Explicit approval for two-bot meeting playback; false by default, required true for selected live calls; no human or signaling-only fallback |
+| `teamsCallingAnswerTimeoutSeconds` | Established-call deadline, default 20 seconds (1–30); unanswered attempts fail |
+| `teamsCallQuality` | Optional Teams-only bounded post-call collection; disabled by default, 30-second budget / 5-second polling, requires separate `CallRecords.Read.All` approval |
+| `teamsCallingPlaybackTimeoutSeconds` | POST + authenticated operation-completion deadline, default 10 seconds (2–30); live timeout must allow both budgets plus 5 seconds; hang-up never disabled by message retention |
+| `serviceHealth` | Optional boolean, default `false`; stable Microsoft service health context only; OneDrive rejects enabled collection rather than aliasing a provider |
 | `providerIntervalSeconds` | Independent provider lane start-to-start cadence, default 300 seconds (1–86,400); no extra container |
 | `serviceActivity` | Optional strict beta settings, default disabled; all five approved service functions, optional explicit direct-report thresholds; see [provider setup](../../docs/provider-monitoring.md) |
 | `scenario` | Optional deterministic simulation scenario |
@@ -61,7 +64,7 @@ The obsolete per-service `reportToHealthModel` field remains rejected: live work
 
 ## Per-cycle health reports
 
-For each settled lane cycle, report each observed journey to its own entity and each business action to `<journey-entity>-<step>`. Both use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of the optional OpenTelemetry group. Success counts only executed samples and duration includes executed failures. Token acquisition and generic cleanup remain internal; explicit delete-draft/delete-event/cancel-meeting are business steps. Retention records skipped cleanup (`cleanup-disabled`) and a diagnostic, never successful cleanup. Restoring cleanup affects future attempts, not previously retained content. All eleven journeys produce 40 business-step entities within four models, 61 entities and 57 relationships. Multiple account attempts aggregate into shared journey/step entities.
+For each settled lane cycle, report each observed journey to its own entity and each business action to `<journey-entity>-<step>`. OneDrive maps semantic action names to its already-deployed `step-1`…`step-4` IDs and preserves `onedrive-planned-*` root IDs while promoting their metadata to active. Both signals use `synthetic-success-percentage`/`synthetic-mean-duration` in **External Reports**, independent of optional OTEL. Success counts only executed samples; duration includes executed failures. Token acquisition/generic cleanup remain internal; deliberate deletion/cancellation are business steps. Retention skips cleanup rather than claiming success. Current root selection has twelve active journeys and 47 active business steps; account attempts aggregate into shared journey/step entities. See [OneDrive boundaries and persistence](../onedrive/README.md).
 
 Independent lanes execute concurrently; at most three attempts per lane run at once, with dependent actions sequential. Each lane waits for completed/deadline results before aggregation/publication, never overlaps itself, and emits `service-slots-skipped` instead of replaying missed slots. Slow-lane execution/reporting does not hold the fast lane. A fast-lane report contains **only observed journeys**, not empty reports overwriting slow-lane entities. Provider reports remain a separate suppressed branch with their own independent provider lane. A rejected attempt does not cancel siblings.
 
@@ -250,4 +253,4 @@ node dist/teams/src/worker.js --once
 node dist/sharepoint/src/worker.js --once
 ```
 
-Run these commands from `synthetic-tests/`. Production builds include application code only, excluding tests. Workers execute handlers in-process; Container Apps packaging/deployment remain separate work. The package in that directory owns all three entries and these shared utilities.
+Run these commands from `synthetic-tests/`. Production builds include application code only, excluding tests. Workers execute handlers in-process; Container Apps packaging/deployment remain separate work. The package in that directory owns all four service entries and these shared utilities.

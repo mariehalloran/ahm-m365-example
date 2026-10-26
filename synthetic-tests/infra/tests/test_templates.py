@@ -120,10 +120,29 @@ class WorkerTemplateContracts(unittest.TestCase):
 
     def test_worker_selection_checks_every_configured_journey(self):
         services = self.template["variables"]["services"]
-        self.assertIn(".enabled", services)
-        self.assertIn(".scenarios", services)
+        self.assertIn("'enabled'", services)
+        self.assertIn("'scenarios'", services)
+        self.assertIn("tryGet", services)
         self.assertIn("items(", services)
         self.assertNotIn("serviceJourneys", self.template["variables"])
+
+    def test_onedrive_uses_existing_shared_environment_registry_and_service_scoped_identity(self):
+        self.assertIn("'onedrive'", self.template["variables"]["services"])
+        defaults = self.template["parameters"]["serviceConfigs"]["defaultValue"]
+        self.assertIn("onedrive", defaults)
+        identity = next(item for item in self.resources if item["type"] == "Microsoft.ManagedIdentity/userAssignedIdentities")
+        self.assertIn("uami-", identity["name"])
+        self.assertIn("variables('modelName')", identity["name"])
+        self.assertIn("variables('services')", identity["name"])
+        self.assertEqual(self.module["properties"]["parameters"]["environmentId"]["value"],
+                         "[resourceId('Microsoft.App/managedEnvironments', format('cae-{0}', variables('modelName')))]")
+        self.assertIn("registry", self.module["properties"]["parameters"]["registryServer"]["value"])
+
+    def test_existing_foundation_can_be_reused_without_changing_registry_or_environment_policy(self):
+        self.assertFalse(self.template["parameters"]["reuseExistingFoundation"]["defaultValue"])
+        for resource in self.resources:
+            if resource["type"] in {"Microsoft.ContainerRegistry/registries", "Microsoft.App/managedEnvironments"}:
+                self.assertEqual(resource["condition"], "[not(parameters('reuseExistingFoundation'))]")
 
     def test_default_bot_uses_the_attached_uami_without_user_storage_or_certificate_fallback(self):
         environment = self.app["properties"]["template"]["containers"][0]["env"]
@@ -137,6 +156,12 @@ class WorkerTemplateContracts(unittest.TestCase):
         self.assertIn("'bot'", self.worker["variables"]["useTeamsUser"])
         self.assertIn("'bot'", self.template["variables"]["useTeamsUser"])
         self.assertNotIn("empty(", self.worker["variables"]["useBotCertificate"])
+        identities = self.app["identity"]["userAssignedIdentities"]
+        self.assertIn("useTeamsCalling", identities)
+        self.assertIn("botPeerManagedIdentityResourceId", identities)
+        self.assertIn("TEAMS_CALLING_PEER_CLIENT_ID", environment)
+        self.assertIn("botPeerClientId", environment)
+        self.assertNotIn("botPeerClientId", self.app["properties"]["configuration"]["registries"][0]["identity"])
 
     def test_delegated_cache_is_conditional_encrypted_https_and_container_scoped(self):
         storage = next(item for item in self.resources if item["type"] == "Microsoft.Storage/storageAccounts")

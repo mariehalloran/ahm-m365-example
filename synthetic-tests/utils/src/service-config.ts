@@ -29,7 +29,14 @@ const serviceFields = {
   providerClientId: z.string().uuid().optional(),
   teamsCallingCallbackUrl: teamsCallingCallbackUrlSchema.optional(),
   teamsCallingPort: z.number().int().min(1024).max(65535).default(8080),
-  teamsCallingWaitSeconds: z.number().int().min(1).max(30).default(10),
+  teamsCallingPlaybackEnabled: z.boolean().default(false),
+  teamsCallingAnswerTimeoutSeconds: z.number().int().min(1).max(30).default(20),
+  teamsCallingPlaybackTimeoutSeconds: z.number().int().min(2).max(30).default(10),
+  teamsCallQuality: z.object({
+    enabled: z.boolean().default(false),
+    maxWaitSeconds: z.number().int().min(1).max(60).default(30),
+    pollIntervalSeconds: z.number().int().min(1).max(30).default(5),
+  }).strict().default({}),
   teamsCleanupEnabled: z.boolean().default(true),
   exchangeCleanupEnabled: z.boolean().default(true),
   executionLanes: z.array(z.object({
@@ -44,7 +51,7 @@ const serviceFields = {
   serviceActivity: serviceActivitySchema.default({}),
 };
 const serviceFileSchema = z.object({
-  ...serviceFields, type: z.enum(["exchange", "sharepoint", "teams"]),
+  ...serviceFields, type: z.enum(["exchange", "sharepoint", "teams", "onedrive"]),
 }).strict();
 export type ServiceFileConfig = z.infer<typeof serviceFileSchema>;
 const common = {
@@ -67,6 +74,14 @@ const serviceSchema = z.discriminatedUnion("type", [
     }).strict()).max(30),
   }).strict(),
   z.object({
+    ...common, type: z.literal("onedrive"),
+    targets: z.array(target.extend({
+      userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
+      driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
+      folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
+    }).strict()).max(30),
+  }).strict(),
+  z.object({
     ...common, type: z.literal("teams"),
     targets: z.array(target.extend({
       tenantId: probeSchema.shape.tenantId,
@@ -76,13 +91,24 @@ const serviceSchema = z.discriminatedUnion("type", [
       serviceUrl: probeSchema.shape.serviceUrl,
     }).strict()).max(30),
     callTargets: z.array(target.extend({
-      tenantId: z.string().uuid(), callUserId: z.string().uuid(),
+      tenantId: z.string().uuid(),
+      meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
+      organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
     }).strict()).max(30).default([]),
   }).strict(),
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
 
 function validateProviderSettings(service: ServiceFileConfig): void {
+  if (service.teamsCallQuality.enabled && service.type !== "teams") {
+    throw new ConfigurationError("teamsCallQuality is supported only for Teams");
+  }
+  if (service.teamsCallQuality.pollIntervalSeconds > service.teamsCallQuality.maxWaitSeconds) {
+    throw new ConfigurationError("teamsCallQuality polling interval must not exceed its collection budget");
+  }
+  if (service.type === "onedrive" && (service.serviceHealth || service.serviceActivity.enabled || service.providerClientId)) {
+    throw new ConfigurationError("OneDrive has no supported provider collector; serviceHealth and serviceActivity must remain disabled");
+  }
   if (service.executionLanes) {
     const names = service.executionLanes.map(lane => lane.name);
     const journeys = service.executionLanes.flatMap(lane => lane.journeys);
@@ -183,7 +209,9 @@ export function serviceSettings(
     BOT_AUTHENTICATION: service.botAuthentication,
     TEAMS_CALLING_CALLBACK_URL: service.teamsCallingCallbackUrl,
     TEAMS_CALLING_PORT: String(service.teamsCallingPort),
-    TEAMS_CALLING_WAIT_SECONDS: String(service.teamsCallingWaitSeconds),
+    TEAMS_CALLING_PLAYBACK_ENABLED: String(service.teamsCallingPlaybackEnabled),
+    TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: String(service.teamsCallingAnswerTimeoutSeconds),
+    TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS: String(service.teamsCallingPlaybackTimeoutSeconds),
     TEAMS_CLEANUP_ENABLED: String(service.teamsCleanupEnabled),
     EXCHANGE_CLEANUP_ENABLED: String(service.exchangeCleanupEnabled),
     SYNTHETIC_SCENARIO: service.scenario,

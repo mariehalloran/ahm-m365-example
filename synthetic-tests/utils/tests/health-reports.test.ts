@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { aggregateHealthReports, createHealthReporter, serviceHealthReport, serviceHealthIssuesReport, type HealthReporter, type CycleResults } from "../src/health-reports.js";
+import { aggregateHealthReports, callQualityReports, createHealthReporter, serviceHealthReport, serviceHealthIssuesReport, type HealthReporter, type CycleResults, type CallQualityCycle } from "../src/health-reports.js";
 import { readProjectConfig } from "../src/project-config.js";
 import { baseResult } from "../src/probes.js";
 import { runCycle } from "../src/runner.js";
@@ -24,6 +24,48 @@ const sample = (): SyntheticResult => ({
 const cycle = (results = [sample()]): CycleResults => ({ cycleId: "cycle-001", results });
 
 describe("single-cycle journey/action health aggregation", () => {
+  it("returns aggregated connection, playback and disconnection metrics on the call entity", () => {
+    const observedAt = "2026-10-26T16:00:00.000Z";
+    const call: SyntheticResult = {
+      ...baseResult({ id: "bot-target", type: "teams-call", cohort: "teams-global" }, Date.parse(observedAt)),
+      success: true, durationMs: 5000,
+      steps: [
+        { name: "place-call", status: "succeeded", durationMs: 500, observedAt },
+        { name: "wait-for-answer", status: "succeeded", durationMs: 1500, observedAt },
+        { name: "play-audio", status: "succeeded", durationMs: 2000, observedAt },
+        { name: "end-call", status: "succeeded", durationMs: 1000, observedAt },
+      ],
+    };
+    const failed: SyntheticResult = {
+      ...call, success: false, diagnosticCategory: "delivery-timeout",
+      steps: [
+        { name: "place-call", status: "succeeded", durationMs: 500, observedAt },
+        { name: "wait-for-answer", status: "failed", durationMs: 19500, diagnosticCategory: "delivery-timeout", observedAt },
+        { name: "play-audio", status: "skipped", reason: "prerequisite-failed", observedAt },
+        { name: "end-call", status: "succeeded", durationMs: 500, observedAt },
+      ],
+    };
+    const reports = aggregateHealthReports("teams", cycle([call, failed]), project.healthModel);
+    const measurement = (signal: string) => reports.find(report => report.body.signalName === signal)!;
+    expect(measurement("teams-call-connection-success-percentage").body).toMatchObject({ value: 50, healthState: "Unhealthy" });
+    expect(measurement("teams-call-mean-connection-duration").body.value).toBe(11000);
+    expect(measurement("teams-call-playback-success-percentage").body.value).toBe(100);
+    expect(measurement("teams-call-mean-playback-duration").body.value).toBe(2000);
+    expect(measurement("teams-call-mean-disconnection-duration").body.value).toBe(750);
+    expect(JSON.parse(measurement("teams-call-playback-success-percentage").body.additionalContext)).toMatchObject({
+      attempted: 1, succeeded: 1, skipped: 1, unit: "Percent", observedAt,
+    });
+    expect(reports.filter(report => report.body.signalName.startsWith("teams-call-")).every(report => report.entityName === "teams-call")).toBe(true);
+    expect(JSON.stringify(reports)).not.toContain("bot-target");
+  });
+  it("does not invent call measurements when no business action executed", () => {
+    const call = baseResult({ id: "bot-target", type: "teams-call", cohort: "teams-global" }, Date.now());
+    call.diagnosticCategory = "configuration-failure";
+    const reports = aggregateHealthReports("teams", cycle([call]), project.healthModel)
+      .filter(report => report.body.signalName.startsWith("teams-call-"));
+    expect(reports).toHaveLength(6);
+    expect(reports.every(report => report.body.value === undefined && report.body.healthState === "Unknown")).toBe(true);
+  });
   it("publishes only the observed lane without overwriting other journey entities", () => {
     const mail = aggregateHealthReports("exchange", cycle([sample()]), project.healthModel);
     expect(mail.every(report => report.entityName.startsWith("exchange-global"))).toBe(true);
@@ -90,6 +132,69 @@ describe("single-cycle journey/action health aggregation", () => {
 });
 
 describe("direct health reports", () => {
+  it("returns quality values on the same entity without inventing thresholds or overriding journey signals", () => {
+    const quality: CallQualityCycle = {
+      cycleId: "quality-cycle", collectedAt: "2026-10-26T16:01:00.000Z",
+      callQuality: [{
+        status: "available",
+        observation: {
+          callChainId: "11111111-1111-4111-8111-111111111111", version: 1,
+          startDateTime: "2026-10-26T16:00:00.000Z", endDateTime: "2026-10-26T16:00:10.000Z",
+          audioStreamCount: 2, codecs: ["opus"], streamDirections: ["callerToCallee"],
+          metrics: {
+            jitterMs: { value: 15, sampleCount: 2 },
+            packetLossPercent: { value: 2, sampleCount: 1 },
+          },
+        },
+      }],
+    };
+    const reports = callQualityReports(quality, project.healthModel);
+    expect(reports).toHaveLength(9);
+    expect(reports.every(report => report.entityName === "teams-call" && report.body.healthState === "Unknown")).toBe(true);
+    const jitter = reports.find(report => report.body.signalName === "teams-call-quality-jitter")!;
+    expect(jitter.body.value).toBe(15);
+    expect(jitter.body).not.toHaveProperty("evaluationRules");
+    expect(JSON.parse(jitter.body.additionalContext)).toMatchObject({
+      sampleCount: 2, complete: true, unit: "Milliseconds", availableCalls: 1,
+      observedThrough: "2026-10-26T16:00:10.000Z",
+    });
+    expect(reports.find(report => report.body.signalName === "teams-call-quality-round-trip-time")?.body).not.toHaveProperty("value");
+    const policy = {
+      ...project.healthModel,
+      callQualityThresholds: {
+        jitterMs: { degradedAbove: 10, unhealthyAbove: 20 },
+        packetLossPercent: { degradedAbove: 1, unhealthyAbove: 5 },
+      },
+    };
+    const evaluated = callQualityReports(quality, policy);
+    expect(evaluated.find(report => report.body.signalName === jitter.body.signalName)?.body.healthState).toBe("Degraded");
+    expect(evaluated.find(report => report.body.signalName === "teams-call-quality-packet-loss")?.body.healthState).toBe("Unknown");
+    const pending = callQualityReports({
+      ...quality, callQuality: [...quality.callQuality, { status: "pending" }],
+    }, policy);
+    expect(pending.every(report => report.body.healthState === "Unknown")).toBe(true);
+    expect(pending.some(report => report.body.signalName === "synthetic-success-percentage")).toBe(false);
+  });
+  it("publishes quality-only reports to the existing Teams entity through the ARM ingestion API", async () => {
+    const requests: { url: string; body: Record<string, unknown> }[] = [];
+    const teams = parseServiceConfig({ ...service, type: "teams", cohort: "teams-global", mode: "live" });
+    const reporter = createHealthReporter(project, teams, { emit: vi.fn() }, {}, {
+      credential: { getToken: async () => ({ token: "mock-token", expiresOnTimestamp: Date.now() + 60000 }) },
+      fetch: async (input, init) => {
+        requests.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+        return new Response(null, { status: 204 });
+      },
+    });
+    await reporter({
+      cycleId: "quality-cycle", collectedAt: new Date().toISOString(),
+      callQuality: [{ status: "pending", callChainId: "11111111-1111-4111-8111-111111111111" }],
+    });
+    expect(requests).toHaveLength(9);
+    expect(new Set(requests.map(request => request.url)).size).toBe(1);
+    expect(requests[0]?.url).toContain("/healthmodels/m365-experience-poc-teams/entities/teams-call/ingestHealthReport?");
+    expect(requests.every(request => String(request.body.signalName).startsWith("teams-call-quality-"))).toBe(true);
+    expect(requests.every(request => request.body.healthState === "Unknown" && !("value" in request.body))).toBe(true);
+  });
   it("uses no credentials/network in simulation and clearly previews rather than publishes", async () => {
     const output = { emit: vi.fn() };
     const credential = { getToken: vi.fn() };

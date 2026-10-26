@@ -5,6 +5,7 @@
     "m365CertificateSecretUri": "https://approved-vault.vault.azure.net/secrets/exchange-client-pem/approvedversion"
   },
   "teams": {},
+  "onedrive": {},
   "sharepoint": {
     "m365TenantId": "11111111-1111-4111-8111-111111111111",
     "m365ClientId": "55555555-5555-4555-8555-555555555555",

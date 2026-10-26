@@ -14,17 +14,17 @@ planned catalog** by default (`includePlannedJourneys=true`).
 See [Exchange's six core journeys](../synthetic-tests/exchange/README.md#journeys-and-scheduling),
 [Teams' five target families and narrower current coverage](../synthetic-tests/teams/README.md#target-catalog-versus-current-implementation),
 [SharePoint's five target families and supporting rename coverage](../synthetic-tests/sharepoint/README.md#target-catalog-versus-current-implementation),
-and [OneDrive's entirely planned catalog](../synthetic-tests/README.md#onedrive-target-catalog-planned).
-OneDrive has a planned-only model, not a worker, schedule or runtime configuration.
+and [OneDrive's roundtrip, app-folder persistence and versions](../synthetic-tests/onedrive/README.md).
+The checked-in root selects Exchange, Teams and OneDrive and disables SharePoint.
 Planned roots and business steps are labeled **[Planned / unimplemented]**, have no
 external or OTEL signals, and remain Unknown without fabricated reports. Their roots
-have suppressed impact; the planned-only OneDrive reference is also suppressed.
+have suppressed impact; references with no selected implemented journeys are also suppressed.
 Thus missing implementations cannot make existing synthetic experience rollups
 permanently Unknown. Suppression is not success or evidence of execution.
-The planned-only OneDrive native reference is deliberately not granted new Reader
-access by this deployment; it remains Unknown and suppressed. Its model and complete
-inventory exist, but native health retrieval is not an acceptance claim. Existing
-implemented model Reader assignments and Microsoft 365 permissions are unchanged.
+The OneDrive reference now uses the same scoped nested-model Reader assignment as
+other active services. Its worker's report-ingestion permission is separate from
+Microsoft 365 file permissions. Neither model existence nor Reader access proves
+live file operations or report ingestion.
 
 The [implemented catalog](./infra/service-catalog.bicep) remains shared with model
 selection; the [planned catalog](./infra/planned-catalog.bicep) is model-only metadata,
@@ -35,18 +35,18 @@ ARM deployment does not delete previously deployed planned entities.
 | Service | Implemented roots (existing IDs preserved) | Planned roots / variants |
 | --- | --- | --- |
 | Exchange | 6: mail, draft, attachment/reply, distribution list, recurring calendar, meeting invitation | 4: search/organize, external inbound variant, external outbound variant, OutlookWeb variant |
-| Teams | 3: publish, reply, signaling-only calls | 7: full two-bot conversation, answered audio, scheduled meeting, recipient file sharing, Adaptive Card, TeamsWeb messaging variant, TeamsWeb meeting variant |
-| SharePoint | 2: save/reopen, rename/reopen | 6: full metadata/nested-folder/enumeration/hash roundtrip, list-item lifecycle, recipient sharing, versions, search/indexing, browser-upload variant |
-| OneDrive | 0 | 6: user-drive roundtrip, app-folder lifecycle, recipient sharing, versions, search/retrieve, browser-file variant |
+| Teams | 3: publish, reply, two-bot meeting roster/playback/departure | 7: full two-bot conversation, bidirectional audio, full scheduled meeting, recipient file sharing, Adaptive Card, TeamsWeb messaging variant, TeamsWeb meeting variant |
+| SharePoint | 2 handlers retained, disabled in the checked-in selection | 6: metadata/nested-folder roundtrip, list-item lifecycle, recipient sharing, versions, search/indexing, browser-upload variant |
+| OneDrive | 3: selected-folder roundtrip, app-folder persistence, actual prior-version retrieval; optional downloaded-byte restore | 3 remaining: recipient sharing, search/retrieve, browser-file variant |
 
 The complete target families are separate from narrower implemented coverage:
-single-bot readback does not prove two-bot receipt; call signaling does not prove
-answered audio; exact-content readback does not claim the full folder/hash family.
+single-bot readback does not prove two-bot receipt; meeting roster and completed
+playback do not prove received audio; exact-content readback does not claim the full folder/hash family.
 Optional restore/check-in/out are variant steps within planned versions, not
 duplicate test suites. Authentication/cleanup are not modeled as business steps.
 
 Exchange mail runs every 60 seconds and its other five core journeys every 300;
-current Teams scenarios run every 120 and SharePoint every 300. Cadence/deadlines
+current Teams scenarios run every 120 and all three OneDrive lanes every 300. Cadence/deadlines
 belong to service-owned execution lanes; root config selects scenarios and targets.
 Execution timeouts are failed attempts reported Unhealthy; unexecuted dependent
 steps stay unobserved, not failed requests. Model existence is not live verification:
@@ -56,8 +56,9 @@ single-bot Graph readback and call signaling only; SharePoint awaits live target
 
 ## Structure
 
-The implemented subtree is shown below; the planned catalog above adds suppressed
-journey roots and a suppressed planned-only OneDrive reference.
+The service catalogs below include retained SharePoint coverage, disabled by
+default. The planned catalog adds suppressed journey roots. OneDrive is active
+only when explicitly selected, including in the checked-in simulation profile.
 
 ```text
 Root model: Microsoft 365 Experience
@@ -87,13 +88,21 @@ Root model: Microsoft 365 Experience
 |   |   +-- Post message
 |   |   +-- Post reply
 |   |   `-- Confirm reply
-|   +-- Call test users [teams-call entity]
-|   |   +-- Place individual call
-|   |   +-- Wait before hang-up
-|   |   `-- End call and confirm disconnected
+|   +-- Two-bot meeting audio [teams-call entity; call-test-user scenario ID retained]
+|   |   +-- Join as two independently authenticated bots
+|   |   +-- Verify both calls established
+|   |   +-- Verify both application identities in both rosters
+|   |   +-- Play primary test tone and authenticate completion
+|   |   `-- Leave both owned legs and confirm disconnected
 |   `-- Service Health [suppressed context entity]
 |
-`-- SharePoint Experience [references the SharePoint model]
++-- OneDrive Experience [references the OneDrive model]
+|   +-- User-drive roundtrip [onedrive-planned-user-drive-roundtrip]
+|   +-- App-folder persistence [onedrive-planned-app-folder-lifecycle]
+|   +-- Document versions [onedrive-planned-document-versions]
+|   `-- Service Health [suppressed; no supported collector/call children]
+|
+`-- SharePoint Experience [disabled; planned-only reference in the sample]
     +-- Save and reopen file [sharepoint-global entity]
     |   +-- Verify library
     |   +-- Upload file
@@ -108,16 +117,29 @@ Root model: Microsoft 365 Experience
 
 Token acquisition and generic cleanup still execute internally, but have **no published step results or standalone health signals**. Explicit draft/event deletion, meeting cancellation and call hang-up are business steps. Operational failures remain journey diagnostics; hiding internal steps does not remove credentials, cleanup, cancellation budgets, or failure handling.
 
-The service catalog contains six Exchange journeys, two SharePoint journeys and three Teams journeys, including signaling-only individual test-user calls. Exchange adds attachment/reply, explicit distribution-list delivery, recurring calendar and meeting invitation flows; its draft includes initial read and deletion. Each enabled scenario receives its own entity and child business steps without another service model or worker. Step IDs are journey-scoped (`<journey-entity>-<step>`), so reused actions never collide.
+The service catalog contains six Exchange journeys, two retained SharePoint journeys, three OneDrive journeys and three Teams journeys, including bounded two-bot meeting join/roster/Graph-confirmed prerecorded playback/departure. Exchange adds attachment/reply, explicit distribution-list delivery, recurring calendar and meeting invitation flows; its draft includes initial read and deletion. Each enabled scenario receives its own entity and child business steps without another service model or worker. Step IDs are journey-scoped (`<journey-entity>-<step>`), so reused actions never collide.
 
-The complete default catalog has **five models, 180 entities and 175 relationships**:
-34 journey roots (11 implemented, 23 planned) and 118 business-step entities
-(40 implemented, 78 planned), four native model references, three suppressed Service
-Health entities and sixteen provider-call children. Implemented-only selection has
-four models, 77 entities and 73 relationships. Service roots depend on journeys and
+The checked-in selection has **five models, 171 entities and 166 relationships**:
+32 journey roots (12 active, 20 planned) and 113 business-step entities
+(47 active, 66 planned), four native model references, three suppressed Service
+Health entities and fourteen provider-call children. Implemented-only selection has
+four models, 83 entities and 79 relationships. Service roots depend on journeys and
 context; journeys depend on business steps. Rollup uses `WorstOf` and
 `ignoreUnknown: false`, with planned roots suppressed. The `teams-call` journey
-retains `place-call`, `wait-before-hangup`, `end-call`; existing IDs are unchanged.
+retains `place-call`, `wait-for-answer`, `play-audio`, `end-call`, and adds
+`verify-participants`. The obsolete deployed `wait-before-hangup` child and its
+relationship need narrowly scoped operator removal after deployment; never delete
+the journey or whole model to migrate it.
+
+OneDrive promotes the existing `onedrive-planned-user-drive-roundtrip`,
+`onedrive-planned-app-folder-lifecycle`, and
+`onedrive-planned-document-versions` roots and their `step-1`…`step-4` children.
+The historical `-planned-` name does not determine impact or signals: active
+metadata gives normal rollup, UserFlow icons and External Reports. Semantic
+business-action names remain the OTEL query selectors. Model assembly filters
+planned duplicates of active IDs; older profiles without OneDrive retain all six
+suppressed planned roots, without enabling a worker. Search, recipient sharing and
+browser variants remain explicitly unimplemented.
 Target attempts aggregate into shared entities, not per-user signals.
 
 All 34 **journey roots**, implemented and planned, use the **User flow** icon
@@ -238,4 +260,4 @@ Offline tests cover scenario selection, multiple journey definitions, optional w
 
 Verify live business-action data, fresh direct reports and service/root rollup after deployment. Successful token acquisition is not mailbox access, API-backed tests are not employee login/UI tests, and Unhealthy configuration failures are not proof of a Microsoft outage.
 
-With all eleven journeys at default cadences (Exchange mail 60 seconds, other Exchange journeys 300 seconds), synthetic journey/step reports make about **48,096 ingestion calls/day before retries**, plus stable provider reports when enabled. Lane publication updates only observed journeys; an independent fast lane never sends empty/Unknown reports for slow-lane entities. Timeouts publish failed journey evidence; prerequisite-skipped action entities have no invented failure samples. No extra Container Apps are added. Calling adds service API traffic and a Teams-only authenticated public callback; it proves placement, configured dwell and disconnection, not ringing, device notification, employee sign-in or media quality. Review applicable pricing, report/API quotas and the [enterprise acceptance gate](../docs/operations.md#enterprise-reliability-acceptance-gate).
+With the twelve selected journeys at default cadences (Exchange mail 60 seconds, other Exchange/OneDrive journeys 300 seconds, Teams 120 seconds), synthetic journey/step reports make about **51,552 ingestion calls/day before retries**, plus supported provider reports when enabled. Lane publication updates only observed journeys; an independent fast lane never sends empty/Unknown reports for slow-lane entities. Timeouts publish failed journey evidence; prerequisite-skipped action entities have no invented failure samples. No extra Container Apps are added. Calling adds service API traffic and a Teams-only authenticated public callback; it proves placement, configured dwell and disconnection, not ringing, device notification, employee sign-in or media quality. Review applicable pricing, report/API quotas and the [enterprise acceptance gate](../docs/operations.md#enterprise-reliability-acceptance-gate).

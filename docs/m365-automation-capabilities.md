@@ -16,7 +16,7 @@ changes mailbox settings.
 | Workload | Implemented journeys | Authorization and boundaries |
 | --- | --- | --- |
 | Teams messaging | Publish/read back a channel message; publish a parent, reply and read back the reply | Verified live with retained bot-authored posts/replies and Healthy journey reports. The bot is installed in the team; a separate Entra readback application has only team-scoped `ChannelMessage.Read.Group` and uses managed-identity federation. Calls and Bot Connector keep the original bot identity; no runtime user MFA, secret or user-token cache is needed. |
-| Teams calling | Individually place calls to configured test accounts, wait briefly, then end and verify termination | `Calls.Initiate.All` has been approved. This does **not** prove that each recipient client rang, answered or carried usable media. The root config contains the permitted targets: a code/configuration allowlist, not an Entra-enforced per-user scope. See [deployment status](./deployment.md) for actual live results. |
+| Teams calling | Two distinct managed-identity bots join a dedicated meeting, verify both bot identities from both rosters, play the primary test tone, authenticate correlated operation completion, leave and verify both owned legs terminated | `Calls.JoinGroupCall.All` is separately approved on both bots. Root meeting metadata/peer IDs form a runtime allowlist, not an Entra-enforced per-meeting scope. No human answer/sign-in, direct app-to-app P2P, or received-audio proof. Source-tested; new topology live acceptance is pending. |
 | Exchange | Send mail to the test mailbox and verify delivery; create, edit and reopen a draft | Exchange RBAC for Applications grants `Application Mail.ReadWrite` and `Application Mail.Send` to one approved mailbox. Other mailboxes are not implicitly authorized. |
 
 The active trial retains mail, sent copies, drafts and Teams messages for
@@ -54,14 +54,13 @@ Sources: [conversation operations][teams-conversations],
 
 | Action family | Possible actions | Requirements / limitations |
 | --- | --- | --- |
-| Direct user calls | Initiate a one-to-one call to a Teams-enabled account; inspect signaling state; end the call | Calling-bot registration, HTTPS notifications and `Calls.Initiate.All`. Outbound signaling does not guarantee observable remote ringing. Neither create acceptance nor an `establishing` state proves that the recipient client rang. |
 | Group calls | Initiate a supported group call and invite participants | Appropriate group-calling application permission; not covered just by assuming the direct-call grant is sufficient. |
 | Incoming calls | Receive notifications and implement answering, rejecting, redirecting or other supported call control | Authenticated callback and the appropriate API/permissions. These handlers must be implemented explicitly. |
 | Call lifecycle | Observe state, list supported participant information and terminate the bot's call leg | API ownership/permissions and bounded failure cleanup. Ending the bot's leg in a meeting does not end the meeting for everyone. |
-| Scheduled-meeting participation | Join an existing dedicated meeting, inspect connection state and leave | Appropriate calling permission or supported meeting-chat RSC consent, exact meeting metadata and compatible lobby/organizer policies. Not a substitute for calling each test account. |
+| Scheduled-meeting participation | Join an existing dedicated meeting, inspect both call legs and participant rosters, play a service-hosted prompt and leave | Implemented for two explicit bots using `Calls.JoinGroupCall.All`, exact root meeting metadata and compatible lobby/organizer policies. Organizer ID is owner metadata, not a human target. Full bidirectional meeting experience remains planned. |
 | Service-hosted media operations | Use supported platform-hosted prompts, tones and related call operations | Microsoft hosts the media. Each operation has its own API constraints; this does not provide arbitrary microphone/speaker validation. |
 | Custom audio/video processing | Receive/process media streams, implement specialized audio/video applications | Additional `Calls.AccessMedia.All` and Microsoft's supported application-hosted media stack/hosting requirements. The current Linux Container Apps worker is not an application-hosted media implementation. |
-| Meeting creation/updates | Create or modify an online-meeting resource for an approved organizer | Separate `OnlineMeetings.*` authorization; app-only organizer access can require a Teams application access policy. Not needed for the current direct-call placement check. |
+| Meeting creation/updates | Create or modify an online-meeting resource for an approved organizer | Separate `OnlineMeetings.*` authorization; app-only organizer access can require a Teams application access policy. Not needed by the join-only runtime; an operator supplies approved meeting metadata separately. |
 | Calendar invitations | Create/update an Outlook calendar event with Teams meeting information, invite attendees and track responses | Exchange/Graph calendar permissions; distinct from merely creating an `onlineMeeting` object. |
 | Attendance/artifacts | Retrieve supported attendance reports, transcripts and recordings | Separate artifact-specific permissions, applicable policies, meeting eligibility and licensing. The artifact must actually exist; reading it does not create it. |
 | Meeting apps/interactions | Implement meeting-side panels, cards and supported participant interactions | Additional Teams app capabilities/handlers, installation and applicable meeting-scoped permissions. |
@@ -72,9 +71,9 @@ Sources: [conversation operations][teams-conversations],
   toast, audible ringtone, employee sign-in, answer or audio/video quality.
 - A bot cannot silently answer a call *as the test user*. App-only operation
   does not turn it into that person's Teams session.
-- `Calls.Initiate.All` is tenant-wide. The documented online-meeting
-  application access policy must **not** be presented as a proven way to
-  scope which recipients this calling permission can ring.
+- `Calls.JoinGroupCall.All` is not a native per-meeting scope. Root metadata
+  allowlisting does not narrow the Entra grant; no online-meeting application
+  access policy is claimed to enforce that boundary.
 - The Graph calling API documents calling registration and application
   permissions separately from Bot Connector's proactive-message installation
   requirement. Do not assume those two capabilities have identical prerequisites.

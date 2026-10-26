@@ -1,10 +1,15 @@
 # Deploy the service workers
 
 Deploy the [health models](../../health-model/README.md#apply-and-migrate) first.
-This template hosts Exchange, Teams and SharePoint in **separate Azure Container
+This template hosts selected Exchange, Teams, SharePoint and OneDrive services in **separate Azure Container
 Apps**, using one private image, independent service configurations and separate
 user-assigned managed identities (UAMIs). Only selected live Teams calling enables
-public HTTPS ingress; Exchange, SharePoint and messaging-only Teams stay private.
+public HTTPS ingress; Exchange, SharePoint, OneDrive and messaging-only Teams stay private.
+The checked-in root selects Exchange/Teams/OneDrive and disables SharePoint.
+OneDrive reuses the environment/registry and receives its own
+`uami-<healthModel.name>-onedrive`, worker and ingest-only service-model assignment.
+It adds no bot, user sign-in, storage account, provider collector or M365 grants.
+See the [OneDrive setup and exact permission boundary](../onedrive/README.md).
 
 The foundation creates the registry, environment, identities and narrowly scoped
 image-pull/report-ingestion roles. It creates no Microsoft 365 resources, bot
@@ -29,6 +34,16 @@ settings in Bicep. Generated parameters contain target/access metadata, never
 private keys or user tokens. Keep private configurations and parameters out of Git.
 Foundation preparation leaves `deployWorkers: false`. Deploying live worker
 profiles additionally requires `--enable-live`; `mode: live` alone is insufficient.
+
+For selected live Teams meeting calling, `--access-config` must provide
+`teams.botPeerClientId` and `teams.botPeerManagedIdentityResourceId` for the
+**existing approved** peer UAMI. All root meeting `peerBotClientId` values must
+match. The worker template attaches that identity alongside the unchanged primary
+reporting/image-pull UAMI and supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams,
+simulation and calling-disabled workers receive neither. It creates no peer,
+Azure Bot or Graph grants. Both bots require separately approved
+`Calls.JoinGroupCall.All` and the same `/api/calls` callback, on existing port8080
+with one replica. See [meeting setup](../teams/README.md#two-bot-meeting-audio-setup).
 
 Checked-in profiles remain safe simulations. An approved live profile attempts
 real authentication/operations: incomplete setup produces observed Unhealthy
@@ -62,7 +77,7 @@ Build from the self-contained Node project:
 docker build --platform linux/amd64 --pull -t m365-synthetic:<unique-version> synthetic-tests
 ```
 
-Before publishing, smoke-test all three entries with `--once`, mounted simulation
+Before publishing, smoke-test all selected entries with `--once`, mounted simulation
 root/service files and networking disabled. This verifies packaging, not live
 access. The non-root runtime image contains production dependencies and compiled
 code, not private configurations or credentials.
@@ -78,9 +93,23 @@ npm --prefix synthetic-tests run deployment:prepare -- \
 ```
 
 Preview and apply the same shared template with `workers.parameters.json`.
+For an existing approved foundation, pass `--parameters @workers.parameters.json
+reuseExistingFoundation=true` to both preview and apply. This leaves the existing
+registry/environment configuration untouched while updating workers and scoped
+identity/report assignments; first deployment keeps the default `false`.
 Regenerate parameters from the active root profile for every rollout; use an
 immutable digest and verify the actual ready revision, image and configuration.
 Do not silently substitute another deployment profile.
+
+### Excluding a previously deployed service
+
+An incremental deployment does not delete or stop an app omitted by the root
+selection. After an approved service removal, explicitly deactivate that owned
+app's active revisions with `az containerapp revision deactivate`, then verify
+there are no active revisions or running replicas. Do not delete unrelated apps
+or use complete deployment mode on the shared resource group. The model deploy
+suppresses a service reference with no selected implemented journeys, so retained
+excluded-service entities cannot affect root rollup.
 
 ## Separate M365 and Azure credentials
 
@@ -171,16 +200,18 @@ retire them only through approved cleanup.
   cross-cycle journey history or durable outbox.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
-rollup, not just successful ARM provisioning. The complete topology is four models,
-61 entities, 57 relationships, eleven journeys and 40 business steps. Provider context
+rollup, not just successful ARM provisioning. The checked-in root selects twelve
+active journeys and 47 active business steps; including suppressed planned
+coverage yields five models, 171 entities and 166 relationships. Provider context
 is separate and impact-suppressed. Invalid schemas or unusable report credentials
 can prevent publication and require independent detection.
 
-Each container also runs an independent provider lane (`providerIntervalSeconds`,
+Supported Exchange/Teams/SharePoint collectors also run an independent provider lane (`providerIntervalSeconds`,
 default 300), with no second worker/container. Explicit beta preparation uses
 `--enable-beta-service-activity` to mount `ENABLE_BETA_SERVICE_ACTIVITY=true`;
 service config still owns beta enablement/functions/thresholds. See the
 [direct provider report setup](../../docs/provider-monitoring.md).
+OneDrive has no verified provider mapping and rejects provider collection.
 
 Production acceptance additionally requires [worker-stall, publication-failure and
 end-to-end notification checks](../../docs/operations.md#enterprise-reliability-acceptance-gate).

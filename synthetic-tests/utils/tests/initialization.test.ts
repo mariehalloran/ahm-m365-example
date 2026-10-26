@@ -30,7 +30,8 @@ const project = () => ({
       ...structuredClone(checkedIn.services.teams), targets: [{ id: "teams-probe-001" }],
       scenarios: { "publish-channel-message": true, "reply-channel-message": false, "call-test-user": false },
     },
-    sharepoint: { ...structuredClone(checkedIn.services.sharepoint), scenarios: { "save-reopen-file": true, "rename-reopen-file": false } },
+    sharepoint: { ...structuredClone(checkedIn.services.sharepoint), enabled: true, scenarios: { "save-reopen-file": true, "rename-reopen-file": false } },
+    onedrive: structuredClone(checkedIn.services.onedrive),
   },
 });
 const env = { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222" };

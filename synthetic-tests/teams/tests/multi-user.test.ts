@@ -38,6 +38,7 @@ const policy = {
   name: "test-model", subscriptionId: "44444444-4444-4444-8444-444444444444", resourceGroup: "test-rg",
   reportTtlMinutes: 15, successDegradedPercent: 99, successUnhealthyPercent: 95,
   latencyDegradedMilliseconds: 15000, latencyUnhealthyMilliseconds: 60000,
+  callQualityThresholds: {},
 };
 
 afterEach(() => {

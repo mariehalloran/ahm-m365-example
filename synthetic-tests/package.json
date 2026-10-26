@@ -15,6 +15,7 @@
     "teams": "tsx teams/src/worker.ts",
     "teams:bootstrap": "tsx teams/src/bootstrap.ts",
     "sharepoint": "tsx sharepoint/src/worker.ts",
+    "onedrive": "tsx onedrive/src/worker.ts",
     "deployment:prepare": "tsx utils/src/prepare-deployment.ts"
   },
   "dependencies": {

@@ -50,7 +50,10 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
   tags: tags
   identity: {
     type: 'UserAssigned'
-    userAssignedIdentities: { '${identityResourceId}': {} }
+    userAssignedIdentities: union(
+      { '${identityResourceId}': {} },
+      useTeamsCalling ? { '${serviceAccess.botPeerManagedIdentityResourceId}': {} } : {}
+    )
   }
   properties: {
     environmentId: environmentId
@@ -109,6 +112,9 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
             ] : [],
             useBotCertificate ? [
               { name: 'BOT_CLIENT_CERTIFICATE_PATH', value: '/etc/credentials/bot.pem' }
+            ] : [],
+            useTeamsCalling ? [
+              { name: 'TEAMS_CALLING_PEER_CLIENT_ID', value: serviceAccess.botPeerClientId }
             ] : [],
             useTeamsUser ? [
               { name: 'TEAMS_PUBLIC_CLIENT_ID', value: serviceAccess.teamsPublicClientId }

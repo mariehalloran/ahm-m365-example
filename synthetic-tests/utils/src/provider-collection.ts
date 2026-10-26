@@ -61,9 +61,14 @@ export async function collectProviderSources(
   context: ProviderCollectionContext, sources: readonly ProviderSourceDefinition[],
 ): Promise<ProviderCollectionSummary> {
   const summary: ProviderCollectionSummary = { configured: sources.length, succeeded: 0, failed: 0, skipped: 0, records: 0 };
+  const service = context.service.type;
+  if (service === "onedrive") {
+    if (sources.length) throw new IntegrationError("configuration-failure");
+    return summary;
+  }
   const now = context.now ?? Date.now;
   await Promise.all(sources.map(async definition => {
-    const base = { service: context.service.type, source: definition.source, apiVersion: definition.apiVersion };
+    const base = { service, source: definition.source, apiVersion: definition.apiVersion };
     if (context.service.mode === "simulation") {
       context.results.recordDiagnostic({ ...base, kind: "skipped", reason: "simulation", collectedAt: new Date(now()).toISOString() });
       summary.skipped++;

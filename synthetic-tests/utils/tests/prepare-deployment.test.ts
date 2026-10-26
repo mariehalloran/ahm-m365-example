@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,8 +15,9 @@ beforeEach(async () => {
   projectFile = join(directory, "monitoring.json");
   await mkdir(join(directory, "profiles"));
   const project = structuredClone(checkedIn);
+  project.services.teams.scenarios["call-test-user"] = false;
   project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
-  for (const type of ["exchange", "teams", "sharepoint"] as const) {
+  for (const type of ["exchange", "teams", "sharepoint", "onedrive"] as const) {
     project.services[type].configFile = `profiles/${type}.json`;
     await writeFile(join(directory, project.services[type].configFile), JSON.stringify(await readServiceConfig(`${type}/config.json`)));
   }
@@ -25,6 +26,67 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe("deployment parameter preparation", () => {
+  const peer = {
+    botPeerClientId: checkedIn.services.teams.callTargets[0]!.peerBotClientId,
+    botPeerManagedIdentityResourceId: "/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/approved/providers/Microsoft.ManagedIdentity/userAssignedIdentities/teams-peer",
+  };
+  async function callingProfile() {
+    const project = JSON.parse(await readFile(projectFile, "utf8"));
+    project.services.teams.scenarios["call-test-user"] = true;
+    await writeFile(projectFile, JSON.stringify(project));
+    await writeFile(join(directory, "profiles/teams.json"), JSON.stringify({
+      ...await readServiceConfig("teams/config.live.example.json"),
+      teamsCallingPlaybackEnabled: true, teamsCallingCallbackUrl: "https://approved.example.invalid/api/calls",
+    }));
+    return project;
+  }
+  it("packages only approved existing peer MI metadata with the selected live meeting profile", async () => {
+    await callingProfile();
+    await expect(prepareDeploymentParameters(projectFile, "image:test", true)).rejects.toThrow("existing approved peer UAMI");
+    const accessFile = join(directory, "peer.json");
+    await writeFile(accessFile, JSON.stringify({ teams: peer }));
+    const prepared = await prepareDeploymentParameters(projectFile, "image:test", true, accessFile);
+    expect(prepared.parameters.serviceAccess.value).toEqual({ teams: peer });
+    expect(prepared.parameters.projectConfig.value.services.teams.callTargets[0]?.peerBotClientId).toBe(peer.botPeerClientId);
+    expect(prepared.parameters.serviceConfigs.value.teams).not.toHaveProperty("botPeerClientId");
+  });
+  it.each([
+    { botPeerClientId: peer.botPeerClientId },
+    { botPeerManagedIdentityResourceId: peer.botPeerManagedIdentityResourceId },
+    { ...peer, botPeerClientId: "77777777-7777-4777-8777-777777777777" },
+    { ...peer, botPeerManagedIdentityResourceId: "/not-an-identity" },
+  ])("rejects incomplete, invalid or non-allowlisted peer access %j", async metadata => {
+    await callingProfile();
+    const accessFile = join(directory, "peer.json");
+    await writeFile(accessFile, JSON.stringify({ teams: metadata }));
+    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow();
+  });
+  it.each(["exchange", "teams", "sharepoint", "onedrive"])("never attaches a peer for disabled/non-Teams calling: %s", async type => {
+    const accessFile = join(directory, "peer.json");
+    await writeFile(accessFile, JSON.stringify({ [type]: peer }));
+    await expect(prepareDeploymentParameters(projectFile, "image:test", true, accessFile)).rejects.toThrow("enabled live Teams meeting calls only");
+  });
+  it("packages an independently hosted live OneDrive MI worker with root-owned accounts and selected-folder bindings", async () => {
+    const onedrive = await readServiceConfig("onedrive/config.live.example.json");
+    await writeFile(join(directory, "profiles/onedrive.json"), JSON.stringify(onedrive));
+    await expect(prepareDeploymentParameters(projectFile, "image:test")).rejects.toThrow("--enable-live");
+    const prepared = await prepareDeploymentParameters(projectFile, "image:test", true);
+    expect(prepared.parameters.serviceConfigs.value.onedrive).toMatchObject({
+      type: "onedrive", mode: "live", graphAuthentication: "managed-identity", serviceHealth: false,
+    });
+    expect(prepared.parameters.serviceConfigs.value.onedrive).not.toHaveProperty("targets");
+    expect(prepared.parameters.projectConfig.value.services.onedrive.targets).toHaveLength(2);
+    expect(prepared.parameters.projectConfig.value.services.sharepoint.enabled).toBe(false);
+    expect(prepared.parameters.serviceAccess.value).toEqual({});
+  });
+  it("keeps legacy private profiles without OneDrive disabled and prepares them without new private service files", async () => {
+    const project = JSON.parse(await readFile(projectFile, "utf8"));
+    delete project.services.onedrive;
+    await writeFile(projectFile, JSON.stringify(project));
+    const prepared = await prepareDeploymentParameters(projectFile, "image:test");
+    expect(prepared.parameters.projectConfig.value.services.onedrive).toMatchObject({ enabled: false, targets: [] });
+    expect(prepared.parameters.serviceConfigs.value.onedrive).toMatchObject({ type: "onedrive", mode: "simulation" });
+  });
   it("requires explicit beta deployment approval and preserves the provider cadence/functions/thresholds", async () => {
     await writeFile(join(directory, "profiles/exchange.json"), JSON.stringify({
       ...await readServiceConfig("exchange/config.json"), providerIntervalSeconds: 300,

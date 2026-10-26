@@ -46,6 +46,38 @@ function sample(): SyntheticResult {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("optional OTEL observation contract", () => {
+  it("exports call-phase samples and quality snapshots without target dimensions or synthetic double-counting", async () => {
+    const sinks = exporters();
+    const telemetry = createResultTelemetry(sinks, output());
+    try {
+      const result = await simulate({ id: "bot-target", type: "teams-call", cohort: "teams-global" }, {
+        config: { SYNTHETIC_SCENARIO: "healthy", PROBE_TIMEOUT_MS: 45000, POLL_INTERVAL_MS: 100 },
+        signal: new AbortController().signal, telemetry: output(), now: () => Date.parse(stamp),
+      });
+      telemetry.record(result, "live");
+      telemetry.recordCallQuality?.({
+        cycleId: "quality-cycle", collectedAt: stamp,
+        callQuality: [{
+          status: "available", observation: {
+            callChainId: "11111111-1111-4111-8111-111111111111", version: 1,
+            startDateTime: stamp, endDateTime: stamp, audioStreamCount: 1,
+            codecs: ["opus"], streamDirections: ["callerToCallee"],
+            metrics: { jitterMs: { value: 12, sampleCount: 1 } },
+          },
+        }],
+      });
+      await telemetry.forceFlush();
+      const metrics = sinks.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
+      expect(metrics.find(metric => metric.descriptor.name === "teams.call.connection.success")?.dataPoints[0]?.value).toMatchObject({ count: 1, sum: 1 });
+      expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value).toMatchObject({ count: 1, sum: 1 });
+      const jitter = metrics.find(metric => metric.descriptor.name === "teams.call.quality.jitterMs");
+      expect(jitter?.descriptor.unit).toBe("ms");
+      expect(jitter?.dataPoints[0]?.value).toBe(12);
+      expect(metrics.some(metric => metric.descriptor.name === "teams.call.quality.packetLossPercent")).toBe(false);
+      expect(JSON.stringify(metrics)).not.toMatch(/bot-target|probe\.id|callChainId/);
+      expect(sinks.logs.getFinishedLogRecords().filter(record => record.body === "teams-call-quality")).toHaveLength(1);
+    } finally { await telemetry.shutdown(); }
+  });
   it.each(testTypes)("exports %s with explicit mode and journey attribution", async type => {
     const sinks = exporters();
     const telemetry = createResultTelemetry(sinks, output());

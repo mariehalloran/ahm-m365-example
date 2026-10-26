@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConfigurationError } from "./config.js";
 import { applyProjectConfig, readProjectConfig, type ProjectConfig } from "./project-config.js";
-import { readServiceConfig, type ServiceConfig } from "./service-config.js";
+import { readServiceConfig, type ServiceConfig, type ServiceFileConfig } from "./service-config.js";
 
 const certificateSecretUri = z.string().regex(
   /^https:\/\/[a-zA-Z0-9-]+\.vault\.azure\.net\/secrets\/[a-zA-Z0-9-]+(?:\/[a-zA-Z0-9]+)?$/,
@@ -19,11 +19,16 @@ const applicationAccess = z.object({
   botClientId: z.string().uuid().optional(),
   botCertificateSecretUri: certificateSecretUri.optional(),
   teamsPublicClientId: z.string().uuid().optional(),
+  botPeerClientId: z.string().uuid().optional(),
+  botPeerManagedIdentityResourceId: z.string().regex(
+    /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/resourceGroups\/[a-z0-9_().-]{1,90}\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[a-z0-9_-]{3,128}$/i,
+  ).optional(),
 }).strict();
 const serviceAccessSchema = z.object({
   exchange: applicationAccess.optional(),
   teams: applicationAccess.optional(),
   sharepoint: applicationAccess.optional(),
+  onedrive: applicationAccess.optional(),
 }).strict();
 
 async function readServiceAccess(file?: string): Promise<z.infer<typeof serviceAccessSchema>> {
@@ -42,7 +47,14 @@ async function readServiceAccess(file?: string): Promise<z.infer<typeof serviceA
 }
 
 async function readDeploymentService(project: ProjectConfig, type: ServiceConfig["type"], projectFile: string) {
-  const service = await readServiceConfig(resolve(dirname(projectFile), project.services[type].configFile));
+  let service: ServiceFileConfig;
+  try { service = await readServiceConfig(resolve(dirname(projectFile), project.services[type].configFile)); }
+  catch (error) {
+    if (type !== "onedrive" || project.services.onedrive.enabled ||
+        project.services.onedrive.configFile !== "synthetic-tests/onedrive/config.json" ||
+        !(error instanceof ConfigurationError) || error.message !== "Cannot read the service config file") throw error;
+    service = await readServiceConfig(fileURLToPath(new URL("../../onedrive/config.json", import.meta.url)));
+  }
   if (service.type !== type) throw new ConfigurationError(`Deployment requires a ${type} service config`);
   applyProjectConfig(project, service);
   return service;
@@ -58,15 +70,32 @@ export async function prepareDeploymentParameters(
   if (workerImage !== undefined && workerImage.trim().length === 0) {
     throw new ConfigurationError("workerImage must be a nonempty image reference");
   }
-  const [exchange, teams, sharepoint] = await Promise.all([
+  const [exchange, teams, sharepoint, onedrive] = await Promise.all([
     readDeploymentService(project, "exchange", projectFile),
     readDeploymentService(project, "teams", projectFile),
     readDeploymentService(project, "sharepoint", projectFile),
+    readDeploymentService(project, "onedrive", projectFile),
   ]);
   const serviceAccess = await readServiceAccess(accessFile);
-  for (const service of [exchange, teams, sharepoint]) {
+  for (const service of [exchange, teams, sharepoint, onedrive]) {
     const teamsMessages = project.services.teams.scenarios["publish-channel-message"] || project.services.teams.scenarios["reply-channel-message"];
     const access = serviceAccess[service.type];
+    const calling = service.type === "teams" && applyProjectConfig(project, service).enabled &&
+      service.mode === "live" && project.services.teams.scenarios["call-test-user"];
+    const hasPeer = access?.botPeerClientId || access?.botPeerManagedIdentityResourceId;
+    if (hasPeer && (!calling || !access?.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
+      throw new ConfigurationError("Peer access requires both botPeerClientId and botPeerManagedIdentityResourceId for enabled live Teams meeting calls only");
+    }
+    if (calling && (service.botAuthentication !== "managed-identity" || service.teamsCallingPort !== 8080)) {
+      throw new ConfigurationError("Hosted meeting calls require managed-identity bot authentication and port 8080");
+    }
+    if (calling && workerImage && !hasPeer) {
+      throw new ConfigurationError("Hosted meeting calls require serviceAccess.teams botPeerClientId and botPeerManagedIdentityResourceId for the existing approved peer UAMI");
+    }
+    if (hasPeer && project.services.teams.callTargets.some(target =>
+      target.peerBotClientId.toLowerCase() !== access!.botPeerClientId!.toLowerCase())) {
+      throw new ConfigurationError("Root callTargets peerBotClientId must match serviceAccess.teams.botPeerClientId");
+    }
     if (access?.teamsPublicClientId && (service.type !== "teams" || service.teamsAuthentication !== "user-delegated")) {
       throw new ConfigurationError("teamsPublicClientId requires Teams user-delegated authentication");
     }
@@ -128,11 +157,11 @@ export async function prepareDeploymentParameters(
       }
     }
   }
-  if (workerImage && !enableLiveProbes && [exchange, teams, sharepoint].some(service =>
+  if (workerImage && !enableLiveProbes && [exchange, teams, sharepoint, onedrive].some(service =>
     applyProjectConfig(project, service).enabled && service.mode === "live")) {
     throw new ConfigurationError("Deploying live worker profiles requires explicit --enable-live");
   }
-  if (workerImage && !enableBetaServiceActivity && [exchange, teams, sharepoint].some(service =>
+  if (workerImage && !enableBetaServiceActivity && [exchange, teams, sharepoint, onedrive].some(service =>
     applyProjectConfig(project, service).enabled && service.serviceActivity.enabled)) {
     throw new ConfigurationError("Deploying beta provider collection requires explicit --enable-beta-service-activity");
   }
@@ -141,7 +170,7 @@ export async function prepareDeploymentParameters(
     contentVersion: "1.0.0.0",
     parameters: {
       projectConfig: { value: project },
-      serviceConfigs: { value: { exchange, teams, sharepoint } },
+      serviceConfigs: { value: { exchange, teams, sharepoint, onedrive } },
       serviceAccess: { value: serviceAccess },
       deployWorkers: { value: workerImage !== undefined },
       workerImage: { value: workerImage ?? "" },

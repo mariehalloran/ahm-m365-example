@@ -8,6 +8,8 @@ import {
 import { probeServices, reportedResult, resultSchema, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { providerLog } from "./provider-diagnostics.js";
 import { outcomeOf, type ExecutionMode, type ResultOutput } from "./results.js";
+import { callQualityMeasurements, callQualitySignals } from "./health-reports.js";
+import { callQualityMetricNames } from "./teams-call-quality.js";
 
 export interface ResultTelemetry extends ResultOutput {
   forceFlush(): Promise<void>;
@@ -143,6 +145,20 @@ export function createResultTelemetry(
     uploadDurationMs: meter.createHistogram("sharepoint.file.upload.duration", { unit: "s" }),
     readDurationMs: meter.createHistogram("sharepoint.file.read.duration", { unit: "s" }),
   };
+  const callPhases = [
+    { name: "connection", step: "wait-for-answer" },
+    { name: "playback", step: "play-audio" },
+    { name: "disconnection", step: "end-call" },
+  ].map(phase => ({
+    ...phase,
+    success: meter.createHistogram(`teams.call.${phase.name}.success`, { unit: "1" }),
+    duration: meter.createHistogram(`teams.call.${phase.name}.duration`, { unit: "s" }),
+  }));
+  const qualityInstruments = Object.fromEntries(callQualityMetricNames.map(metric => [metric,
+    meter.createGauge(`teams.call.quality.${metric}`, {
+      unit: callQualitySignals[metric].unit === "Milliseconds" ? "ms" : callQualitySignals[metric].unit === "Percent" ? "%" : "1",
+    }),
+  ]));
 
   const lifecycle = async (operation: () => Promise<unknown>) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -158,6 +174,19 @@ export function createResultTelemetry(
     if (failed) { failed = false; throw new TelemetryExportError(); }
   };
   return {
+    recordCallQuality(cycle) {
+      if (closed) throw new TelemetryExportError();
+      for (const measurement of callQualityMeasurements(cycle)) {
+        if (measurement.value !== undefined) qualityInstruments[measurement.metric]!.record(measurement.value, {
+          "probe.service": "teams", "probe.journey": "call-test-user", "probe.mode": "live",
+          "quality.complete": measurement.complete,
+        });
+      }
+      logger.emit({
+        body: "teams-call-quality", timestamp: new Date(cycle.collectedAt),
+        attributes: { "quality.cycle_id": cycle.cycleId, "quality.details": JSON.stringify(cycle) },
+      });
+    },
     recordDiagnostic(record) {
       if (closed) throw new TelemetryExportError();
       logger.emit(providerLog(record));
@@ -174,6 +203,16 @@ export function createResultTelemetry(
       };
       success.record(result.success ? 1 : 0, dimensions);
       duration.record(result.durationMs / 1000, dimensions);
+      if (result.testType === "teams-call") {
+        for (const phase of callPhases) {
+          const step = result.steps.find(step => step.name === phase.step);
+          if (!step || step.status === "skipped") continue;
+          const placed = result.steps.find(step => step.name === "place-call");
+          const submissionMs = phase.name === "connection" && placed && placed.status !== "skipped" ? placed.durationMs : 0;
+          phase.success.record(step.status === "succeeded" ? 1 : 0, dimensions);
+          phase.duration.record((step.durationMs + submissionMs) / 1000, dimensions);
+        }
+      }
       for (const [field, instrument] of Object.entries(phaseDurations)) {
         const value = result[field as keyof typeof phaseDurations];
         if (value !== undefined) instrument.record(value / 1000, dimensions);
@@ -200,7 +239,10 @@ export function createResultTelemetry(
           },
         });
       }
-      logger.emit({ body: "synthetic-result", timestamp: new Date(result.observedAt), attributes });
+      logger.emit({
+        body: "synthetic-result", timestamp: new Date(result.observedAt),
+        attributes: { ...attributes, ...(result.call ? { "probe.call_evidence": JSON.stringify(result.call) } : {}) },
+      });
     },
     async forceFlush() {
       if (closed) throw new TelemetryExportError();

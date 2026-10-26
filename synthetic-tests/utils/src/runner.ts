@@ -3,6 +3,7 @@ import type { Config } from "./config.js";
 import { resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
 import type { TeamsJourneyClient } from "./teams.js";
+import type { TeamsCallOperations } from "./teams-call-operations.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
 import type { ResultOutput } from "./results.js";
@@ -18,11 +19,14 @@ export interface RunnerDependencies {
   graph?: GraphClient;
   teamsBot?: TeamsJourneyClient;
   teamsCalling?: GraphClient;
+  teamsCallingPeer?: GraphClient;
+  teamsCallOperations?: TeamsCallOperations;
   shutdown?: () => Promise<void>;
   clientsForProbe?: (probe: Probe) => { graph: GraphClient; teamsBot: TeamsJourneyClient };
   handler?: ProbeHandler;
   now?: () => number;
   reportHealth?: HealthReporter;
+  reportCallQuality?: (cycle: CycleResults, signal: AbortSignal) => Promise<void>;
 }
 
 interface CycleContext {
@@ -94,6 +98,8 @@ async function runSingleProbe(
         ...(dependencies.graph ? { graph: dependencies.graph } : {}),
         ...(dependencies.teamsBot ? { teamsBot: dependencies.teamsBot } : {}),
         ...(dependencies.teamsCalling ? { teamsCalling: dependencies.teamsCalling } : {}),
+        ...(dependencies.teamsCallingPeer ? { teamsCallingPeer: dependencies.teamsCallingPeer } : {}),
+        ...(dependencies.teamsCallOperations ? { teamsCallOperations: dependencies.teamsCallOperations } : {}),
         ...(dependencies.clientsForProbe && probe.type !== "teams-call" ? dependencies.clientsForProbe(probe) : {}),
       }),
       deadline.promise,
@@ -222,6 +228,10 @@ export async function runCycle(
 
     stage = "reporting";
     await publishCycleResults(config, dependencies, { cycleId, results }, telemetryErrors);
+    if (config.EXECUTION_MODE === "live" && results.length === config.probes.length) {
+      stage = "call-quality";
+      await dependencies.reportCallQuality?.({ cycleId, results }, cycleSignal);
+    }
     telemetry.emit("service-execution-completed", {
       cycleId,
       probeCount: results.length,

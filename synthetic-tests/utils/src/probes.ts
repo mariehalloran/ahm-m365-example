@@ -3,6 +3,7 @@ import { probeServices, type Probe, type Scenario, type StepName, type Synthetic
 import type { GraphClient } from "./graph.js";
 import type { TeamsJourneyClient } from "./teams.js";
 import { IntegrationError } from "./http.js";
+import type { TeamsCallOperations } from "./teams-call-operations.js";
 
 export interface ProbeContext {
   config: {
@@ -12,12 +13,18 @@ export interface ProbeContext {
     TEAMS_CLEANUP_ENABLED?: "true" | "false";
     EXCHANGE_CLEANUP_ENABLED?: "true" | "false";
     TEAMS_CALLING_CALLBACK_URL?: string | undefined;
-    TEAMS_CALLING_WAIT_SECONDS?: number;
+    TEAMS_CALLING_PLAYBACK_ENABLED?: "true" | "false";
+    TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS?: number;
+    TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS?: number;
+    BOT_CLIENT_ID?: string | undefined;
+    TEAMS_CALLING_PEER_CLIENT_ID?: string | undefined;
   };
   signal: AbortSignal;
   graph?: GraphClient;
   teamsBot?: TeamsJourneyClient;
   teamsCalling?: GraphClient;
+  teamsCallingPeer?: GraphClient;
+  teamsCallOperations?: TeamsCallOperations;
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -59,7 +66,7 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
   result.durationMs = scenario === "slow" ? 30000 : scenario === "timeout" ? 65000 : 3200;
   result.diagnosticCategory = scenario === "failed"
-    ? metadata.service === "sharepoint" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
+    ? ["sharepoint", "onedrive"].includes(metadata.service) || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
     : scenario === "timeout" ? "delivery-timeout" : null;
   result.diagnosticContext.testStage = "simulated";
   if (!retainArtifacts) result.diagnosticContext.cleanupSucceeded = true;
@@ -73,14 +80,16 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
     "teams-channel-message": "post-message", "teams-channel-reply": "post-reply",
     "teams-call": "place-call",
     "sharepoint-file": "read-file", "sharepoint-rename": "rename-file",
+    "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
     "exchange-attachment-reply": "confirm-reply-mail", "exchange-distribution-list": "confirm-group-delivery",
     "exchange-recurring-calendar": "verify-event", "exchange-meeting": "confirm-acceptance",
     "teams-channel-message": "confirm-publication", "teams-channel-reply": "confirm-reply",
-    "teams-call": "wait-before-hangup",
+    "teams-call": "play-audio",
     "sharepoint-file": "read-file", "sharepoint-rename": "read-file",
+    "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
   const failedStep = scenario === "failed" ? failureSteps[probe.type]
     : scenario === "timeout" ? completionSteps[probe.type] : undefined;
@@ -92,6 +101,7 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   let blocked = false;
   result.steps = orderedSteps.map(name => {
     const common = { name, observedAt: result.observedAt };
+    if (name === "restore-version" && !probe.restoreVersion) return { ...common, status: "skipped", reason: "variant-disabled" };
     if (["cleanup", "delete-draft"].includes(name) && retainArtifacts) return { ...common, status: "skipped", reason: "cleanup-disabled" };
     if (blocked && name !== "cleanup") return { ...common, status: "skipped", reason: "prerequisite-failed" };
     const durationMs = name === longStep ? Math.max(0, result.durationMs - fixedDuration) : baseline(name);

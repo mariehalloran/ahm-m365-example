@@ -47,7 +47,7 @@ class ModelTemplateContracts(unittest.TestCase):
         selected = []
         for definition in self.catalog if catalog is None else catalog:
             service = copy.deepcopy(definition)
-            config = project["services"][service["service"]]
+            config = project["services"].get(service["service"], {"enabled": False, "scenarios": {}})
             service["journeys"] = [
                 journey for journey in service["journeys"] if config["scenarios"].get(journey["name"], False)
             ]
@@ -62,10 +62,12 @@ class ModelTemplateContracts(unittest.TestCase):
         selected = self.selected(self.project)
         journeys = [journey for service in selected for journey in service["journeys"]]
         steps = sum(len(journey["steps"]) for journey in journeys)
-        calls = sum(2 + len(self.provider_functions(service["service"])) for service in selected)
+        self.assertEqual({service["service"] for service in selected}, {"exchange", "teams", "onedrive"})
+        self.assertFalse(self.project["services"]["sharepoint"]["enabled"])
+        calls = sum(self.provider_call_count(service["service"]) for service in selected)
         self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps + calls,
-                          len(selected) * 2 + len(journeys) + steps + calls), (4, 77, 73))
-        self.assertEqual(steps, 40)
+                          len(selected) * 2 + len(journeys) + steps + calls), (4, 83, 79))
+        self.assertEqual(steps, 47)
         for service in self.catalog:
             for journey in service["journeys"]:
                 self.assertIn(journey["name"], self.project["services"][service["service"]]["scenarios"])
@@ -87,21 +89,22 @@ class ModelTemplateContracts(unittest.TestCase):
                         for journey in service["journeys"]:
                             config["scenarios"][journey["name"]] = False
                     self.assertNotIn(service["service"], [item["service"] for item in self.selected(project)])
-                    self.assertEqual(len(self.selected(project)), 2)
+                    expected = {item["service"] for item in self.selected(self.project)} - {service["service"]}
+                    self.assertEqual({item["service"] for item in self.selected(project)}, expected)
         for resource in self.resources:
             if "copy" in resource:
                 self.assertEqual(resource["copy"]["count"], "[length(variables('enabledServices'))]")
 
-    def test_individual_call_journey_has_shared_wait_steps_and_preserves_existing_ids(self):
+    def test_individual_call_playback_replaces_wait_and_preserves_journey_place_end_ids(self):
         teams = next(service for service in self.catalog if service["service"] == "teams")
         self.assertEqual([journey["entityName"] for journey in teams["journeys"]],
                          ["teams-global", "teams-reply", "teams-call"])
         call = next(journey for journey in teams["journeys"] if journey["name"] == "call-test-user")
         self.assertEqual([step["name"] for step in call["steps"]],
-                         ["place-call", "wait-before-hangup", "end-call"])
-        self.assertEqual(len(self.project["services"]["teams"]["callTargets"]), 3)
+                         ["place-call", "wait-for-answer", "verify-participants", "play-audio", "end-call"])
+        self.assertEqual(len(self.project["services"]["teams"]["callTargets"]), 1)
         self.assertEqual(len(self.project["services"]["teams"]["targets"]), 1)
-        self.assertEqual((1 + len(call["steps"])) * 2, 8)
+        self.assertEqual((1 + len(call["steps"])) * 2, 12)
 
     def test_multiple_journeys_are_selected_independently_in_one_service(self):
         catalog = copy.deepcopy(self.catalog)
@@ -158,8 +161,11 @@ class ModelTemplateContracts(unittest.TestCase):
 
     def provider_functions(self, service):
         return {
-            "exchange": range(5), "teams": range(5), "sharepoint": [],
+            "exchange": range(5), "teams": range(5), "sharepoint": [], "onedrive": [],
         }[service]
+
+    def provider_call_count(self, service):
+        return 0 if service == "onedrive" else 2 + len(self.provider_functions(service))
 
     def test_only_journey_roots_have_user_flow_icon(self):
         entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
@@ -186,7 +192,7 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertEqual({service["service"]: len(service["journeys"]) for service in planned},
                          {"exchange": 4, "teams": 7, "sharepoint": 6, "onedrive": 6})
         self.assertTrue(self.template["parameters"]["includePlannedJourneys"]["defaultValue"])
-        self.assertNotIn("onedrive", self.project["services"])
+        self.assertIn("onedrive", self.project["services"])
         self.assertIn("includePlannedJourneys", self.template["variables"]["modelServices"])
         functions = {name: definition for namespace in self.template["functions"]
                      for name, definition in namespace["members"].items()}
@@ -207,12 +213,21 @@ class ModelTemplateContracts(unittest.TestCase):
                 planned_steps += len(literals[3:])
         self.assertEqual(len(planned_names), 23)
         self.assertEqual(planned_steps, 78)
-        runtime_journeys = [journey for service in self.catalog for journey in service["journeys"]]
-        steps = planned_steps + sum(len(journey["steps"]) for journey in runtime_journeys)
-        journeys = len(planned_names) + len(runtime_journeys)
-        calls = sum(2 + len(self.provider_functions(service["service"])) for service in self.catalog)
-        self.assertEqual(1 + len(planned) * 2 + len(self.catalog) + journeys + steps + calls, 180)
-        self.assertEqual(len(planned) + len(self.catalog) + journeys + steps + calls, 175)
+        selected = self.selected(self.project)
+        runtime_journeys = [journey for service in selected for journey in service["journeys"]]
+        promoted = {journey["entityName"] for journey in runtime_journeys} & planned_names
+        self.assertEqual(promoted, {
+            "onedrive-planned-user-drive-roundtrip", "onedrive-planned-app-folder-lifecycle",
+            "onedrive-planned-document-versions",
+        })
+        self.assertIn("activeJourney", self.template["variables"]["modelServices"])
+        self.assertIn("entityName", self.template["variables"]["modelServices"])
+        steps = planned_steps - 12 + sum(len(journey["steps"]) for journey in runtime_journeys)
+        journeys = len(planned_names) - len(promoted) + len(runtime_journeys)
+        calls = sum(self.provider_call_count(service["service"]) for service in selected)
+        self.assertEqual(1 + len(planned) * 2 + len(selected) + journeys + steps + calls, 171)
+        self.assertEqual(len(planned) + len(selected) + journeys + steps + calls, 166)
+        self.assertEqual((len(runtime_journeys), len(planned_names) - len(promoted)), (12, 20))
         self.assertIn("teams-planned-two-bot-conversation", planned_names)
         self.assertIn("teams-planned-answered-audio", planned_names)
         self.assertIn("sharepoint-planned-library-folder-roundtrip", planned_names)
@@ -228,6 +243,7 @@ class ModelTemplateContracts(unittest.TestCase):
     def test_workspace_dependencies_are_optional_and_only_for_azure_export(self):
         self.assertEqual(set(self.service_template["parameters"]), {
             "modelName", "location", "service", "policy", "enableOtel", "workspaceName", "applicationInsightsResourceId",
+            "suppressOneDriveRestore",
         })
         self.assertEqual({resource["type"] for resource in self.service_resources}, {
             "Microsoft.CloudHealth/healthmodels",
@@ -280,12 +296,38 @@ class ModelTemplateContracts(unittest.TestCase):
             "members": "[parameters('members')]",
         })
 
+    def test_call_measurements_share_the_existing_journey_external_reports(self):
+        signals = self.service_template["variables"]["teamsCallSignals"]
+        self.assertEqual(len(signals), 15)
+        self.assertEqual(len(set(signals)), 15)
+        self.assertIn("teams-call-mean-connection-duration", signals)
+        self.assertIn("teams-call-quality-packet-loss", signals)
+        entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
+        self.assertIn("equals(variables('nodes')[copyIndex()].name, 'teams-call')", entity["properties"])
+        self.assertIn("variables('teamsCallSignals')", entity["properties"])
+
     def test_catalog_contains_only_journey_and_business_step_metadata(self):
         for service in self.catalog:
             self.assertEqual(set(service), {"service", "displayName", "journeys"})
             for journey in service["journeys"]:
                 self.assertEqual(set(journey), {"name", "entityName", "displayName", "steps"})
-                self.assertTrue(all(set(step) == {"name", "displayName"} for step in journey["steps"]))
+                expected = {"name", "displayName", "telemetryName"} if service["service"] == "onedrive" else {"name", "displayName"}
+                self.assertTrue(all(set(step) == expected for step in journey["steps"]))
+
+    def test_onedrive_promotion_preserves_root_and_step_ids_without_inventing_provider_mapping(self):
+        service = next(service for service in self.catalog if service["service"] == "onedrive")
+        self.assertEqual({journey["entityName"] for journey in service["journeys"]}, {
+            "onedrive-planned-user-drive-roundtrip", "onedrive-planned-app-folder-lifecycle",
+            "onedrive-planned-document-versions",
+        })
+        for journey in service["journeys"]:
+            self.assertEqual([step["name"] for step in journey["steps"]], ["step-1", "step-2", "step-3", "step-4"])
+        self.assertIn("telemetryName", self.service_template["variables"]["nodes"])
+        self.assertIn("'onedrive'", self.service_template["variables"]["providerCalls"])
+        self.assertIn("'onedrive'", self.template["variables"]["providerCallCount"])
+        self.assertIn("restoreVersion", self.module["properties"]["parameters"]["suppressOneDriveRestore"]["value"])
+        self.assertIn("suppressOneDriveRestore", self.service_template["variables"]["nodes"])
+        self.assertIn("'document-versions'", self.service_template["variables"]["nodes"])
 
     def test_external_reports_remain_with_optional_journey_and_step_otel(self):
         entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))

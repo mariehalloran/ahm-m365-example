@@ -18,6 +18,11 @@ async function run(type: keyof typeof handlers, options: {
   missingSetup?: boolean; badHash?: boolean; badReply?: boolean; missingRecipient?: boolean;
   cleanup?: boolean; failStage?: string; createFails?: boolean;
   badReplySender?: boolean; badReplyBody?: boolean; missingReplyHeader?: boolean; duplicateReplyHeader?: boolean;
+  occurrenceCount?: number; duplicateOccurrence?: boolean; staleOccurrenceUpdate?: boolean;
+  cancellationPending?: boolean; cancelledEventMissing?: boolean; cancellationReadDenied?: boolean;
+  cancellationReadAborted?: boolean; attendeeCleanupStatus?: number;
+  malformedCreatedEvent?: boolean;
+  attendeeOnSecondPage?: boolean; calendarNextLink?: string; calendarPaginationLoop?: boolean;
 } = {}) {
   const probe: Probe = {
     id: "exchange-one", cohort: "exchange-global", type, mailbox: sender,
@@ -33,6 +38,7 @@ async function run(type: keyof typeof handlers, options: {
   let replySubject = "";
   let replyBody = "";
   let accepted = false;
+  let cancelled = false;
   const calls: { path: string; method: string; body?: unknown }[] = [];
   const signal = new AbortController();
   const graph = {
@@ -52,20 +58,46 @@ async function run(type: keyof typeof handlers, options: {
       if (method === "POST" && path.endsWith("/events")) {
         subject = body.subject;
         if (options.createFails) throw new IntegrationError("graph-unavailable");
-        return schema.parse({ id: "organizer", subject, iCalUId: "owned-meeting" });
+        return schema.parse({ id: "organizer", subject: options.malformedCreatedEvent ? null : subject,
+          iCalUId: "owned-meeting", seriesMasterId: null });
       }
       if (path.includes("/attachments/")) return schema.parse({ contentBytes: options.badHash ? Buffer.from("corruption").toString("base64") : attachment });
       if (path.endsWith("/attachments")) return schema.parse({ value: [{ id: "attachment", name: "synthetic.txt" }] });
       if (path.includes("/instances?")) return schema.parse({
-        value: [{ id: "occurrence", subject: updatedSubject || subject, seriesMasterId: "organizer", type: "occurrence" }],
+        value: Array.from({ length: options.occurrenceCount ?? 3 }, (_, index) => ({
+          id: options.duplicateOccurrence ? "occurrence" : `occurrence-${index}`,
+          subject: updatedSubject && !(options.staleOccurrenceUpdate && index === 2) ? updatedSubject : subject,
+          seriesMasterId: "organizer", type: "occurrence",
+        })),
       });
-      if (path.includes("/calendarView?")) return schema.parse({
-        value: [{ id: "attendee", subject, iCalUId: "owned-meeting" }, { id: "unrelated", subject, iCalUId: "someone-else" }],
-      });
+      if (path.includes("/calendarView?")) {
+        const nextPage = new URLSearchParams(path.split("?")[1]).has("$skiptoken");
+        const hasAttendee = !options.calendarPaginationLoop && (!options.attendeeOnSecondPage || nextPage);
+        return schema.parse({
+          value: [
+            ...(hasAttendee ? [{ id: "attendee", subject, iCalUId: "owned-meeting" }] : []),
+            { id: "unrelated", subject, iCalUId: "someone-else" },
+          ],
+          ...(!hasAttendee || options.calendarNextLink ? {
+            "@odata.nextLink": options.calendarNextLink ??
+              `https://graph.microsoft.com/v1.0/users/${recipient}/calendarView?$skiptoken=next-page`,
+          } : {}),
+        });
+      }
       if (path.endsWith("/events/organizer")) return schema.parse({
         id: "organizer", subject: updatedSubject || subject,
         attendees: [{ emailAddress: { address: recipient }, status: { response: accepted ? "accepted" : "notResponded" } }],
       });
+      if (path.endsWith("/events/attendee")) {
+        if (cancelled && options.cancellationReadAborted) {
+          signal.abort(new DOMException("Execution deadline", "AbortError"));
+          throw signal.signal.reason;
+        }
+        if (options.cancellationReadDenied) throw new IntegrationError("permission-failure", 403);
+        if (cancelled && options.cancelledEventMissing) throw new IntegrationError("read-failure", 404);
+        return schema.parse({ id: "attendee", subject, iCalUId: "owned-meeting",
+          isCancelled: cancelled && !options.cancellationPending });
+      }
       if (path.includes("/messages?")) {
         const querySubject = new URLSearchParams(path.split("?")[1]).get("$filter") ?? "";
         if (!path.includes("/inbox/")) return schema.parse({ value: [] });
@@ -91,9 +123,17 @@ async function run(type: keyof typeof handlers, options: {
       calls.push({ path, method, body });
       clock += 5;
       if (options.failStage && path.endsWith(options.failStage)) throw new IntegrationError("permission-failure", 403);
+      if (method === "DELETE" && cancelled && path.endsWith("/events/organizer")) {
+        throw new IntegrationError("graph-unavailable", 400);
+      }
+      if (method === "DELETE" && path.endsWith("/events/attendee")) {
+        if (options.attendeeCleanupStatus) throw new IntegrationError("graph-unavailable", options.attendeeCleanupStatus);
+        if (cancelled && options.cancelledEventMissing) return new Response(null, { status: 404 });
+      }
       if (path.endsWith("/reply-draft") && method === "PATCH") replyBody = body.body.content;
       if (path.endsWith("/events/organizer") && method === "PATCH") updatedSubject = body.subject;
       if (path.endsWith("/accept")) accepted = true;
+      if (path.endsWith("/cancel")) cancelled = true;
       return new Response(null, { status: 204 });
     }),
   } as unknown as GraphClient;
@@ -149,15 +189,30 @@ describe("Exchange expanded completed journeys", () => {
       expect.objectContaining({ path: `/users/${encodeURIComponent(sender)}/events/organizer` }),
     ]);
   });
+  it.each([0, 1, 2, 4])("rejects an incomplete or unexpected recurrence containing %s occurrences", async occurrenceCount => {
+    const { result, calls } = await run("exchange-recurring-calendar", { occurrenceCount });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
+    expect(result.steps.find(step => step.name === "read-occurrence")?.status).toBe("failed");
+    expect(calls.some(call => call.method === "DELETE" && call.path.endsWith("/events/organizer"))).toBe(true);
+  });
+  it("rejects duplicate occurrence IDs instead of counting the same occurrence three times", async () => {
+    const { result } = await run("exchange-recurring-calendar", { duplicateOccurrence: true });
+    expect(result.success).toBe(false);
+    expect(result.steps.find(step => step.name === "read-occurrence")?.status).toBe("failed");
+  });
+  it("requires the series update to reach every occurrence", async () => {
+    const { result } = await run("exchange-recurring-calendar", { staleOccurrenceUpdate: true });
+    expect(result.success).toBe(false);
+    expect(result.steps.find(step => step.name === "read-occurrence")?.status).toBe("succeeded");
+    expect(result.steps.find(step => step.name === "verify-event")?.status).toBe("failed");
+  });
   it("verifies attendee calendar, accepts, observes organizer response, cancels, and cleans only owned IDs despite mail opt-out", async () => {
     const { result, calls } = await run("exchange-meeting", { cleanup: false });
     expect(result.success).toBe(true);
     expect(calls.filter(call => call.method === "POST").map(call => call.path.split("/").at(-1)))
       .toEqual(["events", "accept", "cancel"]);
     const deleted = calls.filter(call => call.method === "DELETE").map(call => call.path);
-    expect(deleted).toEqual([
-      `/users/${encodeURIComponent(sender)}/events/organizer`, `/users/${encodeURIComponent(recipient)}/events/attendee`,
-    ]);
+    expect(deleted).toEqual([`/users/${encodeURIComponent(recipient)}/events/attendee`]);
     expect(deleted.join()).not.toContain("unrelated");
     expect(deleted.join()).not.toContain("/messages/");
   });
@@ -167,6 +222,88 @@ describe("Exchange expanded completed journeys", () => {
     expect(result.steps.find(step => step.name === "accept-meeting")).toMatchObject({ status: "failed", diagnosticCategory: "permission-failure" });
     expect(result.steps.find(step => step.name === "confirm-acceptance")).toMatchObject({ status: "skipped", reason: "prerequisite-failed" });
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(2);
+  });
+  it("keeps both owned events eligible for cleanup when cancellation is rejected", async () => {
+    const { result, calls } = await run("exchange-meeting", { failStage: "/cancel", cleanup: false });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "permission-failure" });
+    expect(result.steps.find(step => step.name === "cancel-meeting")?.status).toBe("failed");
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+    expect(calls.filter(call => call.method === "DELETE").map(call => call.path)).toEqual([
+      `/users/${encodeURIComponent(sender)}/events/organizer`, `/users/${encodeURIComponent(recipient)}/events/attendee`,
+    ]);
+  });
+  it("does not treat cancellation acceptance as proof that the attendee calendar changed", async () => {
+    const { result, calls } = await run("exchange-meeting", { cancellationPending: true, cleanup: false });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
+    expect(result.steps.find(step => step.name === "confirm-acceptance")?.status).toBe("succeeded");
+    expect(result.steps.find(step => step.name === "cancel-meeting")?.status).toBe("failed");
+    expect(calls.filter(call => call.method === "DELETE").map(call => call.path))
+      .toEqual([`/users/${encodeURIComponent(recipient)}/events/attendee`]);
+  });
+  it.each([400, 403, 503])("preserves actual attendee cleanup failure (%s) after successful cancellation", async attendeeCleanupStatus => {
+    const { result } = await run("exchange-meeting", { cleanup: false, attendeeCleanupStatus });
+    expect(result).toMatchObject({
+      success: false, diagnosticCategory: "cleanup-failure",
+      diagnosticContext: { cleanupSucceeded: false },
+    });
+    expect(result.steps.find(step => step.name === "cancel-meeting")?.status).toBe("succeeded");
+    expect(result.steps.find(step => step.name === "cleanup")?.status).toBe("failed");
+  });
+  it("cleans the remaining attendee event with an independent signal after the execution deadline", async () => {
+    const { result, graph } = await run("exchange-meeting", { cleanup: false, cancellationReadAborted: true });
+    expect(result).toMatchObject({
+      success: false, diagnosticCategory: "cancelled",
+      diagnosticContext: { cleanupSucceeded: true },
+    });
+    const executionSignal = vi.mocked(graph.json).mock.calls[0]![2];
+    expect(executionSignal.aborted).toBe(true);
+    const deletions = vi.mocked(graph.request).mock.calls.filter(call => call[2] === "DELETE");
+    expect(deletions).toHaveLength(1);
+    expect(deletions[0]![1]).not.toBe(executionSignal);
+    expect(deletions[0]![1].aborted).toBe(false);
+  });
+  it("finds the owned attendee event on a later calendar page with Graph's literal @ encoding", async () => {
+    const { result, calls } = await run("exchange-meeting", { attendeeOnSecondPage: true });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.path.includes("/calendarView?"))).toHaveLength(2);
+    expect(calls.find(call => call.path.includes("$skiptoken"))?.path)
+      .toBe(`/users/${encodeURIComponent(recipient)}/calendarView?$skiptoken=next-page`);
+    expect(calls.filter(call => call.method === "DELETE").map(call => call.path).join()).not.toContain("unrelated");
+  });
+  it("accepts matching current-page evidence without inspecting unused continuation metadata", async () => {
+    const { result, calls } = await run("exchange-meeting", { calendarNextLink: "https://untrusted.invalid/calendarView" });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.path.includes("/calendarView?"))).toHaveLength(1);
+  });
+  it.each([
+    "https://untrusted.invalid/v1.0/users/recipient@example.invalid/calendarView?$skiptoken=x",
+    "http://graph.microsoft.com/v1.0/users/recipient@example.invalid/calendarView?$skiptoken=x",
+    "https://graph.microsoft.com/v1.0/users/other@example.invalid/calendarView?$skiptoken=x",
+    "https://graph.microsoft.com/v1.0/users/recipient@example.invalid/events?$skiptoken=x",
+    "https://graph.microsoft.com/v1.0/users/recipient@example.invalid/../calendarView?$skiptoken=x",
+    "https://graph.microsoft.com/v1.0/users/recipient@example.invalid/calendarView?$skiptoken=x#fragment",
+  ])("rejects an unsafe or out-of-scope calendar continuation: %s", async calendarNextLink => {
+    const { result, calls } = await run("exchange-meeting", { attendeeOnSecondPage: true, calendarNextLink });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "read-failure" });
+    expect(calls.filter(call => call.path.includes("/calendarView?"))).toHaveLength(1);
+    expect(calls.some(call => call.method === "POST" && call.path.endsWith("/accept"))).toBe(false);
+  });
+  it("rejects repeated calendar pages without accepting an unrelated event", async () => {
+    const { result, calls } = await run("exchange-meeting", { calendarPaginationLoop: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "read-failure" });
+    expect(calls.filter(call => call.path.includes("/calendarView?"))).toHaveLength(2);
+    expect(calls.filter(call => call.method === "DELETE" && call.path.includes("/events/"))).toEqual([
+      expect.objectContaining({ path: `/users/${encodeURIComponent(sender)}/events/organizer` }),
+    ]);
+  });
+  it("accepts an observed removed attendee event as completed cancellation", async () => {
+    const { result } = await run("exchange-meeting", { cancelledEventMissing: true });
+    expect(result.success).toBe(true);
+  });
+  it("does not confuse denied attendee readback with a cancelled event", async () => {
+    const { result } = await run("exchange-meeting", { cancellationReadDenied: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "permission-failure" });
+    expect(result.steps.find(step => step.name === "cancel-meeting")?.status).toBe("failed");
   });
   it.each(["exchange-attachment-reply", "exchange-distribution-list", "exchange-meeting"] as const)(
     "fails missing selected live setup for %s instead of inventing A→A participants", async type => {
@@ -180,5 +317,12 @@ describe("Exchange expanded completed journeys", () => {
     const { result, calls } = await run("exchange-recurring-calendar", { createFails: true });
     expect(result.success).toBe(false);
     expect(calls.filter(call => call.method === "DELETE")).toHaveLength(0);
+  });
+  it("retains ownership for cleanup when a successful create returns invalid event fields", async () => {
+    const { result, calls } = await run("exchange-recurring-calendar", { malformedCreatedEvent: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "malformed-response" });
+    expect(calls.filter(call => call.method === "DELETE")).toEqual([
+      expect.objectContaining({ path: `/users/${encodeURIComponent(sender)}/events/organizer` }),
+    ]);
   });
 });

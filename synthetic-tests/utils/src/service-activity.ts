@@ -75,7 +75,8 @@ export function getMessageVolumeMetricsForTeamsChat(graph: GraphClient, window: 
 }
 
 export function serviceActivitySources(service: ServiceConfig): ProviderSourceDefinition[] {
-  if (!service.serviceActivity.enabled) return [];
+  if (!service.serviceActivity.enabled || service.type === "onedrive") return [];
+  const type = service.type;
   const functions = service.serviceActivity.functions ?? activityFunctions[service.type];
   return functions.map(name => ({
     source: name, apiVersion: "beta",
@@ -85,7 +86,7 @@ export function serviceActivitySources(service: ServiceConfig): ProviderSourceDe
         ? await readActivity(graph, name, percentageSchema, window, signal)
         : await readActivity(graph, name, valueSchema, window, signal);
       return rows.map(row => ({
-        kind: "activity", service: service.type, collectedAt, function: name,
+        kind: "activity", service: type, collectedAt, function: name,
         intervalStart: row.intervalStartDateTime,
         intervalEnd: new Date(Date.parse(row.intervalStartDateTime) + window.aggregationIntervalMinutes * 60_000).toISOString(),
         aggregationIntervalMinutes: window.aggregationIntervalMinutes,

@@ -36,7 +36,7 @@ export function getServiceHealthIssues(graph: GraphClient, signal: AbortSignal):
 }
 
 export function normalizeServiceHealthIssue(
-  issue: ServiceHealthIssue, service: ServiceConfig["type"], collectedAt: string,
+  issue: ServiceHealthIssue, service: Exclude<ServiceConfig["type"], "onedrive">, collectedAt: string,
 ): ProviderDiagnostic {
   let truncated = false;
   const clip = (value: string, length: number) => {
@@ -74,6 +74,7 @@ export function normalizeServiceHealthIssue(
 }
 
 export function serviceHealthSources(service: ServiceConfig["type"]): ProviderSourceDefinition[] {
+  if (service === "onedrive") return [];
   const name = serviceHealthNames[service];
   return [
     {

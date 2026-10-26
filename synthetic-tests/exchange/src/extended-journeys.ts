@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { Probe, StepName, SyntheticResult } from "../../utils/src/contracts.js";
-import type { GraphClient } from "../../utils/src/graph.js";
+import { graphNextPagePath, type GraphClient } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
@@ -17,8 +17,8 @@ const message = identified.extend({
 });
 const messages = z.object({ value: z.array(message), "@odata.nextLink": z.string().optional() });
 const event = identified.extend({
-  subject: z.string(), iCalUId: z.string().optional(), seriesMasterId: z.string().optional(),
-  type: z.string().optional(),
+  subject: z.string(), iCalUId: z.string().optional(), seriesMasterId: z.string().nullable().optional(),
+  type: z.string().optional(), isCancelled: z.boolean().optional(),
   attendees: z.array(z.object({
     emailAddress: z.object({ address: z.string() }), status: z.object({ response: z.string() }),
   })).optional(),
@@ -184,9 +184,44 @@ function eventTimes(a: Attempt) {
 
 async function createEvent(a: Attempt, mailbox: string, body: unknown) {
   a.mutated = true;
-  const created = await a.graph.json(`${user(mailbox)}/events`, event, a.context.signal, "POST", body, false);
+  const created = await a.graph.json(`${user(mailbox)}/events`, identified.passthrough(), a.context.signal, "POST", body, false);
   own(a.ownedEvents, mailbox, created.id);
-  return created;
+  const parsed = event.safeParse(created);
+  if (!parsed.success) throw new IntegrationError("malformed-response");
+  return parsed.data;
+}
+
+function nextCalendarPage(value: string, collectionPath: string): string {
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new IntegrationError("read-failure"); }
+  const normalize = (path: string) => path.replace(/%40/gi, "@");
+  if (value !== `${url.origin}${url.pathname}${url.search}` ||
+      normalize(url.pathname) !== normalize(`/v1.0${collectionPath}`)) {
+    throw new IntegrationError("read-failure");
+  }
+  url.pathname = `/v1.0${collectionPath}`;
+  return graphNextPagePath(url.href, collectionPath);
+}
+
+async function findAttendeeEvent(a: Attempt, mailbox: string, window: URLSearchParams, iCalUId: string) {
+  const collectionPath = `${user(mailbox)}/calendarView`;
+  const query = new URLSearchParams(window);
+  query.set("$top", "100");
+  query.set("$select", "id,subject,iCalUId");
+  let path = `${collectionPath}?${query}`;
+  const visited = new Set<string>();
+  for (let page = 0; page < 10; page++) {
+    a.context.signal.throwIfAborted();
+    if (visited.has(path)) throw new IntegrationError("read-failure");
+    visited.add(path);
+    const found = await a.graph.json(path, events, a.context.signal);
+    const saved = found.value.find(value => value.iCalUId === iCalUId && value.subject === a.subject);
+    if (saved) return saved;
+    if (!found["@odata.nextLink"]) return undefined;
+    path = nextCalendarPage(found["@odata.nextLink"], collectionPath);
+  }
+  throw new IntegrationError("read-failure");
 }
 
 async function recurring(a: Attempt): Promise<void> {
@@ -201,8 +236,11 @@ async function recurring(a: Attempt): Promise<void> {
   const read = async (subject: string) => poll(a, async () => {
     const instances = await a.graph.json(instancesPath, events, a.context.signal);
     if (instances["@odata.nextLink"]) throw new IntegrationError("read-failure");
-    return instances.value.find(value => value.seriesMasterId === master.id &&
-      ["occurrence", "exception"].includes(value.type ?? "") && value.subject === subject);
+    const complete = instances.value.length === 3 &&
+      new Set(instances.value.map(value => value.id)).size === 3 &&
+      instances.value.every(value => value.seriesMasterId === master.id &&
+        ["occurrence", "exception"].includes(value.type ?? "") && value.subject === subject);
+    return complete ? instances.value : undefined;
   });
   await step(a, "read-occurrence", () => read(a.subject));
   const updated = `${a.subject} updated`;
@@ -225,12 +263,11 @@ async function meeting(a: Attempt): Promise<void> {
     subject: a.subject, transactionId: a.result.correlationId, start: times.start, end: times.end,
     attendees: [{ emailAddress: { address: recipient }, type: "required" }], responseRequested: true,
   }));
-  if (!organizer.iCalUId) throw new IntegrationError("malformed-response");
+  const iCalUId = organizer.iCalUId;
+  if (!iCalUId) throw new IntegrationError("malformed-response");
   await step(a, "confirm-invitation", () => receive(a, recipient));
   const attendee = await step(a, "verify-attendee-calendar", () => poll(a, async () => {
-    const found = await a.graph.json(`${user(recipient)}/calendarView?${times.window}`, events, a.context.signal);
-    if (found["@odata.nextLink"]) throw new IntegrationError("read-failure");
-    const saved = found.value.find(value => value.iCalUId === organizer.iCalUId && value.subject === a.subject);
+    const saved = await findAttendeeEvent(a, recipient, times.window, iCalUId);
     if (saved) own(a.ownedEvents, recipient, saved.id);
     return saved;
   }));
@@ -240,8 +277,21 @@ async function meeting(a: Attempt): Promise<void> {
     const saved = await a.graph.json(item(sender, "events", organizer.id), event, a.context.signal);
     return saved.attendees?.find(value => value.emailAddress.address.toLowerCase() === recipient.toLowerCase() && value.status.response === "accepted");
   }));
-  await step(a, "cancel-meeting", () => a.graph.request(`${item(sender, "events", organizer.id)}/cancel`,
-    a.context.signal, "POST", { comment: `Synthetic cleanup ${a.result.correlationId}` }, false));
+  await step(a, "cancel-meeting", async () => {
+    await a.graph.request(`${item(sender, "events", organizer.id)}/cancel`,
+      a.context.signal, "POST", { comment: `Synthetic cleanup ${a.result.correlationId}` }, false);
+    // Cancellation moves the organizer event to Deleted Items, outside the /events collection.
+    a.ownedEvents.get(sender)?.delete(organizer.id);
+    await poll(a, async () => {
+      try {
+        const saved = await a.graph.json(item(recipient, "events", attendee.id), event, a.context.signal);
+        return saved.iCalUId === organizer.iCalUId && saved.isCancelled === true ? true : undefined;
+      } catch (error) {
+        if (error instanceof IntegrationError && error.status === 404) return true;
+        throw error;
+      }
+    });
+  });
 }
 
 async function clean(a: Attempt, signal: AbortSignal): Promise<void> {

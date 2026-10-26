@@ -395,6 +395,19 @@ describe("Teams bot post / Graph readback / bot delete", () => {
     expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
   });
 
+  it("follows the 5508-character continuation token observed in live Graph responses", async () => {
+    const token = "x".repeat(5508);
+    const { result, calls } = await run({
+      onRead: ({ page, marker }) => page === 1
+        ? json({ value: [], "@odata.nextLink": nextLink(token) })
+        : json({ value: [message(marker)] }),
+    });
+    expect(result.success).toBe(true);
+    expect(calls.filter(call => call.method === "GET").map(call => call.url)).toEqual([
+      `${graphBase}${messagesPath}?$top=50`, nextLink(token),
+    ]);
+  });
+
   it.each([
     "https://attacker.invalid/unfollowed",
     `${graphBase}${messagesPath}?$top=51&$skiptoken=unfollowed`,

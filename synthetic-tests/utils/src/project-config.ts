@@ -26,6 +26,14 @@ export const projectConfigSchema = z.object({
     successUnhealthyPercent: z.number().min(0).max(100),
     latencyDegradedMilliseconds: z.number().int().nonnegative(),
     latencyUnhealthyMilliseconds: z.number().int().nonnegative(),
+    callQualityThresholds: z.record(z.enum([
+      "packetLossPercent", "maxPacketLossPercent", "jitterMs", "maxJitterMs",
+      "roundTripTimeMs", "maxRoundTripTimeMs", "audioDegradation",
+      "concealedSamplesPercent", "maxConcealedSamplesPercent",
+    ]), z.object({
+      degradedAbove: z.number().finite().nonnegative(),
+      unhealthyAbove: z.number().finite().nonnegative(),
+    }).strict()).default({}),
   }).strict(),
   services: z.object({
     exchange: z.object({
@@ -52,7 +60,9 @@ export const projectConfigSchema = z.object({
         channelId: probeSchema.shape.channelId, serviceUrl: probeSchema.shape.serviceUrl,
       }).strict()).max(30),
       callTargets: z.array(target.extend({
-        tenantId: z.string().uuid(), callUserId: z.string().uuid(),
+        tenantId: z.string().uuid(),
+        meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
+        organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
       }).strict()).max(30).default([]),
     }).strict(),
     sharepoint: z.object({
@@ -64,6 +74,22 @@ export const projectConfigSchema = z.object({
         siteId: probeSchema.shape.siteId, driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
       }).strict()).max(30),
     }).strict(),
+    onedrive: z.object({
+      ...selection,
+      scenarios: z.object({
+        "user-drive-roundtrip": z.boolean().default(false),
+        "app-folder-lifecycle": z.boolean().default(false),
+        "document-versions": z.boolean().default(false),
+      }).strict(),
+      targets: z.array(target.extend({
+        userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
+        driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
+        folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
+      }).strict()).max(30),
+    }).strict().default({
+      enabled: false, configFile: "synthetic-tests/onedrive/config.json",
+      scenarios: { "user-drive-roundtrip": false, "app-folder-lifecycle": false, "document-versions": false }, targets: [],
+    }),
   }).strict(),
 }).strict();
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;
@@ -71,18 +97,32 @@ export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 export function parseProjectConfig(raw: unknown): ProjectConfig {
   const parsed = projectConfigSchema.safeParse(raw);
   if (!parsed.success) {
+    if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("callUserId"))) {
+      throw new ConfigurationError("Obsolete callUserId: use dedicated meetingThreadId, organizerUserId owner metadata and peerBotClientId; no human-calling compatibility path");
+    }
     throw new ConfigurationError(`Invalid project config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}`);
   }
   const project = parsed.data;
   const teams = project.services.teams;
+  const onedrive = project.services.onedrive;
+  for (const field of ["userId", "userPrincipalName", "driveId"] as const) {
+    const values = onedrive.targets.flatMap(item => item[field] ? [item[field]!.toLowerCase()] : []);
+    if (new Set(values).size !== values.length) throw new ConfigurationError("OneDrive accounts and drives must be unique");
+  }
   if (teams.enabled && teams.scenarios["call-test-user"] && teams.callTargets.length === 0) {
     throw new ConfigurationError("Enabled call-test-user requires root-configured callTargets");
   }
   if (new Set(teams.callTargets.map(item => item.id)).size !== teams.callTargets.length ||
-      new Set(teams.callTargets.map(item => `${item.tenantId.toLowerCase()}:${item.callUserId.toLowerCase()}`)).size !== teams.callTargets.length) {
-    throw new ConfigurationError("Call target IDs and individual users must be unique");
+      new Set(teams.callTargets.map(item => `${item.tenantId.toLowerCase()}:${item.meetingThreadId}`)).size !== teams.callTargets.length) {
+    throw new ConfigurationError("Call target IDs and dedicated meetings must be unique");
   }
   const policy = project.healthModel;
+  for (const [metric, thresholds] of Object.entries(policy.callQualityThresholds)) {
+    if (!thresholds || thresholds.unhealthyAbove < thresholds.degradedAbove ||
+        (metric.endsWith("Percent") && thresholds.unhealthyAbove > 100)) {
+      throw new ConfigurationError("Call-quality thresholds must order Degraded before Unhealthy and percentages must not exceed 100");
+    }
+  }
   if (policy.successUnhealthyPercent > policy.successDegradedPercent ||
       policy.latencyUnhealthyMilliseconds < policy.latencyDegradedMilliseconds) {
     throw new ConfigurationError("Health thresholds must order Degraded before Unhealthy");

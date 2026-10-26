@@ -7,6 +7,17 @@ const raw = {
   cohort: "exchange-global", targets: [{ id: "exchange-001" }],
 };
 describe("strict config-first service settings", () => {
+  it("keeps call-record collection disabled by default and validates an independent bounded budget", () => {
+    expect(parseServiceConfig(raw).teamsCallQuality.enabled).toBe(false);
+    expect(() => parseServiceConfig({ ...raw, teamsCallQuality: { enabled: true } })).toThrow("only for Teams");
+    expect(parseServiceConfig({ ...raw, type: "teams", teamsCallQuality: { enabled: true } }).teamsCallQuality).toEqual({
+      enabled: true, maxWaitSeconds: 30, pollIntervalSeconds: 5,
+    });
+    expect(() => parseServiceConfig({
+      ...raw, type: "teams", teamsCallQuality: { enabled: true, maxWaitSeconds: 2, pollIntervalSeconds: 3 },
+    })).toThrow("polling interval");
+    expect(() => parseServiceConfig({ ...raw, type: "teams", teamsCallQuality: { maxWaitSeconds: 61 } })).toThrow("maxWaitSeconds");
+  });
   it("defaults to explicit managed identity and one target with no history or exporter settings", () => {
     const service = parseServiceConfig(raw);
     expect(service).toMatchObject({
@@ -34,13 +45,15 @@ describe("strict config-first service settings", () => {
     expect(serviceSettings(service, {}, { "send-receive-mail": false, "edit-reopen-draft": true }).probes.map(probe => probe.type))
       .toEqual(["exchange-draft"]);
   });
-  it("accepts every supported Teams target across both message journeys and individual calls", () => {
+  it("accepts every supported Teams target across both message journeys and dedicated bot-only meetings", () => {
     const service = parseServiceConfig({
       ...raw, type: "teams", cohort: "teams-global",
       targets: Array.from({ length: 30 }, (_, index) => ({ id: `channel-${index}` })),
       callTargets: Array.from({ length: 30 }, (_, index) => ({
         id: `call-${index}`, tenantId: "11111111-1111-4111-8111-111111111111",
-        callUserId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+        meetingThreadId: `19:meeting_test${index}@thread.v2`,
+        organizerUserId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+        peerBotClientId: "33333333-3333-4333-8333-333333333333",
       })),
     });
     const config = serviceSettings(service, {}, {

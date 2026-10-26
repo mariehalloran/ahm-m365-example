@@ -35,9 +35,15 @@ Supply `BOT_TENANT_ID`/`BOT_CLIENT_ID` for the bot UAMI and matching
 `ChannelMessage.Read.Group`; service `teamsReadbackClientId` selects it through
 worker-UAMI federation. The manifest's `webApplicationInfo.id` references this
 application, not the UAMI. See [bot setup](../synthetic-tests/teams/README.md#primary-setup-unattended-bot).
-No runtime user MFA/cache or certificate is needed. Direct calls separately require
-approved `Calls.Initiate.All` and root-owned call targets; successful calling is
-placement/wait/verified hang-up, not answer/media proof.
+No runtime user MFA/cache or certificate is needed. Bot-only meeting calls require
+two distinct explicit UAMIs with approved `Calls.JoinGroupCall.All` and root-owned
+`{ id, tenantId, meetingThreadId, organizerUserId, peerBotClientId }` targets.
+The organizer is owner metadata, never a participant/token identity. Success requires
+both established legs, both identities in both rosters, authenticated correlated
+primary tone completion and both verified departures—not received audio.
+The existing Teams app attaches the approved peer through
+`serviceAccess.teams.{botPeerClientId,botPeerManagedIdentityResourceId}`; no runtime
+grants or extra app/host are created. Live media acceptance remains a separate gate.
 
 Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). Default bot/mail/file journeys need no user password, interactive sign-in or Blob access. Calling's tenant-wide application permission is a separate approved exception, not a scoped recipient grant. Optional provider collection requires separately approved read-only application permissions; it never grants them.
 

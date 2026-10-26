@@ -123,7 +123,7 @@ var plannedServiceDefinitions ServiceDefinition[] = [
   }
   {
     service: 'onedrive'
-    displayName: '[Planned / unimplemented] OneDrive Experience'
+    displayName: 'OneDrive Experience'
     journeys: [
       journey('onedrive', 'user-drive-roundtrip', 'User-drive roundtrip', [
         'Create folder and file in approved user drive'

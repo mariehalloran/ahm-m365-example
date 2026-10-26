@@ -5,9 +5,15 @@ The worker publishes and replies as an installed bot using its explicitly select
 same-tenant user-assigned managed identity. No user sign-in, MFA, delegated token cache
 or refresh-token maintenance is required. This is **bot API coverage**, not employee
 sign-in, browser/UI testing, a read receipt or human-to-human delivery.
-Calling covers individual call placement, a configured wait and verified hang-up,
-**not whether each recipient rang or received the call**, and not audio/video,
-speaker/microphone, participant experience or meeting quality.
+**Calling uses two distinct managed-identity bots joining one dedicated meeting,
+not direct application-to-application P2P or calls to people.** No human answer,
+sign-in or MFA is involved. This architecture and its measurements are source-tested,
+not live media acceptance; rollout and ingestion verification remain operator gates.
+Calling requires both established legs, both bot identities in both participant
+rosters, authenticated completion of an original test tone, and verified departure
+of both owned legs. **Playback completed does not prove the peer received/heard it**,
+bidirectional audio, microphone/speaker quality, employee
+identity, or the full meeting experience.
 Simulation remains credential-free. Source tests use fake HTTP; each deployment must
 verify real posting, authorship, readback, cleanup and report ingestion. See the
 [recorded live baseline](../../docs/deployment.md#deployment-status-and-order) separately
@@ -16,13 +22,13 @@ from these reusable setup instructions.
 ## Target catalog versus current implementation
 
 The target is **five complete journey families**, not five API calls. Only the
-narrower messaging and call-signaling operations below are currently implemented.
+narrower messaging and service-hosted playback operations below are implemented.
 
 | Target family | Completed-workflow target | Current implementation / live boundary |
 | --- | --- | --- |
 | Two-bot channel conversation | Bot A sends → Bot B receives → B replies → A receives the correlated response, plus persisted readback | One installed bot posts and replies; a separate Graph observer verifies persisted content and author. This narrower flow is live verified; **Bot B delivery/receipt is not implemented**. Future bot-to-bot permissions/scopes require validation. |
-| Answered two-party audio | Answer call; exchange known audio bidirectionally; verify continuity, delay and distortion; hang up | Place call, configured wait, verified hang-up to three root-configured accounts is live verified. No answer or media verification; signaling success is not recipient receipt or audio health. |
-| Scheduled meeting | Join scheduled meeting, verify roster, exchange bidirectional media, leave | Planned; not implemented |
+| Answered two-party audio | Bots connect; exchange known audio bidirectionally; verify continuity, delay and distortion; hang up | Bounded two-bot meeting join → both-leg roster proof → primary service-hosted tone → authenticated correlated completion → both departures. No received-audio analysis or bidirectional quality claim; live media acceptance pending. |
+| Scheduled meeting | Join scheduled meeting, verify roster, exchange bidirectional media, leave | Narrow two-bot join/roster/playback/departure is implemented under existing `call-test-user`; full meeting/bidirectional experience remains planned. |
 | Recipient file sharing | Share file, retrieve as recipient identity, verify hash | Planned; not implemented; owner/observer readback would not prove recipient access |
 | Adaptive Card workflow | Publish card, invoke action, verify workflow/callback completion | Planned; not implemented |
 
@@ -30,8 +36,9 @@ Current publication, reply and call scenarios run every **120 seconds** by defau
 service config owns cadence/deadlines, root config owns scenario selection and
 targets/accounts. Planned families have no implemented schedules. Optional
 **TeamsWeb messaging and meeting browser variants** are planned, not implemented.
-Bot APIs do not measure employee identity/client/UI experience. Media requires a
-separate supported-host design; current Container App signaling is not that design.
+Bot APIs do not measure employee identity/client/UI experience. This prerecorded
+service-hosted playback runs in the existing Node Container App; raw audio streams
+and full bidirectional media testing would require a separate supported-host design.
 
 ## Primary setup: unattended bot
 
@@ -135,105 +142,212 @@ All three root scenarios are enabled by default:
 
 - `publish-channel-message` / `teams-global`: `post-message`, `confirm-publication`.
 - `reply-channel-message` / `teams-reply`: `post-message`, `post-reply`, `confirm-reply`.
-- `call-test-user` / `teams-call`: `place-call`, `wait-before-hangup`, `end-call`.
+- `call-test-user` / `teams-call`: `place-call`, `wait-for-answer`, `play-audio`, `end-call`.
 
-## Individual test-user calls
+## Two-bot meeting audio setup
 
-Root `services.teams.scenarios["call-test-user"]` selects recurring calls at the
-existing service cadence (120 seconds by default), alongside messaging. There is
-no manual approval state or incoming HTTP trigger. Disable this scenario for a
-messaging-only rollout. The checked-in root selects **one channel messaging target
-and three independent call targets**, with safe simulation; live I/O still requires
-`mode: "live"` and `ENABLE_LIVE_M365=true`.
+The stable scenario `call-test-user` and entity `teams-call` are retained solely for
+deployed ID continuity. Every selected root `services.teams.callTargets[]` is now
+`{ id, tenantId, meetingThreadId, organizerUserId, peerBotClientId }`.
+The sample contains one placeholder dedicated meeting in simulation. The organizer
+UUID is **directory meeting-owner metadata only**, never a participant, call
+target or token identity. `callUserId` and human-calling compatibility are rejected.
 
-1. Add each dedicated test account under **root**
-   `services.teams.callTargets[]` as `{ "id": "teams-call-user-001",
-   "tenantId": "<approved-tenant-UUID>", "callUserId": "<user-object-UUID>" }`.
-   These are individual user object IDs, not UPNs, meetings or group IDs. Channel
-   metadata stays only in `services.teams.targets[]`; do not copy it per user.
-2. An administrator approves **application `Calls.Initiate.All` on the bot identity**.
-   This is tenant-wide permission, not an RSC/user-scoped grant: the runtime root
-   allowlist limits outgoing targets, but does not narrow the underlying grant.
-   Do not grant runtime provisioning/admin permissions.
-3. No delegated sign-in/cache/MFA, meeting creation, OnlineMeetings permissions or
-   `Calls.JoinGroupCalls.Chat` permission is needed for these individual calls.
-   The channel-messaging team's app/RSC installation is a separate prerequisite
-   for messaging, not a runtime gate on individual call creation. No personal-app
-   installation or `CsApplicationAccessPolicy` scoping claim is made here.
-   No `Calls.AccessMedia.All`, media SDK, audio playback/capture or AV assertions
-   are used. This service-hosted flow requests the official `audio` modality
-   for signaling, not an audio-quality test.
-4. Set service `teamsCallingCallbackUrl: "https://<teams-worker-fqdn>/api/calls"`
-   and `teamsCallingPort: 8080` (default). Selected live calls open HTTPS ingress
-   **only on Teams**, `allowInsecure: false`, one replica. `/healthz` is static
-   readiness; `/about` is a brief internal-lab data-handling description suitable
-   for this lab's app metadata, not production legal terms.
-5. Enable Azure Bot calling with that callback only after the authenticated server
-   is deployed. Deploy the updated health model before the worker and prove actual
-   MI call creation, configured wait, DELETE and GET
-   `terminated`/404. Source tests do not establish those live permissions.
+1. An operator provisions a dedicated meeting with exact thread/owner/tenant
+   metadata and policies allowing the two approved bots to join without humans.
+   There is no runtime meeting creation or directory lookup.
+2. Register both approved UAMIs as Azure Bots, enable Teams/calling on both, and
+   approve application **`Calls.JoinGroupCall.All` on both bot identities**.
+   This permission is not an Entra-enforced per-meeting scope; root validation is
+   a runtime allowlist. No runtime role grants, `Calls.Initiate.All`,
+   `Calls.AccessMedia.All`, delegated user tokens or `OnlineMeetings.*` are needed
+   by this join-only implementation. Channel readback/RSC remains separate.
+3. Supply `serviceAccess.teams.botPeerClientId` and
+   `botPeerManagedIdentityResourceId` to deployment preparation, referencing the
+   **existing** approved peer UAMI. Infrastructure attaches it to the existing
+   Teams Container App only when live calling is selected. It does not create the
+   peer or grant Graph permissions. All root `peerBotClientId` values must match.
+4. Primary `BOT_CLIENT_ID` remains the existing explicit worker UAMI.
+   `TEAMS_CALLING_PEER_CLIENT_ID` selects a different
+   `ManagedIdentityCredential({ clientId: peerId })`; `AZURE_TENANT_ID`,
+   `BOT_TENANT_ID` and target tenant must match. Neither leg falls back to another
+   identity, CLI, certificate or user. Calling is independent of optional delegated
+   **message** authentication and never uses it.
+5. Configure service `teamsCallingCallbackUrl: "https://<teams-worker-fqdn>/api/calls"`,
+   port **8080**, and `teamsCallingPlaybackEnabled: true` only after approval.
+   Both Azure Bots use that same public callback. Deploy the model before the
+   matching image, then verify real joins, roster identities, playback callbacks,
+   both departures and report ingestion. One replica and static `/healthz` readiness
+   are unchanged. Other workers/disabled calling receive no peer or public server.
 
-Calls use `BOT_CLIENT_ID`/`BOT_TENANT_ID` with the independently selected
-`botAuthentication` for a **Graph-audience** token. They never use observer or
-delegated user tokens—even if optional delegated messaging is selected.
-The fixed calling scope is **`00000003-0000-0000-c000-000000000000/.default`**,
-Microsoft Graph's canonical application-resource ID. This is the same Graph resource,
-not another identity or a retry fallback. The observer still uses
-`https://graph.microsoft.com/.default`; Connector still uses
-`https://api.botframework.com/.default`. Managed-identity infrastructure can cache a
-resource's role-less token for about 24 hours after a new grant; redeploying does not
-necessarily refresh it. Verify actual token roles and Graph acceptance after grants.
-The canonical-resource audience was accepted by Graph in the hosted lab (GET of a
-nonexistent call returned 404, not 401); that alone does not prove outbound calling.
-POST `/communications/calls` is attempted once **per configured account per cycle**:
+Both explicit bot credentials use the fixed documented scope
+`https://graph.microsoft.com/.default`, with no audience aliases or runtime fallback.
+Connector/observer/reporting identities remain independently selected.
+Each bot independently POSTs `/communications/calls` once per selected meeting,
+using the [official scheduled-meeting service-hosted join example (5)](https://learn.microsoft.com/graph/api/application-post-calls?view=graph-rest-1.0#example-5-join-scheduled-meeting-with-service-hosted-media):
 
 ```json
 {
   "@odata.type": "#microsoft.graph.call",
   "callbackUri": "https://<teams-worker-fqdn>/api/calls",
-  "targets": [{ "identity": { "user": { "id": "<root-callUserId>" } } }],
+  "chatInfo": { "threadId": "<root-meetingThreadId>", "messageId": "0" },
+  "meetingInfo": {
+    "@odata.type": "#microsoft.graph.organizerMeetingInfo",
+    "organizer": { "user": { "id": "<root-organizerUserId>", "tenantId": "<root-tenantId>" } },
+    "allowConversationWithoutHost": true
+  },
   "tenantId": "<root-tenantId>",
   "requestedModalities": ["audio"],
   "mediaConfig": { "@odata.type": "#microsoft.graph.serviceHostedMediaConfig" }
 }
 ```
 
-The approved coverage is **placement and hang-up**, not ringing confirmation.
-`place-call` requires successful creation with an owned call ID; 201/accepted does
-not prove recipient receipt. `wait-before-hangup` polls that exact call while waiting
-the configured duration. `establishing`, `ringing`, `established` and other nonterminal
-states do not prove recipient notification, answer identity or media quality.
-Early `terminating`/`terminated`, a missing call, HTTP/schema failures or a numeric
-Graph failure result fail the wait honestly; cancellation also fails the attempt.
-No user is automatically answered. Microsoft's P2P example does not guarantee an
-outgoing `ringing` event, so the worker does not use it as a required success signal.
-Authenticated callbacks are acknowledged only; there is no callback business-state
-cache, control plane or persisted call state.
+### Explicit playback opt-in (intentional behavior change)
+
+Set service `teamsCallingPlaybackEnabled: true` only after approving bot meeting joins
+and test-tone playback to **every selected root meeting**. The checked-in
+simulation and live-example profiles default this gate to false. Selected live calls
+fail configuration without approval; they never fall back to the old signaling-only
+success. Root `call-test-user`, `teams-call`, `place-call` and `end-call` IDs remain.
+The obsolete wait step/config are removed, not retained as compatibility behavior.
+
+### Call measurements on the existing entity
+
+The `teams-call` journey retains its identity and business-step children.
+Its **External Reports** group additionally declares these aggregated signals:
+
+| Measurement | Signal suffix after `teams-call-` | Unit |
+| --- | --- | --- |
+| Connected attempts / executed connection attempts | `connection-success-percentage` | Percent |
+| Call submission plus establishment elapsed time | `mean-connection-duration` | Milliseconds |
+| Completed playback / executed playback attempts | `playback-success-percentage` | Percent |
+| Playback request through verified completion or failure | `mean-playback-duration` | Milliseconds |
+| Verified departure / executed departure attempts | `disconnection-success-percentage` | Percent |
+| Departure request through termination confirmation or failure | `mean-disconnection-duration` | Milliseconds |
+
+Skipped actions are not failed requests or zero-duration samples. Reports include
+sample counts, timestamps, returned call-chain identifiers and sanitized numeric
+service codes. These measure service-confirmed operations, not received audio.
+Existing success/latency policy evaluates these immediate signals.
+
+Optional service-owned `teamsCallQuality` defaults to
+`{ "enabled": false, "maxWaitSeconds": 30, "pollIntervalSeconds": 5 }`.
+**Quality remains disabled by default.** The current lab has separately approved
+tenant-wide `CallRecords.Read.All` on the primary only; an operator may enable the
+private live profile after that grant. This is broad tenant read access, **not**
+native per-bot/per-meeting scoping. Other deployments need independent approval;
+runtime
+retrieval is restricted to actual returned `callChainId` values, never discovery
+of employee calls. No permission is automatically granted.
+
+After publishing journey results, the worker independently enriches those known
+calls using `GET /communications/callRecords/{callChainId}?$expand=sessions($expand=segments)`.
+Both returned leg chain IDs are captured; equal conference IDs are deduplicated,
+including repeated targets, so one conference is not counted twice. Both IDs, when
+present, must agree before playback; no tenant-wide listing or scan is used.
+The post-call wait is bounded to 1–60 seconds and does not enter journey duration
+or change its binary result. A 404 is pending; permission/read errors are explicit.
+Missing call-chain IDs, absent fields and incomplete/paginated records are not
+treated as measured zeros. Records arriving after this bounded window need later
+collection; there is deliberately no cross-cycle memory queue, durable retry
+store or tenant-wide discovery. Eventual delivery is **not** guaranteed by this
+initial bounded enrichment.
+
+Quality signals use the `teams-call-quality-` prefix:
+`packet-loss`, `max-packet-loss`, `jitter`, `max-jitter`, `round-trip-time`,
+`max-round-trip-time`, `audio-degradation`, `concealed-samples` and
+`max-concealed-samples`. Reports include per-metric stream sample counts, source
+start/end times, collection time, record versions, codecs and stream directions.
+Means are unweighted means of observed stream averages; maxima are observed stream
+maxima. Audio degradation is network-related MOS **degradation**, not absolute MOS.
+Quality-field availability for service-hosted bot calls still needs live proof.
+
+Root `healthModel.callQualityThresholds` defaults to `{}`: quality values are
+diagnostic/Unknown and do not manufacture Healthy evidence. Optional metric keys
+are `packetLossPercent`, `maxPacketLossPercent`, `jitterMs`, `maxJitterMs`,
+`roundTripTimeMs`, `maxRoundTripTimeMs`, `audioDegradation`,
+`concealedSamplesPercent`, and `maxConcealedSamplesPercent`, each accepting
+`{ "degradedAbove": number, "unhealthyAbove": number }`.
+Evaluation requires complete observed samples; partial or missing data stays Unknown.
+Quality-only reports never republish or overwrite synthetic success/duration.
+
+Console diagnostics are always emitted. Existing optional root OTEL export adds
+call-phase histograms and quality snapshot gauges/logs without per-target metric
+dimensions. It remains off by default. Entity reports expire using the existing
+TTL and are not a historical time-series store.
+
+### Playback and teardown mechanics
+
+`place-call` requires two distinct independently owned call IDs. `wait-for-answer`
+polls GET on **both** until `established`; merely waiting is never success.
+`verify-participants` GETs `/communications/calls/{owned-id}/participants` from
+**each** leg, requiring both expected `info.identity.application.id` values as
+distinct participants with `isInLobby: false`. Empty, wrong, partial/paginated,
+oversized (>200), malformed or user-only rosters cannot authorize playback.
+Roster membership proves meeting co-presence, **not received audio**.
+Early termination, missing/mismatched calls, numeric Graph failures and cancellation
+fail honestly. No human answer is expected or requested.
+
+`play-audio` POSTs `/communications/calls/{owned-id}/playPrompt` once with
+`clientContext` equal to the attempt correlation UUID and one `mediaPrompt`:
+`mediaInfo.uri` is the **same configured callback HTTPS origin** plus
+`/media/test-tone.wav`; `resourceId` identifies this fixed tone. There is no external
+URL, placeholder-audio fallback, storage account or additional permission.
+The exact public GET route returns an original generated one-second 440-Hz WAV:
+**mono, 16-bit PCM, 16,000 Hz**, 32,044 bytes, `Content-Type: audio/wav` and exact
+`Content-Length`. Other media paths/methods/query strings return 404. No arbitrary
+file reads, uploads, recording or user media are involved.
+
+The 200 response supplies the actual `playPromptOperation.id`, status and matching
+`clientContext`. Acceptance, `running`, or even a response-only `completed` does
+**not** satisfy this journey. Completion must arrive through the authenticated
+Graph callback with `resourceUrl` and `resourceData.@odata.id` identifying this
+same call **and actual operation**, matching `clientContext`,
+`@odata.type: #microsoft.graph.playPromptOperation`, and `status: completed`.
+Failed operations/service codes fail; unrelated/malformed notifications do nothing.
+The documented uppercase/compact GUID notification form is normalized, without
+loosening other IDs or paths. GET call checks continue while waiting; termination
+during playback fails. No invented GET-operation endpoint or synthetic self-callback
+is used.
+
+An in-memory registration exists only for each pending playback, before POST so a
+callback racing the response can be correlated after binding the returned ID.
+It is disposed in `finally`, expires within its playback deadline (maximum 120 s),
+and caps at 32 registrations with four pre-response observations each. Unknown
+operations are never cached; no call history or state survives cycles/restarts.
 
 `teams-call-state-observed` logs allowlisted GET state transitions and numeric
 `resultCode`/`resultSubcode` when Graph supplies `resultInfo`, with the test alias,
 correlation and elapsed time. Repeated identical samples are suppressed, with at
-most 12 events per attempt. Result messages, call IDs, response bodies, target
+most 24 events per attempt, labeled primary/peer. Result messages, call IDs, response bodies, target
 identities and tokens are never logged. `teams-calling-callback-rejected` reports
 only HTTP status and stage (`headers`, `verification`, `body`, `timeout`, `handler`),
 plus allowlisted `authErrorCode`, `authClaim` and `authReason` for verification
 failures. Messages, tokens, payloads and claim values are never included.
 Rejections and accepted-callback diagnostics are each capped at ten per minute.
 Accepted events report only `authentication: "verified"` and `tenantMatched: true`.
+`teams-call-playback-observed` adds the actual returned operation ID, attempt
+correlation, allowlisted status and optional numeric result code.
+`teams-call-tone-served` reports only fixed byte count/sample rate (at most ten per
+minute); an HTTP fetch alone is not proof Graph accepted the media.
 Terminal-state failure without an HTTP status is a signaling outcome, not proof
-of Graph HTTP failure. Offline/unreachable clients, rejection and voicemail are
-possible causes; inspect numeric results and human client observations rather
-than inferring one from elapsed time alone.
+of Graph HTTP failure. Inspect numeric results and bot/meeting policies rather than
+inferring a tenant outage from elapsed time alone.
 
-`teamsCallingWaitSeconds` (service execution setting, default **10**, range 1–30)
-sets the brief dwell after placement; the live timeout must allow this wait plus
-execution time. The environment/runtime field is `TEAMS_CALLING_WAIT_SECONDS`;
-service files remain authoritative. The old `teamsCallingRingSeconds` field is
-rejected, not silently interpreted. A user may answer during this period; the
-worker neither requires nor claims an answer. `end-call` DELETEs only the
-returned call ID and polls GET for `terminated`/404, not just DELETE acceptance.
-Three users produce three attempts aggregated into **one `teams-call` journey** and
-three shared business-step entities, never per-user signals. Console diagnostics use
+`teamsCallingAnswerTimeoutSeconds` defaults to **20** (1–30);
+`teamsCallingPlaybackTimeoutSeconds` defaults to **10** (2–30), including POST and
+callback completion. The default **45-second execution budget**, recurring every
+**120 seconds**, must allow both budgets plus five seconds for other requests.
+The answer deadline also reserves the playback budget; authentication/Graph delays
+cannot extend the overall bound. Each phase has an abort deadline. Service files
+remain authoritative; runtime fields are `TEAMS_CALLING_PLAYBACK_ENABLED`,
+`TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS`, and
+`TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS`. Old `teamsCallingWaitSeconds`,
+`teamsCallingRingSeconds` and corresponding runtime settings are rejected.
+`end-call` DELETEs only the
+returned IDs and polls GET for `terminated`/404, not just DELETE acceptance.
+Selected meetings produce attempts aggregated into **one `teams-call` journey** and
+five shared business-step entities, never per-participant signals. Console diagnostics use
 the configured test alias/correlation ID, not account IDs, tokens or notification bodies.
 
 Run one bounded cycle of the **same active root and service files**:
@@ -245,11 +359,14 @@ by an alternate trial profile.
 
 **Call departure is never disabled by `teamsCleanupEnabled: false`.** Once creation
 returns a known ID, `end-call` is attempted and measured even when waiting failed or
-the execution signal was cancelled. Successful teardown never repairs a failed wait.
+the execution signal was cancelled. Successful teardown never repairs failed answer
+or playback.
 End-call failure remains a failed business action even if fallback cleanup succeeds.
-Independent teardown has a shared ten-second bound: a four-second business attempt
-(3.5-second state-poll deadline), then fallback cleanup using the remaining budget.
-`teams-call-disconnected` distinguishes `phase: "business"` and `"cleanup"` after
+Both legs receive concurrent independent four-second business teardown attempts,
+then independent five-second fallback attempts for only the remaining legs.
+One failed peer join/teardown never suppresses primary cleanup. Execution timeout
+does not cancel teardown. `teams-call-disconnected` labels the leg and
+`phase: "end"` or `"cleanup"` after
 GET termination/404 proof. Unknown POST outcomes cannot safely be
 reconciled: diagnostics expose `teams-call-unknown-creation-outcome`; an orphaned
 leg may need approved operator intervention. State is not persisted between cycles.
@@ -258,7 +375,8 @@ POST `/api/calls` requires Microsoft-signed JWTs using the canonical
 `https://api.aps.skype.com/v1/.well-known/OpenIdConfiguration` and its validated
 `https://api.aps.skype.com/v1/keys` JWKS—not Entra discovery. Only RS256,
 `iss` exactly `https://graph.microsoft.com` or `https://api.botframework.com`,
-`aud` exactly the bot client-ID string, required valid `exp`, and valid `nbf` when
+`aud` exactly one string from the explicit two-bot audience allowlist
+(`BOT_CLIENT_ID`, `TEAMS_CALLING_PEER_CLIENT_ID`), required valid `exp`, and valid `nbf` when
 present (never later than `exp`) are accepted. A signed tenant claim is mandatory:
 raw `tid` or `http://schemas.microsoft.com/identity/claims/tenantid` must be a UUID
 matching `BOT_TENANT_ID`. If both are supplied, **both must match**; missing,
@@ -271,19 +389,27 @@ cooldown; metadata requests have two-second deadlines and a 128-KiB cap.
 Callbacks have bounded headers/body/time, authenticate before JSON acknowledgement
 and never log payloads, identities or tokens. A static
 `teams-calling-callback-accepted` diagnostic proves callback receipt separately.
-Notifications never affect journey success, select outgoing users or initiate calls.
+Only strongly correlated operation notifications affect pending playback; they
+never select outgoing meetings/participants or initiate calls.
 Invalid tokens fail closed.
 
 **Limits and live acceptance:** Graph signaling is not proof of a visible device/UI
 notification, employee sign-in or real-user experience. Human observation of incoming
-calls is separate evidence, never inferred from a Healthy placement-and-hang-up report.
+calls and hearing the tone are separate evidence, never inferred from a Healthy
+Graph playback report.
 Real managed-identity API execution/report ingestion remains a separate cloud
-acceptance check, not a claim made by source tests. No answer/media is required.
+acceptance check, not a claim made by source tests. Live acceptance must verify
+Graph retrieval/format acceptance through actual completed playback, authenticated
+operation evidence, disconnection and ingested reports. A curl of the tone alone
+does not prove playback. Human answer/observation must be arranged separately.
 Continuously verifying employee client state/UI is not implemented.
 
-References: [official individual call creation](https://learn.microsoft.com/graph/api/application-post-calls?view=graph-rest-1.0),
+References: [official scheduled-meeting join, example 5](https://learn.microsoft.com/graph/api/application-post-calls?view=graph-rest-1.0#example-5-join-scheduled-meeting-with-service-hosted-media),
 [get call](https://learn.microsoft.com/graph/api/call-get?view=graph-rest-1.0),
 [delete call](https://learn.microsoft.com/graph/api/call-delete?view=graph-rest-1.0),
+[playPrompt and documented completion notification](https://learn.microsoft.com/graph/api/call-playprompt?view=graph-rest-1.0),
+[playPromptOperation schema](https://learn.microsoft.com/graph/api/resources/playpromptoperation?view=graph-rest-1.0),
+[required WAV format](https://learn.microsoft.com/graph/api/resources/mediainfo?view=graph-rest-1.0),
 [canonical notification authentication sample](https://github.com/microsoftgraph/microsoft-graph-comms-samples/blob/master/Samples/Common/Sample.Common/Authentication/AuthenticationProvider.cs),
 [Microsoft inbound claim mapping](https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/dev/src/Microsoft.IdentityModel.JsonWebTokens/ClaimTypeMapping.cs),
 [Microsoft lifetime validation](https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/dev/src/Microsoft.IdentityModel.Tokens/ValidatorUtilities.cs).
@@ -298,7 +424,9 @@ is never retried or reconciled into permission to delete some other message.
 Bot collection reads accept matching evidence on the current page before inspecting
 unused continuation metadata. If another page is needed, its continuation must pass
 the same-origin, exact-collection and bounded-query checks before any request; scans
-remain limited to five pages of 50 messages.
+remain limited to five pages of 50 messages. Continuation URLs are bounded to 8,192
+characters; opaque tokens have no smaller arbitrary limit. Live Graph responses
+have returned valid 5,508-character tokens.
 
 Internal authentication/cleanup remain unreported as business steps. Skipped actions
 are not failed requests. Each complete attempt contributes binary success (1/0),

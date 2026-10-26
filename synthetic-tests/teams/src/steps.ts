@@ -37,7 +37,7 @@ function nextPagePath(value: string, messagesPath: string): string {
   const top = query.get("$top");
   const skipToken = query.get("$skiptoken");
   if (new Set(keys).size !== keys.length || keys.some(key => key !== "$top" && key !== "$skiptoken") ||
-      !skipToken || skipToken.length > 4096 ||
+      !skipToken ||
       (top !== null && (!/^[1-9]\d?$/.test(top) || Number(top) > 50))) {
     throw new IntegrationError("read-failure");
   }

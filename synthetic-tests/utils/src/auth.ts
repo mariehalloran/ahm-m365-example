@@ -7,7 +7,7 @@ import type { ServiceConfig } from "./service-config.js";
 import { TeamsBotClient } from "./teams.js";
 import { probeServices } from "./contracts.js";
 
-export const teamsCallingScope = "00000003-0000-0000-c000-000000000000/.default";
+export const teamsCallingScope = "https://graph.microsoft.com/.default";
 
 export function createServiceCredential(
   env: NodeJS.ProcessEnv = process.env, authentication: ServiceConfig["graphAuthentication"] = "managed-identity",
@@ -125,12 +125,23 @@ function botCredential(
   }
 }
 
-export function createTeamsCallingGraph(config: Config, env: NodeJS.ProcessEnv = process.env): GraphClient {
-  const parsed = z.object({ BOT_TENANT_ID: z.string().uuid(), BOT_CLIENT_ID: z.string().uuid() }).safeParse(env);
-  if (!parsed.success) throw new ConfigurationError("Teams calling requires valid BOT_TENANT_ID and BOT_CLIENT_ID");
-  if (config.probes.some(probe => probe.type === "teams-call" &&
-      probe.tenantId?.toLowerCase() !== parsed.data.BOT_TENANT_ID.toLowerCase())) {
-    throw new ConfigurationError("Teams call targets and bot tenants must match");
+export function createTeamsCallingGraph(config: Config, env: NodeJS.ProcessEnv = process.env, peer = false): GraphClient {
+  const parsed = z.object({
+    BOT_TENANT_ID: z.string().uuid(), AZURE_TENANT_ID: z.string().uuid(),
+    BOT_CLIENT_ID: z.string().uuid(), TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid(),
+  }).safeParse(env);
+  if (!parsed.success || config.BOT_AUTHENTICATION !== "managed-identity" ||
+      parsed.data.AZURE_TENANT_ID.toLowerCase() !== parsed.data.BOT_TENANT_ID.toLowerCase() ||
+      parsed.data.BOT_CLIENT_ID.toLowerCase() === parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
+      config.BOT_CLIENT_ID?.toLowerCase() !== parsed.data.BOT_CLIENT_ID.toLowerCase() ||
+      config.TEAMS_CALLING_PEER_CLIENT_ID?.toLowerCase() !== parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase()) {
+    throw new ConfigurationError("Meeting calling requires two distinct explicit managed identities and matching AZURE_TENANT_ID/BOT_TENANT_ID");
   }
-  return new GraphClient(new AuthenticatedHttp(botCredential(config, env, parsed.data), teamsCallingScope));
+  if (config.probes.some(probe => probe.type === "teams-call" &&
+      (probe.tenantId?.toLowerCase() !== parsed.data.BOT_TENANT_ID.toLowerCase() ||
+       probe.peerBotClientId?.toLowerCase() !== parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase()))) {
+    throw new ConfigurationError("Teams meeting targets, peer bot and tenants must match their explicit environment allowlist");
+  }
+  const clientId = peer ? parsed.data.TEAMS_CALLING_PEER_CLIENT_ID : parsed.data.BOT_CLIENT_ID;
+  return new GraphClient(new AuthenticatedHttp(new ManagedIdentityCredential({ clientId }), teamsCallingScope));
 }
