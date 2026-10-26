@@ -97,7 +97,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("stable provider collection independent of live journey initialization", () => {
-  it.each([200, 403])("publishes one observed provider report through real ARM transport despite journey initialization failure (Graph %s)", async status => {
+  it.each([200, 403])("publishes separate observed provider reports despite journey initialization failure (Graph %s)", async status => {
     vi.mocked(healthReports.createHealthReporter).mockRestore();
     const configured = project();
     configured.services.sharepoint.targets = [{ id: "sharepoint-one" }];
@@ -118,7 +118,7 @@ describe("stable provider collection independent of live journey initialization"
     })).rejects.toThrow("Missing dedicated resources");
     const provider = publications.filter(({ body }) => body.signalName === "microsoft-reported-service-status");
     expect(provider).toHaveLength(1);
-    expect(provider[0]?.url).toContain("/healthmodels/m365-experience-poc-sharepoint/entities/sharepoint-service-health/");
+    expect(provider[0]?.url).toContain("/healthmodels/m365-experience-poc-sharepoint/entities/sharepoint-service-health-health-overviews/");
     expect(provider[0]?.body.healthState).toBe(status === 200 ? "Degraded" : "Unknown");
     if (status === 200) expect(provider[0]?.body.value).toBe(50);
     else {
@@ -128,7 +128,12 @@ describe("stable provider collection independent of live journey initialization"
       });
     }
     expect(JSON.stringify(publications)).not.toMatch(/PRIVATE-PROVIDER-ERROR|test-only-token/);
-    const synthetic = publications.filter(({ body }) => body.signalName !== "microsoft-reported-service-status");
+    const issues = publications.filter(({ body }) => body.signalName === "microsoft-reported-issue-count");
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.body.healthState).toBe("Unknown");
+    if (status === 200) expect(issues[0]?.body.value).toBe(0);
+    else expect(issues[0]?.body).not.toHaveProperty("value");
+    const synthetic = publications.filter(({ body }) => String(body.signalName).startsWith("synthetic-"));
     expect(synthetic.filter(({ body }) => body.healthState === "Unhealthy")).toHaveLength(2);
     expect(synthetic.filter(({ url }) => !url.includes("/entities/sharepoint-global/") && !url.includes("/entities/sharepoint-rename/"))
       .every(({ body }) => body.healthState === "Unknown" && body.value === undefined)).toBe(true);
@@ -156,14 +161,17 @@ describe("stable provider collection independent of live journey initialization"
     expect(reportHealth).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
     expect(results.recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "overview", service: type }));
     expect(output.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
-      providers: { configured: 2, succeeded: 2, failed: 0, skipped: 0, records: 1 },
+      providers: { configured: 2, succeeded: 2, failed: 0, skipped: 0, records: 2 },
     }));
     expect(output.emit).not.toHaveBeenCalledWith("service-cycle-summary", expect.anything());
     expect(credentials.managed).toHaveBeenCalledExactlyOnceWith({ clientId: env.AZURE_CLIENT_ID });
     expect(credentials.certificate).not.toHaveBeenCalled();
     expect(reportHealth).toHaveBeenCalledTimes(2);
     expect(reportHealth).toHaveBeenCalledWith(expect.objectContaining({
-      providerDiagnostics: [expect.objectContaining({ kind: "overview", service: type, status: "serviceOperational" })],
+      providerDiagnostics: expect.arrayContaining([
+        expect.objectContaining({ kind: "overview", service: type, status: "serviceOperational" }),
+        expect.objectContaining({ kind: "issue-summary", service: type, count: 0 }),
+      ]),
     }));
   });
 
@@ -278,7 +286,7 @@ describe("stable provider collection independent of live journey initialization"
     expect(providers).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(output.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
-      providers: { configured: 2, succeeded: 2, failed: 0, skipped: 0, records: 1 },
+      providers: { configured: 2, succeeded: 2, failed: 0, skipped: 0, records: 2 },
     }));
   });
 

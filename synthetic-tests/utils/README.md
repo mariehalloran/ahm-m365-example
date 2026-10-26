@@ -148,7 +148,7 @@ All fields are optional and default to:
 }
 ```
 
-`serviceHealth` must be boolean. `serviceActivity` is strict: aggregation is **5, 10, 15, or 30 minutes**; lookback is an integer multiple up to **1,440 minutes**. Optional `functions` selects 1–5 unique approved identifiers; omission selects all five for that service. `maxAgeMinutes` (5–1,440, default 60) controls source-bucket freshness independently of polling. Optional `thresholds.<function>: { degradedBelow, unhealthyBelow }` enables direct suppressed context reports only for explicitly configured functions:
+`serviceHealth` must be boolean. `serviceActivity` is strict: aggregation is **5, 10, 15, or 30 minutes**; lookback is an integer multiple up to **1,440 minutes**. Optional `functions` selects 1–5 unique approved identifiers; omission selects all five for that service. `maxAgeMinutes` (5–1,440, default 60) controls source-bucket freshness independently of polling. Every selected function directly reports to its own Service Health child entity. Without thresholds, valid values remain diagnostic with Unknown health and no evaluation rules. Optional `thresholds.<function>: { degradedBelow, unhealthyBelow }` enables evaluated health for that context measurement only:
 
 | Service | Beta coverage | Additional application permission |
 | --- | --- | --- |

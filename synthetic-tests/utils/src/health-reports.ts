@@ -5,7 +5,7 @@ import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } fro
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
-import { isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
+import { activityFunctions, isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
 
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
@@ -20,7 +20,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | `microsoft-activity-${ActivityFunction}`;
+    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}`;
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -44,6 +44,7 @@ interface EntitySamples {
 }
 interface Measurement {
   signalName: HealthReport["body"]["signalName"];
+  unit: "Percent" | "Milliseconds";
   rules: EvaluationRules;
   value: number | undefined;
 }
@@ -111,7 +112,8 @@ function createMeasurementReport(
   return {
     entityName,
     body: {
-      signalName: measurement.signalName, expiresInMinutes: ttlMinutes, additionalContext: context,
+      signalName: measurement.signalName, expiresInMinutes: ttlMinutes,
+      additionalContext: JSON.stringify({ ...JSON.parse(context), unit: measurement.unit }),
       healthState: measurement.value === undefined ? "Unknown" : evaluateHealthState(measurement.value, measurement.rules),
       ...(measurement.value === undefined ? {} : { value: measurement.value, evaluationRules: measurement.rules }),
     },
@@ -137,11 +139,11 @@ function createEntityReports(group: EntitySamples, cycleId: string, policy: Poli
   };
   const measurements: Measurement[] = [
     {
-      signalName: "synthetic-success-percentage", rules: successRules,
+      signalName: "synthetic-success-percentage", unit: "Percent", rules: successRules,
       value: attempted ? 100 * succeeded / attempted : undefined,
     },
     {
-      signalName: "synthetic-mean-duration", rules: durationRules,
+      signalName: "synthetic-mean-duration", unit: "Milliseconds", rules: durationRules,
       value: attempted ? group.samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
     },
   ];
@@ -167,14 +169,14 @@ export function serviceActivityReports(
   if (!service.serviceActivity.enabled) return [];
   const parsed = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.safeParse(record));
   const records = parsed.flatMap(record => record.success && record.data.service === service.type ? [record.data] : []);
-  return Object.entries(service.serviceActivity.thresholds).flatMap(([name, thresholds]) => {
-    if (!thresholds) return [];
-    const functionName = name as ActivityFunction;
+  return (service.serviceActivity.functions ?? activityFunctions[service.type]).map(functionName => {
+    const thresholds = service.serviceActivity.thresholds[functionName];
     const rows = records.filter((record): record is Extract<ProviderDiagnostic, { kind: "activity" }> =>
       record.kind === "activity" && record.function === functionName)
       .sort((a, b) => Date.parse(b.intervalEnd) - Date.parse(a.intervalEnd));
     const latest = rows[0];
     const failed = parsed.some((record, index) => !record.success &&
+      cycle.providerDiagnostics[index]?.service === service.type &&
       cycle.providerDiagnostics[index]?.kind === "activity" &&
       (cycle.providerDiagnostics[index] as Extract<ProviderDiagnostic, { kind: "activity" }>).function === functionName) || records.some(record =>
       (record.kind === "failure" || record.kind === "skipped") && record.source === functionName);
@@ -187,26 +189,28 @@ export function serviceActivityReports(
         : latest.percentage === undefined && latest.value !== undefined);
     const sample = latest ? isPercentageActivity(functionName) ? latest.percentage : latest.value : undefined;
     const value = failed || stale || !valid ? undefined : sample;
-    const rules: EvaluationRules = {
+    const rules: EvaluationRules | undefined = thresholds ? {
       degradedRule: { operator: "LessThan", threshold: thresholds.degradedBelow },
       unhealthyRule: { operator: "LessThan", threshold: thresholds.unhealthyBelow },
-    };
-    return [{
-      entityName: `${service.type}-service-health`,
+    } : undefined;
+    return {
+      entityName: `${service.type}-service-health-${functionName}`,
       body: {
         signalName: `microsoft-activity-${functionName}` as const, expiresInMinutes: ttlMinutes,
-        healthState: value === undefined ? "Unknown" : evaluateHealthState(value, rules),
-        ...(value === undefined ? {} : { value, evaluationRules: rules }),
+        healthState: value === undefined || !rules ? "Unknown" : evaluateHealthState(value, rules),
+        ...(value === undefined ? {} : { value, ...(rules ? { evaluationRules: rules } : {}) }),
         additionalContext: JSON.stringify({
           cycleId: cycle.cycleId, source: functionName, apiVersion: "beta", aggregation: "latest-complete-bucket",
           ...(latest ? { intervalStart: latest.intervalStart, intervalEnd: latest.intervalEnd } : {}),
-          unit: isPercentageActivity(functionName) ? "percentage" : "count",
+          unit: isPercentageActivity(functionName) ? "Percent" : "Count",
+          evaluated: rules !== undefined,
           interpretation: functionName === "getAudioStreamQoEMetricsForTeams" ? "telemetry-coverage-not-call-quality"
-            : functionName === "getAudioStreamsOverUdpMetricsForTeams" ? "network-context-not-call-quality" : "customer-configured-threshold",
+            : functionName === "getAudioStreamsOverUdpMetricsForTeams" ? "network-context-not-call-quality"
+              : rules ? "customer-configured-threshold" : "diagnostic-only-no-threshold",
           diagnosticCategories: failed ? ["collection-failure"] : !latest ? ["no-data"] : stale ? ["stale-data"] : value === undefined ? ["malformed-response"] : [],
         }),
       },
-    }];
+    };
   });
 }
 
@@ -224,22 +228,53 @@ export function serviceHealthReport(
   const knownScores = scores.filter((score): score is number => typeof score === "number");
   const stale = overviews.some(record => Date.parse(record.collectedAt) > now ||
     now - Date.parse(record.collectedAt) > maxAgeMinutes * 60000);
-  const invalid = parsed.some((record, index) => !record.success && cycle.providerDiagnostics[index]?.kind === "overview");
+  const invalid = parsed.some((record, index) => !record.success &&
+    cycle.providerDiagnostics[index]?.service === service && cycle.providerDiagnostics[index]?.kind === "overview");
   const value = failures.length || skipped || stale || invalid || !scores.length || knownScores.length !== scores.length
     ? undefined : Math.min(...knownScores);
   return {
-    entityName: `${service}-service-health`,
+    entityName: `${service}-service-health-health-overviews`,
     body: {
       signalName: "microsoft-reported-service-status", expiresInMinutes: ttlMinutes,
       healthState: value === undefined ? "Unknown" : value === 100 ? "Healthy" : value === 0 ? "Unhealthy" : "Degraded",
       ...(value === undefined ? {} : { value }),
       additionalContext: JSON.stringify({
         cycleId: cycle.cycleId, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
+        unit: "status-score", mapping: { serviceOperational: 100, serviceDegradation: 50, serviceInterruption: 0 },
         overviewCount: overviews.length,
         statuses: [...new Set(overviews.map(record => record.status))].slice(0, 8),
         diagnosticCategories: failures.length ? [...new Set(failures.map(record => record.category))]
           : !overviews.length ? ["no-data"] : stale ? ["stale-data"] : [],
         httpStatuses: [...new Set(failures.flatMap(record => record.httpStatus === undefined ? [] : [record.httpStatus]))].slice(0, 8),
+      }),
+    },
+  };
+}
+
+export function serviceHealthIssuesReport(
+  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number, now = Date.now(), maxAgeMinutes = 60,
+): HealthReport {
+  const parsed = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.safeParse(record));
+  const records = parsed.flatMap(record => record.success && record.data.service === service ? [record.data] : []);
+  const summaries = records.filter(record => record.kind === "issue-summary");
+  const summary = summaries[0];
+  const failed = records.some(record =>
+    (record.kind === "failure" || record.kind === "skipped") && record.source === "serviceAnnouncement.issues");
+  const invalid = parsed.some((record, index) => !record.success &&
+    cycle.providerDiagnostics[index]?.service === service && cycle.providerDiagnostics[index]?.kind === "issue-summary");
+  const stale = summary && (Date.parse(summary.collectedAt) > now ||
+    now - Date.parse(summary.collectedAt) > maxAgeMinutes * 60000);
+  const value = summaries.length !== 1 || failed || invalid || stale ? undefined : summary?.count;
+  return {
+    entityName: `${service}-service-health-issues`,
+    body: {
+      signalName: "microsoft-reported-issue-count", healthState: "Unknown", expiresInMinutes: ttlMinutes,
+      ...(value === undefined ? {} : { value }),
+      additionalContext: JSON.stringify({
+        cycleId: cycle.cycleId, source: "serviceAnnouncement.issues", apiVersion: "v1.0", unit: "Count",
+        interpretation: "diagnostic-only-no-threshold", evaluated: false,
+        diagnosticCategories: failed ? ["collection-failure"] : stale ? ["stale-data"]
+          : invalid || summaries.length > 1 ? ["malformed-response"] : !summary ? ["no-data"] : [],
       }),
     },
   };
@@ -297,7 +332,10 @@ export function createHealthReporter(
   return async cycle => {
     const reports = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
       : service.mode === "live" ? [
-        ...(service.serviceHealth ? [serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes)] : []),
+        ...(service.serviceHealth ? [
+          serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
+          serviceHealthIssuesReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
+        ] : []),
         ...serviceActivityReports(service, cycle, policy.reportTtlMinutes),
       ] : [];
     if (!http) {

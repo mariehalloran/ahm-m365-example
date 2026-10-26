@@ -90,8 +90,11 @@ export function serviceHealthSources(service: ServiceConfig["type"]): ProviderSo
     {
       source: "serviceAnnouncement.issues", apiVersion: "v1.0",
       async collect(graph, signal, collectedAt) {
-        return (await getServiceHealthIssues(graph, signal))
-          .filter(item => item.service === name).map(item => normalizeServiceHealthIssue(item, service, collectedAt));
+        const issues = (await getServiceHealthIssues(graph, signal)).filter(item => item.service === name);
+        return [
+          ...issues.map(item => normalizeServiceHealthIssue(item, service, collectedAt)),
+          { kind: "issue-summary" as const, service, collectedAt, count: issues.length },
+        ];
       },
     },
   ];

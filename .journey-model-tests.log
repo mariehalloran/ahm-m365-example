@@ -1,0 +1,21 @@
+test_all_services_disabled_keeps_evidence_free_root (test_templates.ModelTemplateContracts.test_all_services_disabled_keeps_evidence_free_root) ... ok
+test_catalog_contains_only_journey_and_business_step_metadata (test_templates.ModelTemplateContracts.test_catalog_contains_only_journey_and_business_step_metadata) ... ok
+test_direct_provider_activity_signals_are_on_suppressed_context_not_journey_nodes (test_templates.ModelTemplateContracts.test_direct_provider_activity_signals_are_on_suppressed_context_not_journey_nodes) ... ok
+test_exchange_six_journeys_and_all_business_steps (test_templates.ModelTemplateContracts.test_exchange_six_journeys_and_all_business_steps) ... ok
+test_external_reports_remain_with_optional_journey_and_step_otel (test_templates.ModelTemplateContracts.test_external_reports_remain_with_optional_journey_and_step_otel) ... ok
+test_external_source_group_preserves_rollup_policy (test_templates.ModelTemplateContracts.test_external_source_group_preserves_rollup_policy) ... ok
+test_individual_call_journey_has_shared_wait_steps_and_preserves_existing_ids (test_templates.ModelTemplateContracts.test_individual_call_journey_has_shared_wait_steps_and_preserves_existing_ids) ... ok
+test_journeys_have_distinct_business_step_entities_and_suppressed_context (test_templates.ModelTemplateContracts.test_journeys_have_distinct_business_step_entities_and_suppressed_context) ... ok
+test_multiple_journeys_are_selected_independently_in_one_service (test_templates.ModelTemplateContracts.test_multiple_journeys_are_selected_independently_in_one_service) ... ok
+test_native_references_and_scoped_reader (test_templates.ModelTemplateContracts.test_native_references_and_scoped_reader) ... ok
+test_only_journey_roots_have_user_flow_icon (test_templates.ModelTemplateContracts.test_only_journey_roots_have_user_flow_icon) ... ok
+test_planned_catalog_is_model_only_complete_and_suppressed (test_templates.ModelTemplateContracts.test_planned_catalog_is_model_only_complete_and_suppressed) ... ok
+test_queries_bind_service_journey_and_step_without_provider_or_simulated_evidence (test_templates.ModelTemplateContracts.test_queries_bind_service_journey_and_step_without_provider_or_simulated_evidence) ... ok
+test_service_and_scenario_selection_contract (test_templates.ModelTemplateContracts.test_service_and_scenario_selection_contract) ... ok
+test_shared_project_defaults_and_catalog (test_templates.ModelTemplateContracts.test_shared_project_defaults_and_catalog) ... ok
+test_workspace_dependencies_are_optional_and_only_for_azure_export (test_templates.ModelTemplateContracts.test_workspace_dependencies_are_optional_and_only_for_azure_export) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 1.309s
+
+OK

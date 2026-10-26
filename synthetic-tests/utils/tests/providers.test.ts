@@ -349,7 +349,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       expect(observations.every(result => result.success && result.steps.length === 1)).toBe(true);
       expect(JSON.stringify(observations)).not.toContain("provider.");
       expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
-        providers: { configured: type === "sharepoint" ? 2 : 3, succeeded: type === "sharepoint" ? 2 : 3, failed: 0, skipped: 0, records: type === "sharepoint" ? 2 : 3 },
+        providers: { configured: type === "sharepoint" ? 2 : 3, succeeded: type === "sharepoint" ? 2 : 3, failed: 0, skipped: 0, records: type === "sharepoint" ? 3 : 4 },
       }));
     } finally {
       vi.restoreAllMocks();
@@ -378,7 +378,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       });
       expect(records.filter(record => record.body === "m365-service-activity")).toHaveLength(1);
       expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
-        providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
+        providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 2 },
       }));
       expect(JSON.stringify(records)).not.toMatch(/PRIVATE-ERROR-BODY|test-only-token|private@example/);
       expect(telemetry.events.emit.mock.calls.filter(([event]) => event === "synthetic-result").map(([, data]) => data.result.success)).toEqual([true, true]);
@@ -394,8 +394,10 @@ describe("isolated once-per-cycle provider diagnostics", () => {
       service: parseServiceConfig({ ...rawConfig(), serviceHealth: true, serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] } }),
       graph: http.graph, signal: signal(), results: { recordDiagnostic }, now,
     });
-    expect(summary).toEqual({ configured: 3, succeeded: 1, failed: 2, skipped: 0, records: 0 });
-    expect(recordDiagnostic.mock.calls.map(([record]) => record.category).sort()).toEqual(["malformed-response", "no-data"]);
+    expect(summary).toEqual({ configured: 3, succeeded: 1, failed: 2, skipped: 0, records: 1 });
+    expect(recordDiagnostic.mock.calls.filter(([record]) => record.kind === "failure").map(([record]) => record.category).sort())
+      .toEqual(["malformed-response", "no-data"]);
+    expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "issue-summary", count: 0 }));
     expect(JSON.stringify(recordDiagnostic.mock.calls)).not.toContain("serviceOperational");
   });
   it.each(["invalid-value", "empty", "http-error", "invalid-json"] as const)(
@@ -426,7 +428,7 @@ describe("isolated once-per-cycle provider diagnostics", () => {
         expect(results).toHaveLength(2);
         expect(results.every(result => result.success)).toBe(true);
         expect(telemetry.events.emit).toHaveBeenCalledWith("service-provider-summary", expect.objectContaining({
-          providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 1 },
+          providers: { configured: 3, succeeded: 2, failed: 1, skipped: 0, records: 2 },
         }));
         expect(JSON.stringify(logs)).not.toContain("PRIVATE-BETA-FAILURE");
       } finally { vi.restoreAllMocks(); }

@@ -14,6 +14,10 @@ export const providerCategories = [...categories, "no-data", "pagination-budget"
 const base = { service, collectedAt };
 export const providerDiagnosticSchema = z.discriminatedUnion("kind", [
   z.object({
+    ...base, kind: z.literal("issue-summary"),
+    count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  }).strict(),
+  z.object({
     ...base, kind: z.literal("overview"), serviceId: z.string().min(1).max(256),
     serviceName: z.string().min(1).max(128), status: z.string().min(1).max(128),
   }).strict(),
@@ -52,6 +56,13 @@ export function providerLog(raw: ProviderDiagnostic): { body: string; timestamp:
   };
   let body: string;
   switch (record.kind) {
+    case "issue-summary":
+      body = "m365-service-health-issue-summary";
+      Object.assign(attributes, {
+        "provider.source": "serviceAnnouncement.issues", "provider.api_version": "v1.0",
+        "provider.value": record.count, "provider.unit": "Count",
+      });
+      break;
     case "overview":
       body = "m365-service-health-overview";
       Object.assign(attributes, {

@@ -44,6 +44,18 @@ func sourceGroup(name string, displayName string, members string[]) object => {
 }
 
 var contextName = '${service.service}-service-health'
+var hasRuntime = !empty(filter(service.journeys, journey => !(journey.?planned ?? false)))
+var providerCalls = !hasRuntime ? [] : concat(
+  [
+    { name: 'health-overviews', displayName: 'serviceAnnouncement.healthOverviews (status score)', signalName: 'microsoft-reported-service-status' }
+    { name: 'issues', displayName: 'serviceAnnouncement.issues (Count)', signalName: 'microsoft-reported-issue-count' }
+  ],
+  map(providerActivityFunctions[service.service], name => {
+    name: name
+    displayName: name
+    signalName: 'microsoft-activity-${name}'
+  })
+)
 var telemetryQuery = loadTextContent('../queries/synthetic.kql')
 var telemetryMetrics = [
   {
@@ -80,26 +92,41 @@ var nodes = concat(
       x: 300
       y: 0
     }
+  ],
+  hasRuntime ? [
     {
       name: contextName
       displayName: 'Service Health'
       kind: 'context'
       journey: ''
       step: ''
-      rollup: false
+      rollup: true
       impact: 'Suppressed'
       x: 0
       y: 240
     }
-  ],
+  ] : [],
+  map(providerCalls, call => {
+    name: '${contextName}-${call.name}'
+    displayName: call.displayName
+    kind: 'provider-call'
+    journey: ''
+    step: ''
+    signalName: call.signalName
+    rollup: false
+    impact: 'Standard'
+    x: 0
+    y: 440 + indexOf(providerCalls, call) * 170
+  }),
   map(service.journeys, journey => {
     name: journey.entityName
     displayName: journey.displayName
     kind: 'journey'
+    planned: journey.?planned ?? false
     journey: journey.name
     step: ''
     rollup: true
-    impact: 'Standard'
+    impact: (journey.?planned ?? false) ? 'Suppressed' : 'Standard'
     x: 400 + indexOf(service.journeys, journey) * 500
     y: 240
   }),
@@ -108,8 +135,9 @@ var nodes = concat(
     journey =>
       map(journey.steps, step => {
         name: '${journey.entityName}-${step.name}'
-        displayName: step.displayName
+        displayName: (journey.?planned ?? false) ? '[Planned / unimplemented] ${step.displayName}' : step.displayName
         kind: 'step'
+        planned: journey.?planned ?? false
         journey: journey.name
         step: step.name
         rollup: false
@@ -120,7 +148,8 @@ var nodes = concat(
   ))
 )
 var relationships = concat(
-  [{ parent: modelName, child: contextName }],
+  hasRuntime ? [{ parent: modelName, child: contextName }] : [],
+  map(providerCalls, call => { parent: contextName, child: '${contextName}-${call.name}' }),
   map(service.journeys, journey => { parent: modelName, child: journey.entityName }),
   flatten(map(
     service.journeys,
@@ -174,7 +203,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
         canvasPosition: { x: node.x, y: node.y }
         signalGroups: union(
           node.rollup ? { dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false } } : {},
-          enableOtel && (node.kind == 'journey' || node.kind == 'step')
+          enableOtel && (node.kind == 'journey' || node.kind == 'step') && !(node.?planned ?? false)
             ? {
                 azureLogAnalytics: {
                   authenticationSetting: 'workspace-query'
@@ -198,7 +227,10 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
             : {}
         )
       },
-      node.kind == 'root'
+      node.kind == 'journey'
+        ? { icon: { iconName: 'UserFlow' } }
+        : {},
+      node.kind == 'root' || node.kind == 'context' || (node.?planned ?? false)
         ? {}
         : {
             signalAggregationGroups: concat(
@@ -206,12 +238,12 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                 sourceGroup(
                   'external-reports',
                   'External Reports',
-                  node.kind == 'context'
-                    ? concat(['microsoft-reported-service-status'], map(providerActivityFunctions[service.service], name => 'microsoft-activity-${name}'))
+                  node.kind == 'provider-call'
+                    ? [node.signalName]
                     : ['synthetic-success-percentage', 'synthetic-mean-duration']
                 )
               ],
-              enableOtel && node.kind != 'context'
+              enableOtel && (node.kind == 'journey' || node.kind == 'step')
                 ? [sourceGroup('otel', 'OpenTelemetry', ['otel-success-percentage', 'otel-mean-duration'])]
                 : []
             )

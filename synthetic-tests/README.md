@@ -17,7 +17,7 @@ SharePoint Container App [test + aggregation, every 300 seconds] --+
 
 ```
 
-The [health model templates](../health-model/README.md) create a root referencing separate enabled service models. Eleven journeys have business-step children: **40 business steps, four models, 61 entities and 57 relationships** in the full family. Target attempts aggregate without per-user signal inventories; existing journey IDs stay unchanged. Each journey/step has **External Reports**, plus optional **OpenTelemetry** for Azure export. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps. Use the [shared worker deployment](./infra/README.md) and [model migration](../health-model/README.md#apply-and-migrate).
+The [health model templates](../health-model/README.md) create a root referencing service models, including a planned-only OneDrive model. The complete catalog has **five models, 180 entities and 175 relationships**: eleven implemented and 23 planned journey roots, with 40 implemented and 78 planned steps. Target attempts aggregate without per-user signal inventories; existing IDs stay unchanged. Implemented journeys/steps have **External Reports**, plus optional **OpenTelemetry**; planned nodes have no reports, stay Unknown and are suppressed from synthetic rollup. Token acquisition and generic cleanup remain internal; explicit deletion/cancellation/hang-up are business steps. Use the [shared worker deployment](./infra/README.md) and [model migration](../health-model/README.md#apply-and-migrate).
 
 Each service has its own Container App and cadence. Console diagnostics remain in that same process; no separate telemetry service or Kubernetes requirement is introduced.
 
@@ -41,7 +41,7 @@ unless explicitly listed as current root scenarios.
 
 ### OneDrive target catalog (planned)
 
-There is no OneDrive worker, health model, root scenario selection or live verification
+There is no OneDrive worker, root scenario selection or live verification
 yet. Keep this catalog here until implementation exists; no empty service folder is needed.
 
 | Planned family | Completed-workflow target |
@@ -126,7 +126,7 @@ After each settled lane cycle, aggregate actual attempts separately for each jou
 
 Executed failures and execution timeouts count as zero success; timeouts report Unhealthy, not Unknown. Unexecuted dependent steps are not failed requests: skipped/unobserved actions have no artificial samples and receive Unknown reports without a numeric value. No aggregation history is retained across cycles. Simulation only prints `health-report-preview`; live mode publishes direct ARM health reports and console diagnostics. Publication failures remain explicit.
 
-Reports default to a 15-minute TTL and are replaced each cycle. An incomplete/cancelled cycle explicitly skips synthetic reports rather than publishing a healthy partial aggregate. Expiry **removes** external signals; it does not guarantee Unhealthy or an alert. Independently detect stopped/stalled execution and broken publication. Reports are current-cycle aggregates, not a full metrics store, percentile history, or arbitrary logs query interface; means alone cannot reconstruct weighted historical statistics.
+Reports default to a 15-minute TTL and are replaced each cycle. Settled execution-deadline failures are reported, not discarded as incomplete; external shutdown must not publish a healthy partial aggregate. Expiry **removes** external signals; it does not guarantee Unhealthy or an alert. Independently detect stopped/stalled execution and broken publication. Reports are current-cycle aggregates, not a full metrics store, percentile history, or arbitrary logs query interface; means alone cannot reconstruct weighted historical statistics.
 
 Live hosted workers do not substitute simulations when resources are unready. Real API/authorization failures make the journey unsuccessful. Valid-but-incomplete setup is reported as an actual unexecutable initialization failure: the journey gets a zero-success/Unhealthy report and unexecuted action signals remain Unknown. Recurring workers retry initialization on their service cadence; `--once` still fails after publishing. Invalid schemas and unavailable report credentials can prevent publication entirely.
 
@@ -141,12 +141,19 @@ Logs retain service/journey/action attribution, correlation IDs and explicit liv
 Provider collection is read-only and runs once per service worker cycle in the existing process—not once per journey or target. Safe simulation configs keep it off; the live examples enable stable Service Health. Collection is independent of journey initialization, so missing targets/bot credentials do not block the Graph attempt. Explicit permission/collection errors are logged; no Microsoft health is fabricated. Provider data never changes journey results or the 1/0 synthetic/step measurements.
 
 - `serviceHealth: true` reads stable `/v1.0/admin/serviceAnnouncement/healthOverviews` and `/issues` for the exact subscribed service name. Overview status reports directly to `${service}-service-health` as `microsoft-reported-service-status` in **External Reports**: **100 healthy, 50 degraded, 0 interruption**, with `impactSuppressed`. Failed/missing/unknown overview status produces Unknown without a value and with failure context. The existing trial observes Graph 403 until `ServiceHealth.Read.All` admin consent is granted. Issues/history remain console diagnostics and do not populate health signals.
-- `serviceActivity: { "enabled": true, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 }` additionally requires **`ENABLE_BETA_SERVICE_ACTIVITY=true`**. Exchange connectivity percentages and Teams chat volumes are **experimental beta diagnostics only**, unsupported for production use; they never bubble into Experience/journey health. SharePoint beta configuration is rejected because no SharePoint-specific report is verified.
+- `serviceActivity: { "enabled": true, "aggregationIntervalMinutes": 15, "lookbackMinutes": 30 }` additionally requires **`ENABLE_BETA_SERVICE_ACTIVITY=true`**. Five approved Exchange and five Teams beta functions provide experimental supporting context. Approved status/percentage mappings and explicitly configured thresholds can publish direct suppressed Service Health reports; activity counts remain diagnostic unless thresholds are configured. They never supply synthetic samples or Experience/journey health. SharePoint beta configuration is rejected because no SharePoint-specific report is verified.
 - Live mode still requires `ENABLE_LIVE_M365=true` and separately approved application permissions: `ServiceHealth.Read.All`, and optionally `ServiceActivity-Exchange.Read.All` or `ServiceActivity-Teams.Read.All`. These are additional provider permissions, not replacements for scoped journey access. Nothing grants them automatically. Tenant eligibility/enablement must be confirmed.
 
 Business Basic can support the API-backed synthetics and stable Service Health where the subscribed service (including an appropriate Teams SKU) and administrator-approved access exist. Do **not** assume beta report entitlement on Basic: its API pages document permissions, not explicit Basic eligibility. Microsoft's separate [advanced Microsoft 365 monitoring](https://learn.microsoft.com/microsoft-365/enterprise/microsoft-365-monitoring) requires at least 5,000 qualifying Office 365/Microsoft 365 E3/E5 licenses and 50 monthly active users for a core service; that published monitoring eligibility is not proof of beta API entitlement. Confirm report availability with the tenant administrator.
 
-Simulation skips configured sources without Graph credentials/network or fabricated Microsoft health. Provider failures (including missing/invalid data, permission errors, throttling, and bounded pagination) are explicit sanitized console diagnostics and summary failure counts, not successful empty snapshots. Historical overlapping beta windows are **diagnostics only**, never counters or success rates.
+Stable and beta collectors use independent provider lanes inside existing service
+containers (`providerIntervalSeconds`, default **300 seconds**), separate from user journeys.
+Beta collection currently receives 403, never fabricated Healthy. Simulation skips
+configured sources without Graph credentials/network or fabricated Microsoft health.
+Provider failures (including missing/invalid data, permission errors, throttling,
+and bounded pagination) are explicit sanitized console diagnostics and summary failure
+counts, not successful empty snapshots. Historical overlapping beta windows are not
+synthetic counters or success rates. OTEL remains optional.
 
 See the [exact configuration, diagnostic contract and bounds](./utils/README.md#optional-provider-collectors) and [measurement semantics](./utils/README.md#measurement-semantics). Each attempt contributes one binary success observation (1 or 0); total duration stays separate from request and confirmed delivery/publication durations. Reports aggregate separately by journey/business step, never by per-target dimensions or inventories.
 
@@ -181,7 +188,7 @@ The deploying administrator needs scoped resource creation/identity-attachment r
 
 | Journey | Administrator action | Boundary to verify |
 | --- | --- | --- |
-| Exchange | Register the identity's service-principal reference in Exchange; assign **`Application Mail.ReadWrite`** and **`Application Mail.Send`** through Exchange RBAC for Applications | Scope only the dedicated mailbox; verify it is allowed and an approved control mailbox is denied |
+| Exchange | Register the identity's service-principal reference in Exchange; assign **`Application Mail.ReadWrite`**, **`Application Mail.Send`**, and calendar journeys' **`Application Calendars.ReadWrite`** through Exchange RBAC for Applications | Scope only the dedicated participants; verify allowed participants and an approved denied control mailbox |
 | SharePoint | Assign Graph application permission **`Sites.Selected`**, then explicitly grant the identity **`write`** on the approved test site | `Sites.Selected` alone grants no site access; the site grant covers that site, not just the configured folder |
 | Teams | Approve the public client's delegated **`ChannelMessage.Send`**, **`ChannelMessage.Read.All`**, **`ChannelMessage.ReadWrite`** and individual human bootstraps; see the [cache/bootstrap guide](../docs/teams-user-bootstrap.md) | Every selected root test-user UPN, same tenant, dedicated standard channel, independently verified posting authors; no provisioning scopes on the runtime app |
 
@@ -296,10 +303,10 @@ uses explicit `certificate` mode and `M365_*`; it does not change Azure reportin
 
 | Surface | Current state |
 | --- | --- |
-| Exchange, Teams, SharePoint journeys and named steps | Eleven implemented journeys, safe simulation defaults and HTTP-mocked tests; original Exchange/Teams have recorded successful live acceptance; expanded Exchange requires tenant acceptance; SharePoint setup remains incomplete |
+| Exchange, Teams, SharePoint journeys and named steps | Eleven implemented journeys, safe simulation defaults and HTTP-mocked tests. Exchange mail/draft/attachment-reply/DL verified Healthy; calendar currently 403-blocked. Teams single-bot messaging/readback and signaling-only calls live verified; SharePoint lacks approved live targets. Target catalogs are broader than implementation. |
 | Root config, scheduling, direct aggregated reports, console diagnostics, provider callbacks | Connected in code; safe simulation previews by default; live examples collect stable provider context |
-| Root model of service models and journey/step entities | Four models, 61 entities, 57 relationships, eleven journeys and 40 business steps; External Reports always, OTEL optional |
-| Stable provider context / beta diagnostics | All three context signals verified Unknown with Graph 403/permission-failure diagnostics and suppressed impact; issues and beta remain diagnostics only, never synthetic success samples |
+| Root model of service models and journey/step entities | Five models, 180 entities, 175 relationships: eleven implemented and 23 planned journey roots, 118 business steps. Implemented External Reports always, OTEL optional; planned coverage stays Unknown/suppressed with no reports or workers. See [catalog](../health-model/README.md#catalog-versus-modeled-and-live-coverage). |
+| Stable provider context / beta diagnostics | Independent 300-second provider lanes; direct suppressed status/threshold reports, counts diagnostic absent thresholds, issues diagnostic. Beta currently 403; failed/missing data stays Unknown, never synthetic success samples. See [provider evidence](../docs/provider-monitoring.md). |
 | Worker hosting and packaging | Separate Container Apps reuse one immutable image; see the dated [live baseline](../docs/deployment.md#deployment-status-and-order) rather than treating sample settings as deployed state |
 | Tenant authorization and runtime settings | Mailbox-scoped Exchange and team-scoped Teams readback verified in the baseline; each new deployment must validate its own allowed/denied grants, targets and ingestion |
 | Production operations | Independent stalled-worker/broken-publication detection, end-to-end notifications and OTEL cloud ingestion remain acceptance gates |

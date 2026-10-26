@@ -15,45 +15,11 @@ var providerActivityFunctions = {
     'getAudioStreamsOverUdpMetricsForTeams'
   ]
   sharepoint: []
+  onedrive: []
 }
 
 type ServiceStep = {
-  name:
-    | 'create-draft'
-    | 'send'
-    | 'confirm-delivery'
-    | 'post-message'
-    | 'confirm-publication'
-    | 'verify-drive'
-    | 'upload-file'
-    | 'read-file'
-    | 'update-draft'
-    | 'read-draft'
-    | 'post-reply'
-    | 'confirm-reply'
-    | 'rename-file'
-    | 'place-call'
-    | 'wait-before-hangup'
-    | 'end-call'
-    | 'read-initial-draft'
-    | 'delete-draft'
-    | 'send-attachment'
-    | 'verify-attachment'
-    | 'reply-mail'
-    | 'confirm-reply-mail'
-    | 'send-group-mail'
-    | 'confirm-group-delivery'
-    | 'create-event'
-    | 'read-occurrence'
-    | 'update-event'
-    | 'verify-event'
-    | 'delete-event'
-    | 'create-meeting'
-    | 'confirm-invitation'
-    | 'verify-attendee-calendar'
-    | 'accept-meeting'
-    | 'confirm-acceptance'
-    | 'cancel-meeting'
+  name: string
   displayName: string
 }
 
@@ -63,11 +29,12 @@ type JourneyDefinition = {
   entityName: string
   displayName: string
   steps: ServiceStep[]
+  planned: bool?
 }
 
 @export()
 type ServiceDefinition = {
-  service: 'exchange' | 'teams' | 'sharepoint'
+  service: 'exchange' | 'teams' | 'sharepoint' | 'onedrive'
   displayName: string
   journeys: JourneyDefinition[]
 }

@@ -62,7 +62,9 @@ class ModelTemplateContracts(unittest.TestCase):
         selected = self.selected(self.project)
         journeys = [journey for service in selected for journey in service["journeys"]]
         steps = sum(len(journey["steps"]) for journey in journeys)
-        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps, len(selected) * 2 + len(journeys) + steps), (4, 61, 57))
+        calls = sum(2 + len(self.provider_functions(service["service"])) for service in selected)
+        self.assertEqual((len(selected) + 1, 1 + len(selected) * 3 + len(journeys) + steps + calls,
+                          len(selected) * 2 + len(journeys) + steps + calls), (4, 77, 73))
         self.assertEqual(steps, 40)
         for service in self.catalog:
             for journey in service["journeys"]:
@@ -70,7 +72,8 @@ class ModelTemplateContracts(unittest.TestCase):
                 self.assertFalse({"authenticate", "cleanup"} & {step["name"] for step in journey["steps"]})
 
     def test_service_and_scenario_selection_contract(self):
-        self.assertIn("variables('selectedServices')", self.template["variables"]["enabledServices"])
+        self.assertIn("variables('modelServices')", self.template["variables"]["enabledServices"])
+        self.assertIn("variables('selectedServices')", self.template["variables"]["runtimeServices"])
         self.assertIn("scenarios", self.template["variables"]["selectedServices"])
         self.assertIn("lambdaVariables('journey').name", self.template["variables"]["selectedServices"])
         for service in self.catalog:
@@ -138,6 +141,32 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("microsoft-activity-", compiled)
         self.assertIn("microsoft-reported-service-status", compiled)
         self.assertNotIn("serviceActivity", self.service_template["parameters"])
+        self.assertIn("microsoft-reported-issue-count", compiled)
+        calls = self.service_template["variables"]["providerCalls"]
+        self.assertIn("'name', 'health-overviews'", calls)
+        self.assertIn("'name', 'issues'", calls)
+        relationships = self.service_template["variables"]["relationships"]
+        self.assertIn("variables('providerCalls')", relationships)
+        self.assertIn("variables('contextName')", relationships)
+        entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
+        properties = entity["properties"]
+        self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'provider-call')", properties)
+        self.assertIn("createArray(variables('nodes')[copyIndex()].signalName)", properties)
+        self.assertNotIn("concat(createArray('microsoft-reported-service-status')", properties)
+        self.assertIn("providerCallCount", self.template["outputs"]["entityCount"]["value"])
+        self.assertIn("providerCallCount", self.template["outputs"]["relationshipCount"]["value"])
+
+    def provider_functions(self, service):
+        return {
+            "exchange": range(5), "teams": range(5), "sharepoint": [],
+        }[service]
+
+    def test_only_journey_roots_have_user_flow_icon(self):
+        entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
+        properties = entity["properties"]
+        self.assertIn("if(equals(variables('nodes')[copyIndex()].kind, 'journey'), createObject('icon'", properties)
+        self.assertIn("'iconName', 'UserFlow'", properties)
+        self.assertNotIn("'customData'", properties)
 
     def test_all_services_disabled_keeps_evidence_free_root(self):
         project = copy.deepcopy(self.project)
@@ -151,6 +180,50 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertEqual(root["properties"]["signalGroups"]["dependencies"], {
             "aggregationType": "WorstOf", "ignoreUnknown": False,
         })
+
+    def test_planned_catalog_is_model_only_complete_and_suppressed(self):
+        planned = resolve_literals(self.template["variables"]["plannedServiceDefinitions"], self.template)
+        self.assertEqual({service["service"]: len(service["journeys"]) for service in planned},
+                         {"exchange": 4, "teams": 7, "sharepoint": 6, "onedrive": 6})
+        self.assertTrue(self.template["parameters"]["includePlannedJourneys"]["defaultValue"])
+        self.assertNotIn("onedrive", self.project["services"])
+        self.assertIn("includePlannedJourneys", self.template["variables"]["modelServices"])
+        functions = {name: definition for namespace in self.template["functions"]
+                     for name, definition in namespace["members"].items()}
+        planned_function = next(definition for name, definition in functions.items() if name == "journey")
+        output = planned_function["output"]["value"]
+        self.assertTrue(output["planned"])
+        self.assertIn("[Planned / unimplemented]", output["displayName"])
+        planned_names = set()
+        planned_steps = 0
+        for service in planned:
+            for expression in service["journeys"]:
+                literals = re.findall(r"'([^']*)'", expression)
+                self.assertEqual(literals[0], service["service"])
+                name = f"{literals[0]}-planned-{literals[1]}"
+                self.assertNotIn(name, planned_names)
+                planned_names.add(name)
+                self.assertGreaterEqual(len(literals[3:]), 2)
+                planned_steps += len(literals[3:])
+        self.assertEqual(len(planned_names), 23)
+        self.assertEqual(planned_steps, 78)
+        runtime_journeys = [journey for service in self.catalog for journey in service["journeys"]]
+        steps = planned_steps + sum(len(journey["steps"]) for journey in runtime_journeys)
+        journeys = len(planned_names) + len(runtime_journeys)
+        calls = sum(2 + len(self.provider_functions(service["service"])) for service in self.catalog)
+        self.assertEqual(1 + len(planned) * 2 + len(self.catalog) + journeys + steps + calls, 180)
+        self.assertEqual(len(planned) + len(self.catalog) + journeys + steps + calls, 175)
+        self.assertIn("teams-planned-two-bot-conversation", planned_names)
+        self.assertIn("teams-planned-answered-audio", planned_names)
+        self.assertIn("sharepoint-planned-library-folder-roundtrip", planned_names)
+        nodes = self.service_template["variables"]["nodes"]
+        self.assertIn("tryGet(lambdaVariables('journey'), 'planned')", nodes)
+        self.assertIn("'Suppressed', 'Standard'", nodes)
+        properties = next(item for item in self.service_resources if item["type"].endswith("/entities"))["properties"]
+        self.assertIn("tryGet(variables('nodes')[copyIndex()], 'planned')", properties)
+        reference = next(item for item in self.resources if item.get("copy", {}).get("name") == "serviceReferences")
+        self.assertIn("'Suppressed', 'Standard'", reference["properties"]["impact"])
+        self.assertIn("variables('hasRuntime')", self.service_template["variables"]["providerCalls"])
 
     def test_workspace_dependencies_are_optional_and_only_for_azure_export(self):
         self.assertEqual(set(self.service_template["parameters"]), {
@@ -166,7 +239,7 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertEqual(self.project["otel"], {"enabled": False, "destination": "console"})
         enabled = self.template["variables"]["useOtel"]
         self.assertIn("azure-monitor", enabled)
-        self.assertIn("enabledServices", enabled)
+        self.assertIn("runtimeServices", enabled)
         self.assertIn("otel", enabled)
         for resource in self.resources:
             if resource["type"] in {"Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components"}:
@@ -175,6 +248,7 @@ class ModelTemplateContracts(unittest.TestCase):
             if resource["type"] in {"Microsoft.CloudHealth/healthmodels/authenticationsettings", "Microsoft.Authorization/roleAssignments"}:
                 self.assertEqual(resource["condition"], "[parameters('enableOtel')]")
         self.assertFalse(self.service_template["parameters"]["enableOtel"]["defaultValue"])
+        self.assertIn("planned", self.module["properties"]["parameters"]["enableOtel"]["value"])
 
     def test_native_references_and_scoped_reader(self):
         reference = next(item for item in self.resources if item.get("copy", {}).get("name") == "serviceReferences")
@@ -184,7 +258,7 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("nested-models", source["authenticationSetting"])
         reader = next(item for item in self.resources if item["type"] == "Microsoft.Authorization/roleAssignments")
         self.assertIn("Microsoft.CloudHealth/healthmodels", reader["scope"])
-        self.assertNotIn("condition", reader)
+        self.assertIn("planned", reader["condition"])
 
     def test_journeys_have_distinct_business_step_entities_and_suppressed_context(self):
         variables = self.service_template["variables"]
@@ -223,7 +297,7 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("parameters('enableOtel')", groups)
         self.assertIn("synthetic-success-percentage", groups)
         self.assertIn("synthetic-mean-duration", groups)
-        self.assertIn("microsoft-reported-service-status", groups)
+        self.assertIn("variables('nodes')[copyIndex()].signalName", groups)
         self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'root')", groups)
         self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'context')", groups)
 

@@ -1,6 +1,7 @@
 targetScope = 'resourceGroup'
 
-import { serviceDefinitions, ServiceDefinition } from './service-catalog.bicep'
+import { serviceDefinitions, providerActivityFunctions, ServiceDefinition } from './service-catalog.bicep'
+import { plannedServiceDefinitions } from './planned-catalog.bicep'
 
 @description('The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
@@ -11,6 +12,9 @@ param location string = resourceGroup().location
 @description('Created only when OTEL exports to Azure Monitor.')
 param workspaceName string = 'law-${projectConfig.healthModel.name}'
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
+
+@description('Show the documented unimplemented catalog as suppressed Unknown coverage, without enabling runtime scenarios or reports.')
+param includePlannedJourneys bool = true
 
 var modelName = projectConfig.healthModel.name
 var selectedServices ServiceDefinition[] = map(
@@ -23,13 +27,23 @@ var selectedServices ServiceDefinition[] = map(
       )
     })
 )
-var enabledServices = filter(
+var runtimeServices = filter(
   selectedServices,
   service => projectConfig.services[service.service].enabled && !empty(service.journeys)
 )
+var modelServices ServiceDefinition[] = map(plannedServiceDefinitions, plannedService => {
+  service: plannedService.service
+  displayName: plannedService.displayName
+  journeys: concat(
+    flatten(map(filter(runtimeServices, runtime => runtime.service == plannedService.service), runtime => runtime.journeys)),
+    includePlannedJourneys ? plannedService.journeys : []
+  )
+})
+var enabledServices = filter(modelServices, service => !empty(service.journeys))
 var journeys = flatten(map(enabledServices, service => service.journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
-var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(enabledServices)
+var providerCallCount = reduce(runtimeServices, 0, (count, service) => count + 2 + length(providerActivityFunctions[service.service]))
+var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(runtimeServices)
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
   name: workspaceName
@@ -81,7 +95,7 @@ module serviceModels './service.bicep' = [
       location: location
       service: service
       policy: projectConfig.healthModel
-      enableOtel: useOtel
+      enableOtel: useOtel && !empty(filter(service.journeys, journey => !(journey.?planned ?? false)))
       workspaceName: workspaceName
       applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
     }
@@ -95,7 +109,7 @@ resource nestedModels 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' ex
 ]
 
 resource nestedModelReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for (service, index) in enabledServices: {
+  for (service, index) in enabledServices: if (!empty(filter(service.journeys, journey => !(journey.?planned ?? false)))) {
     name: guid(nestedModels[index].id, model.id, 'nested-model-reader')
     scope: nestedModels[index]
     properties: {
@@ -139,7 +153,7 @@ resource serviceReferences 'Microsoft.CloudHealth/healthmodels/entities@2026-05-
     name: '${service.service}-experience'
     properties: {
       displayName: service.displayName
-      impact: 'Standard'
+      impact: empty(filter(service.journeys, journey => !(journey.?planned ?? false))) ? 'Suppressed' : 'Standard'
       canvasPosition: { x: index * 400, y: 250 }
       signalGroups: {
         azureResource: {
@@ -174,9 +188,10 @@ output serviceModelIds array = [
 ]
 output serviceNames array = [for service in enabledServices: service.service]
 output modelCount int = 1 + length(enabledServices)
-output entityCount int = 1 + length(enabledServices) * 3 + length(journeys) + stepCount
-output relationshipCount int = length(enabledServices) * 2 + length(journeys) + stepCount
+output entityCount int = 1 + length(enabledServices) * 2 + length(runtimeServices) + length(journeys) + stepCount + providerCallCount
+output relationshipCount int = length(enabledServices) + length(runtimeServices) + length(journeys) + stepCount + providerCallCount
 output journeyCount int = length(journeys)
+output plannedJourneyCount int = length(filter(journeys, journey => journey.?planned ?? false))
 output stepCount int = stepCount
 output telemetryEnabled bool = useOtel
 output workspaceId string = useOtel ? workspace!.id : ''

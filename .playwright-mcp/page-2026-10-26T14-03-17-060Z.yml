@@ -1,0 +1,41 @@
+- generic [ref=f1e5]:
+  - img "Organization background image" [ref=f1e7]
+  - generic [ref=f1e8]:
+    - generic [ref=f1e14]:
+      - img "Microsoft" [ref=f1e17]
+      - main [ref=f1e18]:
+        - generic [ref=f1e21]:
+          - generic [ref=f1e24]:
+            - heading "Pick an account" [level=1] [ref=f1e25]
+            - generic [ref=f1e26]: to continue to Microsoft Azure
+          - list "Pick an account to continue to Microsoft Azure" [ref=f1e29]:
+            - listitem [ref=f1e31] [cursor=pointer]:
+              - button "Sign in with admin-test@constosuites.onmicrosoft.com work or school account." [active] [ref=f1e32]:
+                - generic [ref=f1e35]:
+                  - generic [ref=f1e36]: Admin User1
+                  - generic [ref=f1e37]: admin-test@constosuites.onmicrosoft.com
+                  - generic [ref=f1e38]: Signed in
+              - button "Open menu" [ref=f1e40]
+            - listitem [ref=f1e42] [cursor=pointer]:
+              - button "Sign in with admin@constosuites.onmicrosoft.com work or school account." [ref=f1e43]:
+                - generic [ref=f1e46]:
+                  - generic [ref=f1e47]: Marie Halloran
+                  - generic [ref=f1e48]: admin@constosuites.onmicrosoft.com
+                  - generic [ref=f1e49]: Signed in
+              - button "Open menu" [ref=f1e51]
+            - listitem [ref=f1e53] [cursor=pointer]:
+              - button "Sign in with mhalloran@microsoft.com work or school account." [ref=f1e54]:
+                - generic [ref=f1e57]:
+                  - generic [ref=f1e58]: Marie Halloran
+                  - generic [ref=f1e59]: mhalloran@microsoft.com
+                  - generic [ref=f1e60]: Signed in
+              - button "Open menu" [ref=f1e62]
+            - listitem [ref=f1e63] [cursor=pointer]:
+              - button "Use another account" [ref=f1e64]
+    - contentinfo [ref=f1e69]:
+      - generic [ref=f1e70]:
+        - link "Terms of use" [ref=f1e71] [cursor=pointer]:
+          - /url: https://www.microsoft.com/en-US/servicesagreement/
+        - link "Privacy & cookies" [ref=f1e72] [cursor=pointer]:
+          - /url: https://privacy.microsoft.com/en-US/privacystatement
+        - button "Click here for troubleshooting information" [ref=f1e73] [cursor=pointer]: ...

@@ -1,0 +1,5 @@
+
+> m365-synthetic-health-model@0.1.0 test
+> vitest run utils/tests/health-reports.test.ts utils/tests/provider-expanded.test.ts utils/tests/providers.test.ts utils/tests/independent-providers.test.ts --reporter=json --outputFile=.model-test-results.json
+
+JSON report written to /Users/mhalloran/Projects/ahm-m365-example/synthetic-tests/.model-test-results.json

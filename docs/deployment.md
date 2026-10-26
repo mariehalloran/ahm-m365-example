@@ -2,7 +2,7 @@
 
 ## Deployment status and order
 
-The [model templates](../health-model/README.md) define a root referencing independent service models. Exchange has six journey families, SharePoint two and Teams three. Each journey/business step receives aggregated direct **External Reports**, plus optional OTEL query signals. All selections give four models, 61 entities, 57 relationships, eleven journeys and 40 business steps. Token acquisition and generic cleanup are internal; explicit deletion/cancellation/hang-up are business steps. Provider context is separately suppressed and runs on independent container-local lanes.
+The [model templates](../health-model/README.md) define a root referencing independent service models. Exchange has six implemented journeys, SharePoint two and Teams three. Each implemented journey/business step receives aggregated direct **External Reports**, plus optional OTEL query signals. The full documented catalog also includes 23 explicitly planned/unimplemented Unknown journey roots and 78 planned steps, including a planned-only OneDrive model, without adding runtime scenarios or workers. All default selections give five models, 180 entities, 175 relationships, 34 journey roots and 118 business steps. Planned roots and the OneDrive reference are suppressed to preserve implemented synthetic rollup. Token acquisition and generic cleanup are internal; explicit deletion/cancellation/hang-up are business steps. Provider context is separately suppressed and runs on independent container-local lanes.
 
 ### Recorded live acceptance evidence — 2026-10-26
 

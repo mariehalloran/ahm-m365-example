@@ -1,0 +1,15 @@
+[     363ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'ambient-light-sensor'. @ :0
+[     363ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'battery'. @ :0
+[    1909ms] [ERROR] Framing 'https://portal.azure.com/' violates the following Content Security Policy directive: "frame-ancestors 'self'". The request has been blocked.
+ @ :0
+[   12916ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://management.azure.com/providers/Microsoft.PortalServices/settings/default?api-version=2024-09-01-preview:0
+[   13094ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'ambient-light-sensor'. @ :0
+[   13094ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'battery'. @ :0
+[   13345ms] [LOG] Version: 18.357.4.1
+Session: b648fc88f535422ebaab25ebafe375b7 @ https://portal.azure.com/Content/Dynamic/phd6e_o415Kc.js:390
+[   13483ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'ambient-light-sensor'. @ :0
+[   13483ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'battery'. @ :0
+[   13652ms] [LOG] Extension: HubsExtension @ blob:https://portal.azure.com/064ce960-b892-4743-9c16-4ce103684a12:0
+[   13694ms] [LOG] Extension: Microsoft_Azure_Copilot @ blob:https://portal.azure.com/064ce960-b892-4743-9c16-4ce103684a12:0
+[   13998ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://graph.microsoft.com/v1.0/me/photo/$value:0
+[   14316ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ https://portal.azure.com/#home:0

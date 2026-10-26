@@ -1,6 +1,6 @@
 # Microsoft 365 provider monitoring
 
-Each existing service container has an **independent provider lane**. It does not wait for synthetic execution and cannot change synthetic success, business-step measurements, or Experience rollup. Provider state belongs only to the impact-suppressed `${service}-service-health` entity. No extra container, mandatory Log Analytics workspace, or simulated live data is introduced.
+Each existing service container has an **independent provider lane**. It does not wait for synthetic execution and cannot change synthetic success, business-step measurements, or Experience rollup. Provider state belongs to separate call entities beneath the impact-suppressed `${service}-service-health` parent. No extra container, mandatory Log Analytics workspace, or simulated live data is introduced.
 
 ## Short setup
 
@@ -28,7 +28,7 @@ Each existing service container has an **independent provider lane**. It does no
 
 The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects 1–5 unique functions for that service; omitting it selects all five approved functions. Beta remains **disabled by default** in checked-in profiles.
 
-3. Deploy matching models first (Service Health External Reports groups include approved activity signal names), then prepare workers with explicit approvals:
+3. Deploy matching models first (each Service Health call child has its own External Reports group), then prepare workers with explicit approvals:
 
 ```sh
 npm --prefix synthetic-tests run deployment:prepare -- \
@@ -79,9 +79,11 @@ Only approved stable categorical mappings are automatic:
 | `serviceInterruption` | 0 / Unhealthy |
 | Missing, failed, unrecognized/investigation/recovery states | Unknown, no numeric value |
 
-Issue history is bounded diagnostic context, not an independent availability score. Old incident update times are not the collection freshness of an overview.
+Issue history is bounded diagnostic context, not an independent availability score. A successful complete snapshot emits an `issue-summary` diagnostic, including an empty snapshot as count zero; the issues child reports that count with Unknown health and no evaluation rules. Failed/incomplete/missing snapshots never imply zero issues. Old incident update times are not the collection freshness of an overview.
 
-Each explicit `serviceActivity.thresholds.<function>` produces `microsoft-activity-<function>` on the same suppressed Service Health entity. Rules are `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic or call-quality score.
+Every enabled selected function produces `microsoft-activity-<function>` on `${service}-service-health-<function>`. Without a threshold it reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic or call-quality score. Stable overview/issue reports target the `-health-overviews` / `-issues` children. All supported call entities remain visible when disabled/unselected; those calls receive no new reports.
+
+Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Unknown/missing reports also retain unit context. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#direct-report-units-platform-limitation) and [destination/TTL migration](../health-model/README.md#apply-and-migrate).
 
 Select the **latest complete bucket**, not an average/sum of overlapping history. Missing/invalid/duplicate/future/out-of-window data, failed source collection, or bucket age exceeding `maxAgeMinutes` produces Unknown **without a numeric value**, replacing prior health rather than retaining stale Healthy. The default maximum age is 60 minutes and is configurable independently of cadence. QoE/UDP interpretations remain explicit in report context even with customer thresholds.
 

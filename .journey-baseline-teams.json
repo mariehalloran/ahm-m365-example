@@ -1,0 +1,955 @@
+{
+  "value": [
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/m365-experience-consto-teams",
+      "name": "m365-experience-consto-teams",
+      "properties": {
+        "canvasPosition": {
+          "x": 300.0,
+          "y": 0.0
+        },
+        "displayName": "Teams Experience",
+        "healthState": "Unhealthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          }
+        }
+      },
+      "systemData": {
+        "lastModifiedAt": "2026-10-26T13:36:48.0405963Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-call",
+      "name": "teams-call",
+      "properties": {
+        "canvasPosition": {
+          "x": 1400.0,
+          "y": 240.0
+        },
+        "displayName": "Place test calls and hang up",
+        "healthState": "Healthy",
+        "icon": {
+          "iconName": "UserFlow"
+        },
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          },
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:41.8678784+00:00",
+                  "value": 10571.3333333333
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.4055772+00:00",
+                  "value": 100.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T18:29:01.5615653Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.4272443Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-call-end-call",
+      "name": "teams-call-end-call",
+      "properties": {
+        "canvasPosition": {
+          "x": 1400.0,
+          "y": 780.0
+        },
+        "displayName": "Hang up and confirm disconnected",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:41.4120135+00:00",
+                  "value": 376.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:41.3069892+00:00",
+                  "value": 100.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T18:29:01.5614666Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:47.9159419Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-call-place-call",
+      "name": "teams-call-place-call",
+      "properties": {
+        "canvasPosition": {
+          "x": 1400.0,
+          "y": 440.0
+        },
+        "displayName": "Call dedicated test user",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.6233953+00:00",
+                  "value": 100.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.9797575+00:00",
+                  "value": 182.666666666667
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T18:29:01.5107474Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:47.9350048Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-call-wait-before-hangup",
+      "name": "teams-call-wait-before-hangup",
+      "properties": {
+        "canvasPosition": {
+          "x": 1400.0,
+          "y": 610.0
+        },
+        "displayName": "Wait before hang-up",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:41.1260411+00:00",
+                  "value": 10012.6666666667
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:41.0962214+00:00",
+                  "value": 100.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T18:53:56.8956144Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:47.765773Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-global",
+      "name": "teams-global",
+      "properties": {
+        "canvasPosition": {
+          "x": 400.0,
+          "y": 240.0
+        },
+        "displayName": "Publish channel message",
+        "healthState": "Unhealthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          },
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Unhealthy",
+                  "reportedAt": "2026-10-26T14:16:39.1882215+00:00",
+                  "value": 0.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.2195228+00:00",
+                  "value": 774.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.1693046Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:48.0777602Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-global-confirm-publication",
+      "name": "teams-global-confirm-publication",
+      "properties": {
+        "canvasPosition": {
+          "x": 400.0,
+          "y": 610.0
+        },
+        "displayName": "Confirm publication",
+        "healthState": "Unhealthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.4777545+00:00",
+                  "value": 384.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Unhealthy",
+                  "reportedAt": "2026-10-26T14:16:39.3905595+00:00",
+                  "value": 0.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.3671671Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:47.9921368Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-global-post-message",
+      "name": "teams-global-post-message",
+      "properties": {
+        "canvasPosition": {
+          "x": 400.0,
+          "y": 440.0
+        },
+        "displayName": "Post message",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.2168522+00:00",
+                  "value": 100.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.3738246+00:00",
+                  "value": 388.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.1311576Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:48.0238962Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-planned-answered-audio-step-1",
+      "name": "teams-planned-answered-audio-step-1",
+      "properties": {
+        "canvasPosition": {
+          "x": 2400.0,
+          "y": 440.0
+        },
+        "displayName": "[Planned / unimplemented] Place and answer call",
+        "healthState": "Unknown",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {}
+      },
+      "systemData": {
+        "createdAt": "2026-10-26T14:17:07.1743398Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.35983Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-planned-answered-audio-step-3",
+      "name": "teams-planned-answered-audio-step-3",
+      "properties": {
+        "canvasPosition": {
+          "x": 2400.0,
+          "y": 780.0
+        },
+        "displayName": "[Planned / unimplemented] Verify continuity, delay and distortion",
+        "healthState": "Unknown",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {}
+      },
+      "systemData": {
+        "createdAt": "2026-10-26T14:17:07.0122278Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.2004236Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-planned-two-bot-conversation",
+      "name": "teams-planned-two-bot-conversation",
+      "properties": {
+        "canvasPosition": {
+          "x": 1900.0,
+          "y": 240.0
+        },
+        "displayName": "[Planned / unimplemented] Two-bot channel conversation",
+        "healthState": "Unknown",
+        "icon": {
+          "iconName": "UserFlow"
+        },
+        "impact": "Suppressed",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-26T14:17:07.2110021Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.3678306Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-planned-two-bot-conversation-step-1",
+      "name": "teams-planned-two-bot-conversation-step-1",
+      "properties": {
+        "canvasPosition": {
+          "x": 1900.0,
+          "y": 440.0
+        },
+        "displayName": "[Planned / unimplemented] Bot A sends correlated message",
+        "healthState": "Unknown",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {}
+      },
+      "systemData": {
+        "createdAt": "2026-10-26T14:17:07.2158564Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.3881765Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-reply",
+      "name": "teams-reply",
+      "properties": {
+        "canvasPosition": {
+          "x": 900.0,
+          "y": 240.0
+        },
+        "displayName": "Reply in channel thread",
+        "healthState": "Healthy",
+        "icon": {
+          "iconName": "UserFlow"
+        },
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          },
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.5988045+00:00",
+                  "value": 100.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.6262705+00:00",
+                  "value": 1262.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.168939Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.4276405Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-reply-confirm-reply",
+      "name": "teams-reply-confirm-reply",
+      "properties": {
+        "canvasPosition": {
+          "x": 900.0,
+          "y": 780.0
+        },
+        "displayName": "Confirm reply visibility",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.3173825+00:00",
+                  "value": 395.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.0813362+00:00",
+                  "value": 100.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.1377223Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:48.0172943Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-reply-post-message",
+      "name": "teams-reply-post-message",
+      "properties": {
+        "canvasPosition": {
+          "x": 900.0,
+          "y": 440.0
+        },
+        "displayName": "Post root message",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.620057+00:00",
+                  "value": 100.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.8320758+00:00",
+                  "value": 472.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.0540939Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:47.9974682Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-reply-post-reply",
+      "name": "teams-reply-post-reply",
+      "properties": {
+        "canvasPosition": {
+          "x": 900.0,
+          "y": 610.0
+        },
+        "displayName": "Post reply",
+        "healthState": "Healthy",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "external": {
+            "signals": [
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": 99.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": 95.0
+                  }
+                },
+                "name": "synthetic-success-percentage",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:40.1145689+00:00",
+                  "value": 100.0
+                }
+              },
+              {
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 15000.0
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": 60000.0
+                  }
+                },
+                "name": "synthetic-mean-duration",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Healthy",
+                  "reportedAt": "2026-10-26T14:16:39.8055417+00:00",
+                  "value": 393.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.081005Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T13:36:47.8916011Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-service-health",
+      "name": "teams-service-health",
+      "properties": {
+        "canvasPosition": {
+          "x": 0.0,
+          "y": 240.0
+        },
+        "displayName": "Service Health",
+        "healthState": "Degraded",
+        "impact": "Suppressed",
+        "provisioningState": "Succeeded",
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          },
+          "external": {
+            "signals": [
+              {
+                "name": "microsoft-reported-service-status",
+                "signalKind": "External",
+                "status": {
+                  "healthState": "Degraded",
+                  "reportedAt": "2026-10-26T14:15:28.1577089+00:00",
+                  "value": 50.0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "systemData": {
+        "createdAt": "2026-10-23T15:23:04.0789108Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.507047Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    },
+    {
+      "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/microsoft.cloudhealth/healthmodels/m365-experience-consto-teams/entities/teams-service-health-getmessagevolumemetricsforteamschat",
+      "name": "teams-service-health-getMessageVolumeMetricsForTeamsChat",
+      "properties": {
+        "canvasPosition": {
+          "x": 0.0,
+          "y": 1120.0
+        },
+        "displayName": "getMessageVolumeMetricsForTeamsChat",
+        "healthState": "Unknown",
+        "impact": "Standard",
+        "provisioningState": "Succeeded",
+        "signalGroups": {}
+      },
+      "systemData": {
+        "createdAt": "2026-10-26T14:17:06.8976172Z",
+        "createdBy": "admin-test@constosuites.onmicrosoft.com",
+        "createdByType": "User",
+        "lastModifiedAt": "2026-10-26T14:17:07.0930359Z",
+        "lastModifiedBy": "admin-test@constosuites.onmicrosoft.com",
+        "lastModifiedByType": "User"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities"
+    }
+  ]
+}

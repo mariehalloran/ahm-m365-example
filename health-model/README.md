@@ -1,6 +1,6 @@
 # Journey and business-step entities with grouped signals
 
-The [root config](../monitoring.config.json) selects services/scenarios, report policy and optional OTEL. The root health model references separate service models. Each selected journey has its own entity, with **business-step child entities**. Each journey and step always has an **External Reports** signal group; Azure Monitor export optionally adds an **OpenTelemetry** group.
+The [root config](../monitoring.config.json) selects runtime services/scenarios, report policy and optional OTEL. The root health model references separate service models. Each journey has its own entity, with **business-step child entities**. Implemented journeys/steps always have an **External Reports** signal group; Azure Monitor export optionally adds an **OpenTelemetry** group. Planned coverage has no signals.
 
 Use the same reviewed root configuration for model and worker deployment. For
 recorded live acceptance and remaining gaps, see [deployment status](../docs/deployment.md#deployment-status-and-order).
@@ -9,13 +9,41 @@ access or production readiness.
 
 ## Catalog versus modeled and live coverage
 
-The model represents **implemented root scenarios**, not every agreed target family.
+The model represents **selected implemented root scenarios plus the full documented
+planned catalog** by default (`includePlannedJourneys=true`).
 See [Exchange's six core journeys](../synthetic-tests/exchange/README.md#journeys-and-scheduling),
 [Teams' five target families and narrower current coverage](../synthetic-tests/teams/README.md#target-catalog-versus-current-implementation),
 [SharePoint's five target families and supporting rename coverage](../synthetic-tests/sharepoint/README.md#target-catalog-versus-current-implementation),
 and [OneDrive's entirely planned catalog](../synthetic-tests/README.md#onedrive-target-catalog-planned).
-There is no OneDrive worker/model yet; planned browser, media, recipient-access and
-other families do not acquire entities or Healthy signals merely by being documented.
+OneDrive has a planned-only model, not a worker, schedule or runtime configuration.
+Planned roots and business steps are labeled **[Planned / unimplemented]**, have no
+external or OTEL signals, and remain Unknown without fabricated reports. Their roots
+have suppressed impact; the planned-only OneDrive reference is also suppressed.
+Thus missing implementations cannot make existing synthetic experience rollups
+permanently Unknown. Suppression is not success or evidence of execution.
+The planned-only OneDrive native reference is deliberately not granted new Reader
+access by this deployment; it remains Unknown and suppressed. Its model and complete
+inventory exist, but native health retrieval is not an acceptance claim. Existing
+implemented model Reader assignments and Microsoft 365 permissions are unchanged.
+
+The [implemented catalog](./infra/service-catalog.bicep) remains shared with model
+selection; the [planned catalog](./infra/planned-catalog.bicep) is model-only metadata,
+not fake worker registration or additional root scenario switches. Set
+`includePlannedJourneys=false` for an implemented-only **new** deployment; incremental
+ARM deployment does not delete previously deployed planned entities.
+
+| Service | Implemented roots (existing IDs preserved) | Planned roots / variants |
+| --- | --- | --- |
+| Exchange | 6: mail, draft, attachment/reply, distribution list, recurring calendar, meeting invitation | 4: search/organize, external inbound variant, external outbound variant, OutlookWeb variant |
+| Teams | 3: publish, reply, signaling-only calls | 7: full two-bot conversation, answered audio, scheduled meeting, recipient file sharing, Adaptive Card, TeamsWeb messaging variant, TeamsWeb meeting variant |
+| SharePoint | 2: save/reopen, rename/reopen | 6: full metadata/nested-folder/enumeration/hash roundtrip, list-item lifecycle, recipient sharing, versions, search/indexing, browser-upload variant |
+| OneDrive | 0 | 6: user-drive roundtrip, app-folder lifecycle, recipient sharing, versions, search/retrieve, browser-file variant |
+
+The complete target families are separate from narrower implemented coverage:
+single-bot readback does not prove two-bot receipt; call signaling does not prove
+answered audio; exact-content readback does not claim the full folder/hash family.
+Optional restore/check-in/out are variant steps within planned versions, not
+duplicate test suites. Authentication/cleanup are not modeled as business steps.
 
 Exchange mail runs every 60 seconds and its other five core journeys every 300;
 current Teams scenarios run every 120 and SharePoint every 300. Cadence/deadlines
@@ -27,6 +55,9 @@ Exchange mail/draft/attachment-reply/DL are verified Healthy, calendar is curren
 single-bot Graph readback and call signaling only; SharePoint awaits live targets.
 
 ## Structure
+
+The implemented subtree is shown below; the planned catalog above adds suppressed
+journey roots and a suppressed planned-only OneDrive reference.
 
 ```text
 Root model: Microsoft 365 Experience
@@ -79,7 +110,19 @@ Token acquisition and generic cleanup still execute internally, but have **no pu
 
 The service catalog contains six Exchange journeys, two SharePoint journeys and three Teams journeys, including signaling-only individual test-user calls. Exchange adds attachment/reply, explicit distribution-list delivery, recurring calendar and meeting invitation flows; its draft includes initial read and deletion. Each enabled scenario receives its own entity and child business steps without another service model or worker. Step IDs are journey-scoped (`<journey-entity>-<step>`), so reused actions never collide.
 
-The default source family has **four models, 61 entities and 57 relationships**: eleven journey entities, 40 business-step entities, service/root entities, three native model references and three suppressed Service Health entities. Service roots depend on their journeys and context; journeys depend on their business steps. Rollup uses `WorstOf` and `ignoreUnknown: false`. The `teams-call` journey has `place-call`, `wait-before-hangup`, `end-call` children; existing journey IDs are unchanged. Multiple target attempts aggregate into shared entities, not per-user signals. Healthy calling is placement, dwell and verified hang-up, not proof of recipient ringing or receipt.
+The complete default catalog has **five models, 180 entities and 175 relationships**:
+34 journey roots (11 implemented, 23 planned) and 118 business-step entities
+(40 implemented, 78 planned), four native model references, three suppressed Service
+Health entities and sixteen provider-call children. Implemented-only selection has
+four models, 77 entities and 73 relationships. Service roots depend on journeys and
+context; journeys depend on business steps. Rollup uses `WorstOf` and
+`ignoreUnknown: false`, with planned roots suppressed. The `teams-call` journey
+retains `place-call`, `wait-before-hangup`, `end-call`; existing IDs are unchanged.
+Target attempts aggregate into shared entities, not per-user signals.
+
+All 34 **journey roots**, implemented and planned, use the **User flow** icon
+(`properties.icon.iconName: 'UserFlow'`); service roots, context and business steps
+do not. No custom icon is needed.
 
 Service models are named `<healthModel.name>-<service>`. Existing journey IDs (`exchange-global`, `teams-global`, `sharepoint-global`) remain stable. Each model's root entity has the same name as its model. Root prefixes are limited to 33 characters so service suffixes fit the 44-character model limit.
 
@@ -94,7 +137,8 @@ For example, the send action reports to `exchange-global-send` in the Exchange m
   "signalName": "synthetic-success-percentage",
   "healthState": "Unhealthy",
   "value": 0,
-  "expiresInMinutes": 15
+  "expiresInMinutes": 15,
+  "additionalContext": "{\"unit\":\"Percent\"}"
 }
 ```
 
@@ -108,9 +152,25 @@ Cleanup failures and credential failures still explain an unsuccessful journey, 
 
 The API creates external signals, not entities, and uses `2026-05-01-preview`; a 204 acknowledges ingestion. Reports replace the previous cycle with a default 15-minute TTL. Expiry removes the external signal; it does **not** guarantee an Unhealthy state or an alert. Independently monitor execution and publication freshness. Workers keep no cross-cycle aggregation history or durable outbox.
 
+### Direct-report units: platform limitation
+
+Every direct report includes a unit in its JSON `additionalContext`, including Unknown reports: synthetic success `Percent`, synthetic duration `Milliseconds`, provider percentages `Percent`, provider counts `Count`, and categorical overview mappings `status-score` (not an availability percentage). These units accompany the measurements in the model's external-report context; **they do not populate native UI unit labels**.
+
+The first-party [`HealthReportRequest` schema](https://github.com/Azure/azure-rest-api-specs/blob/main/specification/cloudhealth/resource-manager/Microsoft.CloudHealth/CloudHealth/preview/2026-05-01-preview/cloudhealth.json) allows `signalName`, `healthState`, `value`, `evaluationRules`, `expiresInMinutes`, and `additionalContext`, but **no `dataUnit`**. The October schema has the same restriction. `dataUnit` is a 1–100-character string (not an enum) on query-backed signal definitions, not ingestion requests. `signalGroups.external` is read-only, so predeclaring external units would also be unsupported. Optional OTEL query signals retain native `Percent`/`Milliseconds` units. Native units on direct external reports require a platform API change; no read-only field or invented ingestion property is written.
+
 ## Microsoft-reported Service Health
 
-Each service has a separate `${service}-service-health` entity with `impactSuppressed` and an **External Reports** group. Stable v1.0 operational/degradation/interruption publishes as `microsoft-reported-service-status`: **100 healthy, 50 degraded, 0 interruption**; unapproved states/failed/missing data are **Unknown without a value**. Exchange/Teams context groups also admit the five service-owned `microsoft-activity-<function>` signal names. Explicit customer beta thresholds report latest fresh buckets directly; counts and Teams percentages remain diagnostic absent thresholds. QoE coverage is never automatic call quality. Issue history stays diagnostic; no provider signal supplies synthetic/Experience health. See [provider setup, exact functions and mappings](../docs/provider-monitoring.md).
+Each service has a separate `${service}-service-health` parent with `impact: Suppressed`. Beneath it, separate entities visibly list each collected API:
+
+| Child entity suffix | External Reports member |
+| --- | --- |
+| `-health-overviews` | `microsoft-reported-service-status` |
+| `-issues` | `microsoft-reported-issue-count` |
+| `-<activity-function>` | `microsoft-activity-<activity-function>` |
+
+Exchange/Teams each have five named activity children; SharePoint has the two stable children only. The model catalogs every supported call so selection changes need no new entity deployment. Workers publish only enabled stable calls and selected beta functions. Disabled/unselected calls remain unobserved (or expire after a previous selection), not Healthy. Each call has its own **External Reports** group; the parent aggregates child context only and no longer lists duplicate external members.
+
+Stable v1.0 operational/degradation/interruption maps to **100 healthy, 50 degraded, 0 interruption**; unapproved states/failed/missing data are **Unknown without a value**. A successful complete issues collection reports a diagnostic count (including a verified empty snapshot as zero), always **Unknown**, not an availability score. Every selected beta function reports its latest fresh bucket: without explicit customer thresholds, numeric values display with **Unknown** and no evaluation rules; with thresholds, only that context measurement is evaluated. Failed, missing, stale or malformed observations report Unknown without a value. QoE coverage is never automatic call quality. No provider signal supplies synthetic/Experience health. See [provider setup, exact functions and mappings](../docs/provider-monitoring.md).
 
 Collection has its own lane inside each existing service container, with configurable `providerIntervalSeconds` (default 300), independent of journey setup/cadence. Stable and beta permissions/consent are separate. No healthy provider snapshot is invented. Suppression keeps provider context out of Experience rollup and synthetic success calculations; direct reporting does not require Log Analytics.
 
@@ -120,7 +180,7 @@ With OTEL disabled there are no query-backed sources. External Reports groups us
 
 Root `otel.enabled` defaults to false. Only `enabled: true` with `destination: azure-monitor` and at least one enabled journey provisions Log Analytics and workspace-backed Application Insights. `destination: console` is a local OTEL preview and does not create telemetry infrastructure or query-backed signals.
 
-Azure export adds `otel-success-percentage` and `otel-mean-duration` under **OpenTelemetry** on every enabled journey/business-step entity. External Reports and topology remain intact (61 entities with all eleven journeys). Service Health stays suppressed and external-report-only. No per-target signal inventories or monitoring-pipeline entities are added.
+Azure export adds `otel-success-percentage` and `otel-mean-duration` under **OpenTelemetry** on every selected implemented journey/business-step entity, not planned nodes. External Reports and topology remain intact. Service Health stays suppressed and external-report-only. No per-target signal inventories or monitoring-pipeline entities are added.
 
 The shared [KQL source](./queries/synthetic.kql) binds the Application Insights resource ID, service, journey and business step. It queries `AppTraces` for live schema-2.0 `synthetic-result` or `synthetic-step` logs with observation and ingestion timestamps inside 15 minutes. Skipped/internal actions and provider logs cannot become synthetic samples. Success is the mean of binary samples times 100; duration is mean milliseconds, including executed failures. No data yields no numeric result, not a healthy fallback. Queries evaluate every minute and use the same root thresholds as direct reports, but their rolling window can differ from current-cycle report health and adds ingestion/query latency.
 
@@ -138,7 +198,7 @@ Enabling export adds ingestion/storage/query costs and requires verifying actual
 
 Use a current Bicep CLI supporting typed exports and functions. ARM language version 2.0 represents existing resources symbolically; these are not extra deployments.
 
-Workers need only `Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action` on their service model, independently of Microsoft 365 authorization. The root identity receives Reader on its child models for [native nesting](https://learn.microsoft.com/azure/azure-monitor/health-models/concepts#nested-health-models). Worker identities need no model administration.
+Workers need only `Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action` on their service model, independently of Microsoft 365 authorization. The root identity receives Reader on implemented child models for [native nesting](https://learn.microsoft.com/azure/azure-monitor/health-models/concepts#nested-health-models); planned-only models do not add permission grants. Worker identities need no model administration.
 
 ## Apply and migrate
 
@@ -157,6 +217,8 @@ az deployment group create --subscription '<approved-subscription>' \
 ```
 
 Deploy the model before the matching worker image so all selected journey and journey-scoped step destinations exist before reports arrive. Exchange expansion adds four journey entities, seventeen business-step entities and the draft's two new steps: 23 entities/relationships and 46 external signals when all are selected. Existing mail/draft journey and mail create-draft IDs remain valid; this expansion requires no deletion of those entities. The previous compact layout's inline `<step>-*` external signals stop refreshing after worker cutover and disappear after their existing TTL (normally 15 minutes); do not invent reports or recreate journey entities to clear them. Reconcile any earlier unscoped step entities/relationships only after verifying ownership.
+
+Provider-call presentation adds sixteen child entities/relationships and moves existing overview/activity signal destinations from `${service}-service-health` to those children. Deploy the model before matching workers, then stop **all old worker revisions** that refresh parent-level signals. The parent no longer declares those old aggregation members; previously ingested signals themselves remain until their existing TTL expires (normally 15 minutes; use the actual prior `expiresInMinutes`). Verify the parent external inventory is empty after expiry and each enabled call is ingested on its child. Do not delete/recreate the suppressed parent or fabricate clearing reports. No deployment, old-signal deletion or live-profile change is performed by the source update.
 
 **Incremental deployment does not delete obsolete resources.** When opting out of previously deployed OTEL, explicitly reconcile old query signals/groups, query authentication, scoped reader assignments and obsolete app connection-string settings. Delete only owned telemetry resources after reviewing retention/export obligations; never delete an active destination merely because earlier report-only migration instructions did so. Preserve model entities/root, native references and workers. When enabling OTEL, deploy model/telemetry resources before the matching workers. Never use complete deployment mode on a shared resource group.
 

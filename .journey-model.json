@@ -1,0 +1,1210 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.48.1.52935",
+      "templateHash": "11642060489831856824"
+    }
+  },
+  "definitions": {
+    "_2.JourneyDefinition": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "entityName": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/_2.ServiceStep"
+          }
+        },
+        "planned": {
+          "type": "bool",
+          "nullable": true
+        }
+      },
+      "metadata": {
+        "__bicep_imported_from!": {
+          "sourceTemplate": "service-catalog.bicep"
+        }
+      }
+    },
+    "_2.ServiceStep": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        }
+      },
+      "metadata": {
+        "__bicep_imported_from!": {
+          "sourceTemplate": "service-catalog.bicep"
+        }
+      }
+    },
+    "ServiceDefinition": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string",
+          "allowedValues": [
+            "exchange",
+            "onedrive",
+            "sharepoint",
+            "teams"
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "journeys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/_2.JourneyDefinition"
+          }
+        }
+      },
+      "metadata": {
+        "__bicep_imported_from!": {
+          "sourceTemplate": "service-catalog.bicep"
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "namespace": "_1",
+      "members": {
+        "journey": {
+          "parameters": [
+            {
+              "type": "string",
+              "name": "service"
+            },
+            {
+              "type": "string",
+              "name": "name"
+            },
+            {
+              "type": "string",
+              "name": "displayName"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "name": "steps"
+            }
+          ],
+          "output": {
+            "type": "object",
+            "value": {
+              "name": "[parameters('name')]",
+              "entityName": "[format('{0}-planned-{1}', parameters('service'), parameters('name'))]",
+              "displayName": "[format('[Planned / unimplemented] {0}', parameters('displayName'))]",
+              "planned": true,
+              "steps": "[map(parameters('steps'), lambda('step', 'index', createObject('name', format('step-{0}', add(lambdaVariables('index'), 1)), 'displayName', lambdaVariables('step'))))]"
+            }
+          },
+          "metadata": {
+            "__bicep_imported_from!": {
+              "sourceTemplate": "planned-catalog.bicep"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "projectConfig": {
+      "type": "object",
+      "defaultValue": "[variables('$fxv#0')]",
+      "metadata": {
+        "description": "The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "A region supporting Microsoft.CloudHealth."
+      }
+    },
+    "workspaceName": {
+      "type": "string",
+      "defaultValue": "[format('law-{0}', parameters('projectConfig').healthModel.name)]",
+      "metadata": {
+        "description": "Created only when OTEL exports to Azure Monitor."
+      }
+    },
+    "applicationInsightsName": {
+      "type": "string",
+      "defaultValue": "[format('appi-{0}', parameters('projectConfig').healthModel.name)]"
+    },
+    "includePlannedJourneys": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Show the documented unimplemented catalog as suppressed Unknown coverage, without enabling runtime scenarios or reports."
+      }
+    }
+  },
+  "variables": {
+    "$fxv#0": {
+      "schemaVersion": "1.0",
+      "otel": {
+        "enabled": false,
+        "destination": "console"
+      },
+      "healthModel": {
+        "name": "m365-experience-poc",
+        "subscriptionId": "00000000-0000-0000-0000-000000000000",
+        "resourceGroup": "rg-m365-demo",
+        "reportTtlMinutes": 15,
+        "successDegradedPercent": 99,
+        "successUnhealthyPercent": 95,
+        "latencyDegradedMilliseconds": 15000,
+        "latencyUnhealthyMilliseconds": 60000
+      },
+      "services": {
+        "exchange": {
+          "enabled": true,
+          "configFile": "synthetic-tests/exchange/config.json",
+          "scenarios": {
+            "send-receive-mail": true,
+            "edit-reopen-draft": true,
+            "attachment-reply-mail": true,
+            "distribution-list-mail": true,
+            "recurring-calendar": true,
+            "meeting-invitation": true
+          },
+          "targets": [
+            {
+              "id": "exchange-probe-001",
+              "mailbox": "dedicated-synthetic@example.invalid",
+              "recipientMailbox": "dedicated-recipient@example.invalid",
+              "distributionList": {
+                "address": "dedicated-list@example.invalid",
+                "expectedRecipients": [
+                  "dedicated-synthetic@example.invalid",
+                  "dedicated-recipient@example.invalid"
+                ]
+              }
+            }
+          ]
+        },
+        "teams": {
+          "enabled": true,
+          "configFile": "synthetic-tests/teams/config.json",
+          "scenarios": {
+            "publish-channel-message": true,
+            "reply-channel-message": true,
+            "call-test-user": true
+          },
+          "targets": [
+            {
+              "id": "teams-probe-001",
+              "tenantId": "00000000-0000-0000-0000-000000000000",
+              "teamId": "00000000-0000-0000-0000-000000000000",
+              "channelId": "replace-with-dedicated-standard-channel-id",
+              "serviceUrl": "https://smba.trafficmanager.net/teams/"
+            }
+          ],
+          "callTargets": [
+            {
+              "id": "teams-call-user-001",
+              "tenantId": "00000000-0000-0000-0000-000000000000",
+              "callUserId": "11111111-1111-4111-8111-111111111111"
+            },
+            {
+              "id": "teams-call-user-002",
+              "tenantId": "00000000-0000-0000-0000-000000000000",
+              "callUserId": "22222222-2222-4222-8222-222222222222"
+            },
+            {
+              "id": "teams-call-user-003",
+              "tenantId": "00000000-0000-0000-0000-000000000000",
+              "callUserId": "33333333-3333-4333-8333-333333333333"
+            }
+          ]
+        },
+        "sharepoint": {
+          "enabled": true,
+          "configFile": "synthetic-tests/sharepoint/config.json",
+          "scenarios": {
+            "save-reopen-file": true,
+            "rename-reopen-file": true
+          },
+          "targets": [
+            {
+              "id": "sharepoint-probe-001"
+            }
+          ]
+        }
+      }
+    },
+    "modelName": "[parameters('projectConfig').healthModel.name]",
+    "selectedServices": "[map(variables('serviceDefinitions'), lambda('service', union(lambdaVariables('service'), createObject('journeys', filter(lambdaVariables('service').journeys, lambda('journey', coalesce(tryGet(parameters('projectConfig').services[lambdaVariables('service').service].scenarios, lambdaVariables('journey').name), false())))))))]",
+    "runtimeServices": "[filter(variables('selectedServices'), lambda('service', and(parameters('projectConfig').services[lambdaVariables('service').service].enabled, not(empty(lambdaVariables('service').journeys)))))]",
+    "modelServices": "[map(variables('plannedServiceDefinitions'), lambda('plannedService', createObject('service', lambdaVariables('plannedService').service, 'displayName', lambdaVariables('plannedService').displayName, 'journeys', concat(flatten(map(filter(variables('runtimeServices'), lambda('runtime', equals(lambdaVariables('runtime').service, lambdaVariables('plannedService').service))), lambda('runtime', lambdaVariables('runtime').journeys))), if(parameters('includePlannedJourneys'), lambdaVariables('plannedService').journeys, createArray())))))]",
+    "enabledServices": "[filter(variables('modelServices'), lambda('service', not(empty(lambdaVariables('service').journeys))))]",
+    "journeys": "[flatten(map(variables('enabledServices'), lambda('service', lambdaVariables('service').journeys)))]",
+    "stepCount": "[length(flatten(map(variables('journeys'), lambda('journey', lambdaVariables('journey').steps))))]",
+    "providerCallCount": "[reduce(variables('runtimeServices'), 0, lambda('count', 'service', add(add(lambdaVariables('count'), 2), length(variables('providerActivityFunctions')[lambdaVariables('service').service]))))]",
+    "useOtel": "[and(and(coalesce(tryGet(tryGet(parameters('projectConfig'), 'otel'), 'enabled'), false()), equals(coalesce(tryGet(tryGet(parameters('projectConfig'), 'otel'), 'destination'), 'console'), 'azure-monitor')), not(empty(variables('enabledServices'))))]",
+    "plannedServiceDefinitions": [
+      {
+        "service": "exchange",
+        "displayName": "Exchange Experience",
+        "journeys": [
+          "[_1.journey('exchange', 'search-organize-mail', 'Search and organize mailbox', createArray('Create owned searchable mail', 'Find and verify owned mail', 'Organize and verify the change'))]",
+          "[_1.journey('exchange', 'external-inbound', 'External inbound delivery variant', createArray('Send from approved external participant', 'Verify correlated delivery in monitored mailbox'))]",
+          "[_1.journey('exchange', 'external-outbound', 'External outbound delivery variant', createArray('Send to approved external participant', 'Verify correlated delivery as external recipient'))]",
+          "[_1.journey('exchange', 'outlook-web', 'OutlookWeb browser variant', createArray('Sign in through OutlookWeb', 'Complete and verify mail workflow in browser'))]"
+        ]
+      },
+      {
+        "service": "teams",
+        "displayName": "Teams Experience",
+        "journeys": [
+          "[_1.journey('teams', 'two-bot-conversation', 'Two-bot channel conversation', createArray('Bot A sends correlated message', 'Bot B receives message and replies', 'Bot A receives correlated response', 'Verify persisted content and authors'))]",
+          "[_1.journey('teams', 'answered-audio', 'Answered two-party audio', createArray('Place and answer call', 'Exchange known audio bidirectionally', 'Verify continuity, delay and distortion', 'Hang up'))]",
+          "[_1.journey('teams', 'scheduled-meeting', 'Scheduled meeting', createArray('Join scheduled meeting', 'Verify participant roster', 'Exchange and verify bidirectional media', 'Leave meeting'))]",
+          "[_1.journey('teams', 'recipient-file-sharing', 'Recipient file sharing', createArray('Share owned file', 'Retrieve as intended recipient', 'Verify content hash'))]",
+          "[_1.journey('teams', 'adaptive-card', 'Adaptive Card workflow', createArray('Publish card', 'Invoke card action', 'Verify workflow and callback completion'))]",
+          "[_1.journey('teams', 'teams-web-messaging', 'TeamsWeb messaging browser variant', createArray('Sign in through TeamsWeb', 'Send and verify correlated browser conversation'))]",
+          "[_1.journey('teams', 'teams-web-meeting', 'TeamsWeb meeting browser variant', createArray('Join meeting through TeamsWeb', 'Verify participant and media experience', 'Leave meeting'))]"
+        ]
+      },
+      {
+        "service": "sharepoint",
+        "displayName": "SharePoint Experience",
+        "journeys": [
+          "[_1.journey('sharepoint', 'library-folder-roundtrip', 'Full site/library and folder/file roundtrip', createArray('Verify site and library metadata', 'Create nested folders and upload owned file', 'Enumerate and download file', 'Verify content hash', 'Delete owned artifacts'))]",
+          "[_1.journey('sharepoint', 'list-item-lifecycle', 'List-item lifecycle', createArray('Create dedicated list item', 'Read item', 'Update and reread item', 'Delete owned item'))]",
+          "[_1.journey('sharepoint', 'recipient-sharing', 'Recipient-specific sharing', createArray('Grant recipient access', 'Retrieve and verify as intended recipient', 'Revoke access', 'Verify access removal'))]",
+          "[_1.journey('sharepoint', 'document-versions', 'Document versions', createArray('Update owned document', 'Inspect version history', 'Retrieve and verify earlier version', 'Optional variant: restore earlier version', 'Optional variant: check out and check in'))]",
+          "[_1.journey('sharepoint', 'search-indexing', 'Search and indexing', createArray('Create owned searchable content', 'Wait for indexing and find content', 'Retrieve search result and verify content'))]",
+          "[_1.journey('sharepoint', 'browser-upload', 'Browser upload variant', createArray('Sign in through SharePoint browser', 'Upload and reopen owned file in browser', 'Verify content'))]"
+        ]
+      },
+      {
+        "service": "onedrive",
+        "displayName": "[Planned / unimplemented] OneDrive Experience",
+        "journeys": [
+          "[_1.journey('onedrive', 'user-drive-roundtrip', 'User-drive roundtrip', createArray('Create folder and file in approved user drive', 'Reopen and download file', 'Verify content hash', 'Delete owned artifacts'))]",
+          "[_1.journey('onedrive', 'app-folder-lifecycle', 'App-folder lifecycle', createArray('Write app-folder data', 'Read data', 'Update and verify data', 'Delete owned data'))]",
+          "[_1.journey('onedrive', 'recipient-sharing', 'Recipient sharing', createArray('Create sharing link or grant', 'Read and verify as intended recipient', 'Revoke access', 'Verify access removal'))]",
+          "[_1.journey('onedrive', 'document-versions', 'Document versions', createArray('Update owned document', 'Enumerate version history', 'Retrieve and verify earlier version', 'Optional variant: restore earlier version'))]",
+          "[_1.journey('onedrive', 'search-retrieve', 'Search and retrieve', createArray('Create owned searchable file', 'Wait for indexing and find file', 'Retrieve and verify content'))]",
+          "[_1.journey('onedrive', 'browser-upload', 'Browser file variant', createArray('Sign in through OneDrive browser', 'Upload and reopen owned file in browser', 'Verify content'))]"
+        ]
+      }
+    ],
+    "providerActivityFunctions": {
+      "exchange": [
+        "getConnectivityMetricsForExchange",
+        "getMessageVolumeMetricsForEmailDelivery",
+        "getActiveUserMetricsForOutlookWebByReadEmail",
+        "getActiveUserMetricsForOutlookWebByAppOpening",
+        "getActiveUserMetricsForEmailByModernAuthentication"
+      ],
+      "teams": [
+        "getUsageMetricsForTeamsByMeetingsJoined",
+        "getUsageMetricsForTeamsByLaunch",
+        "getMessageVolumeMetricsForTeamsChat",
+        "getAudioStreamQoEMetricsForTeams",
+        "getAudioStreamsOverUdpMetricsForTeams"
+      ],
+      "sharepoint": [],
+      "onedrive": []
+    },
+    "serviceDefinitions": [
+      {
+        "service": "exchange",
+        "displayName": "Exchange Experience",
+        "journeys": [
+          {
+            "name": "send-receive-mail",
+            "entityName": "exchange-global",
+            "displayName": "Send and receive email",
+            "steps": [
+              {
+                "name": "create-draft",
+                "displayName": "Create email"
+              },
+              {
+                "name": "send",
+                "displayName": "Send email"
+              },
+              {
+                "name": "confirm-delivery",
+                "displayName": "Confirm delivery"
+              }
+            ]
+          },
+          {
+            "name": "edit-reopen-draft",
+            "entityName": "exchange-draft",
+            "displayName": "Save, edit and reopen draft",
+            "steps": [
+              {
+                "name": "create-draft",
+                "displayName": "Create draft"
+              },
+              {
+                "name": "read-initial-draft",
+                "displayName": "Read saved draft"
+              },
+              {
+                "name": "update-draft",
+                "displayName": "Edit draft"
+              },
+              {
+                "name": "read-draft",
+                "displayName": "Reopen and verify draft"
+              },
+              {
+                "name": "delete-draft",
+                "displayName": "Delete draft"
+              }
+            ]
+          },
+          {
+            "name": "attachment-reply-mail",
+            "entityName": "exchange-attachment",
+            "displayName": "Verify attachment and correlated reply",
+            "steps": [
+              {
+                "name": "send-attachment",
+                "displayName": "Send attachment"
+              },
+              {
+                "name": "verify-attachment",
+                "displayName": "Verify delivered attachment hash"
+              },
+              {
+                "name": "reply-mail",
+                "displayName": "Reply from recipient"
+              },
+              {
+                "name": "confirm-reply-mail",
+                "displayName": "Verify correlated reply at sender"
+              }
+            ]
+          },
+          {
+            "name": "distribution-list-mail",
+            "entityName": "exchange-distribution",
+            "displayName": "Deliver through distribution list",
+            "steps": [
+              {
+                "name": "send-group-mail",
+                "displayName": "Send to distribution list"
+              },
+              {
+                "name": "confirm-group-delivery",
+                "displayName": "Verify every expected recipient"
+              }
+            ]
+          },
+          {
+            "name": "recurring-calendar",
+            "entityName": "exchange-recurring",
+            "displayName": "Create, edit and remove recurring calendar event",
+            "steps": [
+              {
+                "name": "create-event",
+                "displayName": "Create recurring series"
+              },
+              {
+                "name": "read-occurrence",
+                "displayName": "Read occurrence"
+              },
+              {
+                "name": "update-event",
+                "displayName": "Update recurring series"
+              },
+              {
+                "name": "verify-event",
+                "displayName": "Verify series and occurrence update"
+              },
+              {
+                "name": "delete-event",
+                "displayName": "Delete recurring series"
+              }
+            ]
+          },
+          {
+            "name": "meeting-invitation",
+            "entityName": "exchange-meeting",
+            "displayName": "Invite, accept and cancel meeting",
+            "steps": [
+              {
+                "name": "create-meeting",
+                "displayName": "Send meeting invitation"
+              },
+              {
+                "name": "confirm-invitation",
+                "displayName": "Read attendee invitation"
+              },
+              {
+                "name": "verify-attendee-calendar",
+                "displayName": "Verify attendee calendar event"
+              },
+              {
+                "name": "accept-meeting",
+                "displayName": "Accept as attendee"
+              },
+              {
+                "name": "confirm-acceptance",
+                "displayName": "Observe acceptance as organizer"
+              },
+              {
+                "name": "cancel-meeting",
+                "displayName": "Cancel as organizer"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "service": "teams",
+        "displayName": "Teams Experience",
+        "journeys": [
+          {
+            "name": "publish-channel-message",
+            "entityName": "teams-global",
+            "displayName": "Publish channel message",
+            "steps": [
+              {
+                "name": "post-message",
+                "displayName": "Post message"
+              },
+              {
+                "name": "confirm-publication",
+                "displayName": "Confirm publication"
+              }
+            ]
+          },
+          {
+            "name": "reply-channel-message",
+            "entityName": "teams-reply",
+            "displayName": "Reply in channel thread",
+            "steps": [
+              {
+                "name": "post-message",
+                "displayName": "Post root message"
+              },
+              {
+                "name": "post-reply",
+                "displayName": "Post reply"
+              },
+              {
+                "name": "confirm-reply",
+                "displayName": "Confirm reply visibility"
+              }
+            ]
+          },
+          {
+            "name": "call-test-user",
+            "entityName": "teams-call",
+            "displayName": "Place test calls and hang up",
+            "steps": [
+              {
+                "name": "place-call",
+                "displayName": "Call dedicated test user"
+              },
+              {
+                "name": "wait-before-hangup",
+                "displayName": "Wait before hang-up"
+              },
+              {
+                "name": "end-call",
+                "displayName": "Hang up and confirm disconnected"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "service": "sharepoint",
+        "displayName": "SharePoint Experience",
+        "journeys": [
+          {
+            "name": "save-reopen-file",
+            "entityName": "sharepoint-global",
+            "displayName": "Save and reopen file",
+            "steps": [
+              {
+                "name": "verify-drive",
+                "displayName": "Verify library"
+              },
+              {
+                "name": "upload-file",
+                "displayName": "Upload file"
+              },
+              {
+                "name": "read-file",
+                "displayName": "Read file"
+              }
+            ]
+          },
+          {
+            "name": "rename-reopen-file",
+            "entityName": "sharepoint-rename",
+            "displayName": "Rename and reopen file",
+            "steps": [
+              {
+                "name": "verify-drive",
+                "displayName": "Verify library"
+              },
+              {
+                "name": "upload-file",
+                "displayName": "Upload file"
+              },
+              {
+                "name": "rename-file",
+                "displayName": "Rename file"
+              },
+              {
+                "name": "read-file",
+                "displayName": "Reopen and verify file"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "resources": {
+    "workspace": {
+      "condition": "[variables('useOtel')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2025-02-01",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30,
+        "features": {
+          "disableLocalAuth": true,
+          "enableLogAccessUsingOnlyResourcePermissions": false
+        },
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      }
+    },
+    "applicationInsights": {
+      "condition": "[variables('useOtel')]",
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[parameters('applicationInsightsName')]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+        "IngestionMode": "LogAnalytics",
+        "SamplingPercentage": 100,
+        "DisableLocalAuth": false,
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      },
+      "dependsOn": [
+        "workspace"
+      ]
+    },
+    "model": {
+      "type": "Microsoft.CloudHealth/healthmodels",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[variables('modelName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "tags": {
+        "purpose": "Microsoft 365 synthetic monitoring proof of concept",
+        "deploymentStage": "federated-direct-reports-optional-otel",
+        "intendedRunnerHost": "Azure Container Apps"
+      },
+      "properties": {}
+    },
+    "nestedModels": {
+      "copy": {
+        "name": "nestedModels",
+        "count": "[length(variables('enabledServices'))]"
+      },
+      "existing": true,
+      "type": "Microsoft.CloudHealth/healthmodels",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[format('{0}-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service)]"
+    },
+    "nestedModelReaders": {
+      "copy": {
+        "name": "nestedModelReaders",
+        "count": "[length(variables('enabledServices'))]"
+      },
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CloudHealth/healthmodels', format('{0}-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service))]",
+      "name": "[guid(resourceId('Microsoft.CloudHealth/healthmodels', format('{0}-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service)), resourceId('Microsoft.CloudHealth/healthmodels', variables('modelName')), 'nested-model-reader')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')]",
+        "principalId": "[reference('model', '2026-05-01-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "model",
+        "serviceModels"
+      ]
+    },
+    "nestedAuthentication": {
+      "condition": "[not(empty(variables('enabledServices')))]",
+      "type": "Microsoft.CloudHealth/healthmodels/authenticationsettings",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[format('{0}/{1}', variables('modelName'), 'nested-models')]",
+      "properties": {
+        "displayName": "Root identity reading service-model health",
+        "authenticationKind": "ManagedIdentity",
+        "managedIdentityName": "SystemAssigned"
+      },
+      "dependsOn": [
+        "model"
+      ]
+    },
+    "rootEntity": {
+      "type": "Microsoft.CloudHealth/healthmodels/entities",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[format('{0}/{1}', variables('modelName'), variables('modelName'))]",
+      "properties": {
+        "displayName": "Microsoft 365 Experience",
+        "impact": "Standard",
+        "canvasPosition": {
+          "x": 500,
+          "y": 0
+        },
+        "signalGroups": {
+          "dependencies": {
+            "aggregationType": "WorstOf",
+            "ignoreUnknown": false
+          }
+        }
+      },
+      "dependsOn": [
+        "model"
+      ]
+    },
+    "serviceReferences": {
+      "copy": {
+        "name": "serviceReferences",
+        "count": "[length(variables('enabledServices'))]"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/entities",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[format('{0}/{1}', variables('modelName'), format('{0}-experience', variables('enabledServices')[copyIndex()].service))]",
+      "properties": {
+        "displayName": "[variables('enabledServices')[copyIndex()].displayName]",
+        "impact": "[if(empty(filter(variables('enabledServices')[copyIndex()].journeys, lambda('journey', not(coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()))))), 'Suppressed', 'Standard')]",
+        "canvasPosition": {
+          "x": "[mul(copyIndex(), 400)]",
+          "y": 250
+        },
+        "signalGroups": {
+          "azureResource": {
+            "azureResourceId": "[resourceId('Microsoft.CloudHealth/healthmodels', format('{0}-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service))]",
+            "authenticationSetting": "nested-models",
+            "signals": []
+          }
+        }
+      },
+      "dependsOn": [
+        "model",
+        "nestedAuthentication",
+        "nestedModelReaders"
+      ]
+    },
+    "relationships": {
+      "copy": {
+        "name": "relationships",
+        "count": "[length(variables('enabledServices'))]"
+      },
+      "type": "Microsoft.CloudHealth/healthmodels/relationships",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[format('{0}/{1}', variables('modelName'), format('{0}-to-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service))]",
+      "properties": {
+        "parentEntityName": "[variables('modelName')]",
+        "childEntityName": "[format('{0}-experience', variables('enabledServices')[copyIndex()].service)]"
+      },
+      "dependsOn": [
+        "model",
+        "rootEntity",
+        "serviceReferences"
+      ]
+    },
+    "serviceModels": {
+      "copy": {
+        "name": "serviceModels",
+        "count": "[length(variables('enabledServices'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('{0}-health-model', variables('enabledServices')[copyIndex()].service)]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "modelName": {
+            "value": "[format('{0}-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service)]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "service": {
+            "value": "[variables('enabledServices')[copyIndex()]]"
+          },
+          "policy": {
+            "value": "[parameters('projectConfig').healthModel]"
+          },
+          "enableOtel": {
+            "value": "[variables('useOtel')]"
+          },
+          "workspaceName": {
+            "value": "[parameters('workspaceName')]"
+          },
+          "applicationInsightsResourceId": "[if(variables('useOtel'), createObject('value', resourceId('Microsoft.Insights/components', parameters('applicationInsightsName'))), createObject('value', ''))]"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.48.1.52935",
+              "templateHash": "12340104713904131342"
+            }
+          },
+          "definitions": {
+            "_1.JourneyDefinition": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "entityName": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/_1.ServiceStep"
+                  }
+                },
+                "planned": {
+                  "type": "bool",
+                  "nullable": true
+                }
+              },
+              "metadata": {
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "service-catalog.bicep"
+                }
+              }
+            },
+            "_1.ServiceStep": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                }
+              },
+              "metadata": {
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "service-catalog.bicep"
+                }
+              }
+            },
+            "ServiceDefinition": {
+              "type": "object",
+              "properties": {
+                "service": {
+                  "type": "string",
+                  "allowedValues": [
+                    "exchange",
+                    "onedrive",
+                    "sharepoint",
+                    "teams"
+                  ]
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "journeys": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/_1.JourneyDefinition"
+                  }
+                }
+              },
+              "metadata": {
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "service-catalog.bicep"
+                }
+              }
+            }
+          },
+          "functions": [
+            {
+              "namespace": "__bicep",
+              "members": {
+                "bindTelemetryQuery": {
+                  "parameters": [
+                    {
+                      "type": "string",
+                      "name": "queryText"
+                    },
+                    {
+                      "type": "string",
+                      "name": "service"
+                    },
+                    {
+                      "type": "string",
+                      "name": "journey"
+                    },
+                    {
+                      "type": "string",
+                      "name": "step"
+                    },
+                    {
+                      "type": "string",
+                      "name": "applicationId"
+                    },
+                    {
+                      "type": "string",
+                      "name": "aggregation"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[replace(replace(replace(replace(replace(replace(parameters('queryText'), '__APPLICATION_INSIGHTS_RESOURCE_ID__', parameters('applicationId')), '__MESSAGE__', if(empty(parameters('step')), 'synthetic-result', 'synthetic-step')), '__SERVICE__', parameters('service')), '__JOURNEY__', parameters('journey')), '__STEP__', parameters('step')), '__AGGREGATION__', parameters('aggregation'))]"
+                  }
+                },
+                "sourceGroup": {
+                  "parameters": [
+                    {
+                      "type": "string",
+                      "name": "name"
+                    },
+                    {
+                      "type": "string",
+                      "name": "displayName"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "name": "members"
+                    }
+                  ],
+                  "output": {
+                    "type": "object",
+                    "value": {
+                      "name": "[parameters('name')]",
+                      "displayName": "[parameters('displayName')]",
+                      "aggregationType": "WorstOf",
+                      "ignoreUnknown": false,
+                      "members": "[parameters('members')]"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "parameters": {
+            "modelName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 44
+            },
+            "location": {
+              "type": "string"
+            },
+            "service": {
+              "$ref": "#/definitions/ServiceDefinition"
+            },
+            "policy": {
+              "type": "object"
+            },
+            "enableOtel": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "workspaceName": {
+              "type": "string"
+            },
+            "applicationInsightsResourceId": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "contextName": "[format('{0}-service-health', parameters('service').service)]",
+            "hasRuntime": "[not(empty(filter(parameters('service').journeys, lambda('journey', not(coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()))))))]",
+            "providerCalls": "[if(not(variables('hasRuntime')), createArray(), concat(createArray(createObject('name', 'health-overviews', 'displayName', 'serviceAnnouncement.healthOverviews (status score)', 'signalName', 'microsoft-reported-service-status'), createObject('name', 'issues', 'displayName', 'serviceAnnouncement.issues (Count)', 'signalName', 'microsoft-reported-issue-count')), map(variables('providerActivityFunctions')[parameters('service').service], lambda('name', createObject('name', lambdaVariables('name'), 'displayName', lambdaVariables('name'), 'signalName', format('microsoft-activity-{0}', lambdaVariables('name')))))))]",
+            "telemetryQuery": "AppTraces\n| where TimeGenerated > ago(15m)\n| where _ResourceId =~ '__APPLICATION_INSIGHTS_RESOURCE_ID__'\n| where Message == '__MESSAGE__'\n| where tostring(Properties['probe.schema_version']) == '2.0'\n| where tostring(Properties['probe.mode']) == 'live'\n| where tostring(Properties['probe.service']) == '__SERVICE__'\n| where tostring(Properties['probe.journey']) == '__JOURNEY__'\n| where '__STEP__' == '' or tostring(Properties['probe.step']) == '__STEP__'\n| where Message != 'synthetic-step' or tostring(Properties['probe.step_status']) in ('succeeded', 'failed')\n| where Message == 'synthetic-step' or isnotnull(tobool(Properties['probe.success']))\n| extend ObservedAt = todatetime(Properties['probe.observed_at'])\n| where ObservedAt > ago(15m) and ObservedAt <= now()\n| extend Success = iff(Message == 'synthetic-step',\n    iff(tostring(Properties['probe.step_status']) == 'succeeded', 1.0, 0.0),\n    iff(tobool(Properties['probe.success']), 1.0, 0.0)),\n    Duration = todouble(Properties['probe.duration_ms'])\n| where isnotnull(Duration) and Duration >= 0\n| summarize Value = __AGGREGATION__\n| where isnotnull(Value)\n",
+            "telemetryMetrics": [
+              {
+                "name": "otel-success-percentage",
+                "displayName": "OTEL success percentage",
+                "dataUnit": "Percent",
+                "aggregation": "avg(100.0 * Success)",
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "LessThan",
+                    "threshold": "[parameters('policy').successDegradedPercent]"
+                  },
+                  "unhealthyRule": {
+                    "operator": "LessThan",
+                    "threshold": "[parameters('policy').successUnhealthyPercent]"
+                  }
+                }
+              },
+              {
+                "name": "otel-mean-duration",
+                "displayName": "OTEL mean duration",
+                "dataUnit": "Milliseconds",
+                "aggregation": "avg(Duration)",
+                "evaluationRules": {
+                  "degradedRule": {
+                    "operator": "GreaterThan",
+                    "threshold": "[parameters('policy').latencyDegradedMilliseconds]"
+                  },
+                  "unhealthyRule": {
+                    "operator": "GreaterThan",
+                    "threshold": "[parameters('policy').latencyUnhealthyMilliseconds]"
+                  }
+                }
+              }
+            ],
+            "nodes": "[concat(createArray(createObject('name', parameters('modelName'), 'displayName', parameters('service').displayName, 'kind', 'root', 'journey', '', 'step', '', 'rollup', true(), 'impact', 'Standard', 'x', 300, 'y', 0)), if(variables('hasRuntime'), createArray(createObject('name', variables('contextName'), 'displayName', 'Service Health', 'kind', 'context', 'journey', '', 'step', '', 'rollup', true(), 'impact', 'Suppressed', 'x', 0, 'y', 240)), createArray()), map(variables('providerCalls'), lambda('call', createObject('name', format('{0}-{1}', variables('contextName'), lambdaVariables('call').name), 'displayName', lambdaVariables('call').displayName, 'kind', 'provider-call', 'journey', '', 'step', '', 'signalName', lambdaVariables('call').signalName, 'rollup', false(), 'impact', 'Standard', 'x', 0, 'y', add(440, mul(indexOf(variables('providerCalls'), lambdaVariables('call')), 170))))), map(parameters('service').journeys, lambda('journey', createObject('name', lambdaVariables('journey').entityName, 'displayName', lambdaVariables('journey').displayName, 'kind', 'journey', 'planned', coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()), 'journey', lambdaVariables('journey').name, 'step', '', 'rollup', true(), 'impact', if(coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()), 'Suppressed', 'Standard'), 'x', add(400, mul(indexOf(parameters('service').journeys, lambdaVariables('journey')), 500)), 'y', 240))), flatten(map(parameters('service').journeys, lambda('journey', map(lambdaVariables('journey').steps, lambda('step', createObject('name', format('{0}-{1}', lambdaVariables('journey').entityName, lambdaVariables('step').name), 'displayName', if(coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()), format('[Planned / unimplemented] {0}', lambdaVariables('step').displayName), lambdaVariables('step').displayName), 'kind', 'step', 'planned', coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()), 'journey', lambdaVariables('journey').name, 'step', lambdaVariables('step').name, 'rollup', false(), 'impact', 'Standard', 'x', add(400, mul(indexOf(parameters('service').journeys, lambdaVariables('journey')), 500)), 'y', add(440, mul(indexOf(lambdaVariables('journey').steps, lambdaVariables('step')), 170)))))))))]",
+            "relationships": "[concat(if(variables('hasRuntime'), createArray(createObject('parent', parameters('modelName'), 'child', variables('contextName'))), createArray()), map(variables('providerCalls'), lambda('call', createObject('parent', variables('contextName'), 'child', format('{0}-{1}', variables('contextName'), lambdaVariables('call').name)))), map(parameters('service').journeys, lambda('journey', createObject('parent', parameters('modelName'), 'child', lambdaVariables('journey').entityName))), flatten(map(parameters('service').journeys, lambda('journey', map(lambdaVariables('journey').steps, lambda('step', createObject('parent', lambdaVariables('journey').entityName, 'child', format('{0}-{1}', lambdaVariables('journey').entityName, lambdaVariables('step').name))))))))]",
+            "providerActivityFunctions": {
+              "exchange": [
+                "getConnectivityMetricsForExchange",
+                "getMessageVolumeMetricsForEmailDelivery",
+                "getActiveUserMetricsForOutlookWebByReadEmail",
+                "getActiveUserMetricsForOutlookWebByAppOpening",
+                "getActiveUserMetricsForEmailByModernAuthentication"
+              ],
+              "teams": [
+                "getUsageMetricsForTeamsByMeetingsJoined",
+                "getUsageMetricsForTeamsByLaunch",
+                "getMessageVolumeMetricsForTeamsChat",
+                "getAudioStreamQoEMetricsForTeams",
+                "getAudioStreamsOverUdpMetricsForTeams"
+              ],
+              "sharepoint": [],
+              "onedrive": []
+            }
+          },
+          "resources": {
+            "model": {
+              "type": "Microsoft.CloudHealth/healthmodels",
+              "apiVersion": "2026-05-01-preview",
+              "name": "[parameters('modelName')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "tags": {
+                "purpose": "Microsoft 365 synthetic monitoring",
+                "service": "[parameters('service').service]"
+              },
+              "properties": {}
+            },
+            "workspace": {
+              "existing": true,
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2025-02-01",
+              "name": "[parameters('workspaceName')]"
+            },
+            "workspaceAuthentication": {
+              "condition": "[parameters('enableOtel')]",
+              "type": "Microsoft.CloudHealth/healthmodels/authenticationsettings",
+              "apiVersion": "2026-05-01-preview",
+              "name": "[format('{0}/{1}', parameters('modelName'), 'workspace-query')]",
+              "properties": {
+                "displayName": "Service-model identity for optional OTEL queries",
+                "authenticationKind": "ManagedIdentity",
+                "managedIdentityName": "SystemAssigned"
+              },
+              "dependsOn": [
+                "model"
+              ]
+            },
+            "workspaceReader": {
+              "condition": "[parameters('enableOtel')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+              "name": "[guid(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), resourceId('Microsoft.CloudHealth/healthmodels', parameters('modelName')), 'log-analytics-reader')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')]",
+                "principalId": "[reference('model', '2026-05-01-preview', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "model"
+              ]
+            },
+            "entities": {
+              "copy": {
+                "name": "entities",
+                "count": "[length(variables('nodes'))]"
+              },
+              "type": "Microsoft.CloudHealth/healthmodels/entities",
+              "apiVersion": "2026-10-01-preview",
+              "name": "[format('{0}/{1}', parameters('modelName'), variables('nodes')[copyIndex()].name)]",
+              "properties": "[union(createObject('displayName', variables('nodes')[copyIndex()].displayName, 'impact', variables('nodes')[copyIndex()].impact, 'canvasPosition', createObject('x', variables('nodes')[copyIndex()].x, 'y', variables('nodes')[copyIndex()].y), 'signalGroups', union(if(variables('nodes')[copyIndex()].rollup, createObject('dependencies', createObject('aggregationType', 'WorstOf', 'ignoreUnknown', false())), createObject()), if(and(and(parameters('enableOtel'), or(equals(variables('nodes')[copyIndex()].kind, 'journey'), equals(variables('nodes')[copyIndex()].kind, 'step'))), not(coalesce(tryGet(variables('nodes')[copyIndex()], 'planned'), false()))), createObject('azureLogAnalytics', createObject('authenticationSetting', 'workspace-query', 'logAnalyticsWorkspaceResourceId', resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), 'signals', map(variables('telemetryMetrics'), lambda('metric', createObject('name', lambdaVariables('metric').name, 'displayName', lambdaVariables('metric').displayName, 'signalKind', 'LogAnalyticsQuery', 'queryText', __bicep.bindTelemetryQuery(variables('telemetryQuery'), parameters('service').service, variables('nodes')[copyIndex()].journey, variables('nodes')[copyIndex()].step, parameters('applicationInsightsResourceId'), lambdaVariables('metric').aggregation), 'valueColumnName', 'Value', 'dataUnit', lambdaVariables('metric').dataUnit, 'refreshInterval', 'PT1M', 'timeGrain', 'PT15M', 'evaluationRules', lambdaVariables('metric').evaluationRules))))), createObject()))), if(equals(variables('nodes')[copyIndex()].kind, 'journey'), createObject('icon', createObject('iconName', 'UserFlow')), createObject()), if(or(or(equals(variables('nodes')[copyIndex()].kind, 'root'), equals(variables('nodes')[copyIndex()].kind, 'context')), coalesce(tryGet(variables('nodes')[copyIndex()], 'planned'), false())), createObject(), createObject('signalAggregationGroups', concat(createArray(__bicep.sourceGroup('external-reports', 'External Reports', if(equals(variables('nodes')[copyIndex()].kind, 'provider-call'), createArray(variables('nodes')[copyIndex()].signalName), createArray('synthetic-success-percentage', 'synthetic-mean-duration')))), if(and(parameters('enableOtel'), or(equals(variables('nodes')[copyIndex()].kind, 'journey'), equals(variables('nodes')[copyIndex()].kind, 'step'))), createArray(__bicep.sourceGroup('otel', 'OpenTelemetry', createArray('otel-success-percentage', 'otel-mean-duration'))), createArray())))))]",
+              "dependsOn": [
+                "model",
+                "workspaceAuthentication",
+                "workspaceReader"
+              ]
+            },
+            "modelRelationships": {
+              "copy": {
+                "name": "modelRelationships",
+                "count": "[length(variables('relationships'))]"
+              },
+              "type": "Microsoft.CloudHealth/healthmodels/relationships",
+              "apiVersion": "2026-05-01-preview",
+              "name": "[format('{0}/{1}', parameters('modelName'), format('{0}-to-{1}', variables('relationships')[copyIndex()].parent, variables('relationships')[copyIndex()].child))]",
+              "properties": {
+                "parentEntityName": "[variables('relationships')[copyIndex()].parent]",
+                "childEntityName": "[variables('relationships')[copyIndex()].child]"
+              },
+              "dependsOn": [
+                "entities",
+                "model"
+              ]
+            }
+          },
+          "outputs": {
+            "modelId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CloudHealth/healthmodels', parameters('modelName'))]"
+            },
+            "rootEntityName": {
+              "type": "string",
+              "value": "[parameters('modelName')]"
+            },
+            "entityNames": {
+              "type": "array",
+              "copy": {
+                "count": "[length(variables('nodes'))]",
+                "input": "[variables('nodes')[copyIndex()].name]"
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "applicationInsights"
+      ]
+    }
+  },
+  "outputs": {
+    "modelId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CloudHealth/healthmodels', variables('modelName'))]"
+    },
+    "modelName": {
+      "type": "string",
+      "value": "[variables('modelName')]"
+    },
+    "rootEntityName": {
+      "type": "string",
+      "value": "[variables('modelName')]"
+    },
+    "apiVersion": {
+      "type": "string",
+      "value": "2026-05-01-preview"
+    },
+    "serviceModelIds": {
+      "type": "array",
+      "copy": {
+        "count": "[length(variables('enabledServices'))]",
+        "input": "[resourceId('Microsoft.CloudHealth/healthmodels', format('{0}-{1}', variables('modelName'), variables('enabledServices')[copyIndex()].service))]"
+      }
+    },
+    "serviceNames": {
+      "type": "array",
+      "copy": {
+        "count": "[length(variables('enabledServices'))]",
+        "input": "[variables('enabledServices')[copyIndex()].service]"
+      }
+    },
+    "modelCount": {
+      "type": "int",
+      "value": "[add(1, length(variables('enabledServices')))]"
+    },
+    "entityCount": {
+      "type": "int",
+      "value": "[add(add(add(add(add(1, mul(length(variables('enabledServices')), 2)), length(variables('runtimeServices'))), length(variables('journeys'))), variables('stepCount')), variables('providerCallCount'))]"
+    },
+    "relationshipCount": {
+      "type": "int",
+      "value": "[add(add(add(add(length(variables('enabledServices')), length(variables('runtimeServices'))), length(variables('journeys'))), variables('stepCount')), variables('providerCallCount'))]"
+    },
+    "journeyCount": {
+      "type": "int",
+      "value": "[length(variables('journeys'))]"
+    },
+    "plannedJourneyCount": {
+      "type": "int",
+      "value": "[length(filter(variables('journeys'), lambda('journey', coalesce(tryGet(lambdaVariables('journey'), 'planned'), false()))))]"
+    },
+    "stepCount": {
+      "type": "int",
+      "value": "[variables('stepCount')]"
+    },
+    "telemetryEnabled": {
+      "type": "bool",
+      "value": "[variables('useOtel')]"
+    },
+    "workspaceId": {
+      "type": "string",
+      "value": "[if(variables('useOtel'), resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), '')]"
+    },
+    "applicationInsightsId": {
+      "type": "string",
+      "value": "[if(variables('useOtel'), resourceId('Microsoft.Insights/components', parameters('applicationInsightsName')), '')]"
+    }
+  }
+}

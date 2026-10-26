@@ -1,0 +1,2127 @@
+{
+  "changes": [
+    {
+      "after": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-exchange",
+        "identity": {
+          "type": "UserAssigned",
+          "userAssignedIdentities": {
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange": {}
+          }
+        },
+        "location": "centralus",
+        "name": "m365-ctbcoa-exchange",
+        "properties": {
+          "configuration": {
+            "activeRevisionsMode": "Single",
+            "registries": [
+              {
+                "identity": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange",
+                "server": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a', '2025-11-01').loginServer]"
+              }
+            ],
+            "secrets": [
+              {
+                "name": "monitoring-config",
+                "value": "*******"
+              },
+              {
+                "name": "service-config",
+                "value": "*******"
+              }
+            ]
+          },
+          "environmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "managedEnvironmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "template": {
+            "containers": [
+              {
+                "args": [
+                  "dist/exchange/src/worker.js",
+                  "--project-config",
+                  "/etc/probe/monitoring.config.json",
+                  "--config",
+                  "/etc/probe/service.json"
+                ],
+                "command": [
+                  "node"
+                ],
+                "env": [
+                  {
+                    "name": "SYNTHETIC_CONFIG_REVISION",
+                    "value": "kwktsggcamiw4"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange', '2024-11-30').clientId]"
+                  },
+                  {
+                    "name": "AZURE_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "ENABLE_LIVE_M365",
+                    "value": "true"
+                  },
+                  {
+                    "name": "ENABLE_BETA_SERVICE_ACTIVITY",
+                    "value": "true"
+                  },
+                  {
+                    "name": "M365_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  }
+                ],
+                "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+                "name": "exchange-synthetic",
+                "resources": {
+                  "cpu": 0.25,
+                  "memory": "0.5Gi"
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/probe",
+                    "volumeName": "probe-config"
+                  }
+                ]
+              }
+            ],
+            "scale": {
+              "maxReplicas": 1,
+              "minReplicas": 1
+            },
+            "terminationGracePeriodSeconds": 60,
+            "volumes": [
+              {
+                "name": "probe-config",
+                "secrets": [
+                  {
+                    "path": "monitoring.config.json",
+                    "secretRef": "monitoring-config"
+                  },
+                  {
+                    "path": "service.json",
+                    "secretRef": "service-config"
+                  }
+                ],
+                "storageType": "Secret"
+              }
+            ]
+          },
+          "workloadProfileName": "Consumption"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/containerApps"
+      },
+      "before": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-exchange",
+        "identity": {
+          "type": "UserAssigned",
+          "userAssignedIdentities": {
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange": {}
+          }
+        },
+        "location": "centralus",
+        "name": "m365-ctbcoa-exchange",
+        "properties": {
+          "configuration": {
+            "activeRevisionsMode": "Single",
+            "registries": [
+              {
+                "identity": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange",
+                "server": "crm365ctbcoagujf67a.azurecr.io"
+              }
+            ],
+            "secrets": [
+              {
+                "name": "monitoring-config",
+                "value": "*******"
+              },
+              {
+                "name": "service-config",
+                "value": "*******"
+              }
+            ]
+          },
+          "environmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "managedEnvironmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "template": {
+            "containers": [
+              {
+                "args": [
+                  "dist/exchange/src/worker.js",
+                  "--project-config",
+                  "/etc/probe/monitoring.config.json",
+                  "--config",
+                  "/etc/probe/service.json"
+                ],
+                "command": [
+                  "node"
+                ],
+                "env": [
+                  {
+                    "name": "SYNTHETIC_CONFIG_REVISION",
+                    "value": "kwktsggcamiw4"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "5735180b-2248-40f1-8f4d-8028c66e1fec"
+                  },
+                  {
+                    "name": "AZURE_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "ENABLE_LIVE_M365",
+                    "value": "true"
+                  },
+                  {
+                    "name": "ENABLE_BETA_SERVICE_ACTIVITY",
+                    "value": "true"
+                  },
+                  {
+                    "name": "M365_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  }
+                ],
+                "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82",
+                "name": "exchange-synthetic",
+                "resources": {
+                  "cpu": 0.25,
+                  "memory": "0.5Gi"
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/probe",
+                    "volumeName": "probe-config"
+                  }
+                ]
+              }
+            ],
+            "scale": {
+              "cooldownPeriod": 300,
+              "maxReplicas": 1,
+              "minReplicas": 1,
+              "pollingInterval": 30
+            },
+            "terminationGracePeriodSeconds": 60,
+            "volumes": [
+              {
+                "name": "probe-config",
+                "secrets": [
+                  {
+                    "path": "monitoring.config.json",
+                    "secretRef": "monitoring-config"
+                  },
+                  {
+                    "path": "service.json",
+                    "secretRef": "service-config"
+                  }
+                ],
+                "storageType": "Secret"
+              }
+            ]
+          },
+          "workloadProfileName": "Consumption"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/containerApps"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a', '2025-11-01').loginServer]",
+                  "before": "crm365ctbcoagujf67a.azurecr.io",
+                  "children": null,
+                  "path": "server",
+                  "propertyChangeType": "Modify"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.configuration.registries",
+          "propertyChangeType": "Array"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": null,
+                  "before": null,
+                  "children": [
+                    {
+                      "after": null,
+                      "before": null,
+                      "children": [
+                        {
+                          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange', '2024-11-30').clientId]",
+                          "before": "5735180b-2248-40f1-8f4d-8028c66e1fec",
+                          "children": null,
+                          "path": "value",
+                          "propertyChangeType": "Modify"
+                        }
+                      ],
+                      "path": "1",
+                      "propertyChangeType": "Modify"
+                    }
+                  ],
+                  "path": "env",
+                  "propertyChangeType": "Array"
+                },
+                {
+                  "after": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+                  "before": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82",
+                  "children": null,
+                  "path": "image",
+                  "propertyChangeType": "Modify"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.template.containers",
+          "propertyChangeType": "Array"
+        },
+        {
+          "after": null,
+          "before": 300,
+          "children": null,
+          "path": "properties.template.scale.cooldownPeriod",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": 30,
+          "children": null,
+          "path": "properties.template.scale.pollingInterval",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-exchange",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-sharepoint",
+        "identity": {
+          "type": "UserAssigned",
+          "userAssignedIdentities": {
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint": {}
+          }
+        },
+        "location": "centralus",
+        "name": "m365-ctbcoa-sharepoint",
+        "properties": {
+          "configuration": {
+            "activeRevisionsMode": "Single",
+            "registries": [
+              {
+                "identity": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint",
+                "server": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a', '2025-11-01').loginServer]"
+              }
+            ],
+            "secrets": [
+              {
+                "name": "monitoring-config",
+                "value": "*******"
+              },
+              {
+                "name": "service-config",
+                "value": "*******"
+              }
+            ]
+          },
+          "environmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "managedEnvironmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "template": {
+            "containers": [
+              {
+                "args": [
+                  "dist/sharepoint/src/worker.js",
+                  "--project-config",
+                  "/etc/probe/monitoring.config.json",
+                  "--config",
+                  "/etc/probe/service.json"
+                ],
+                "command": [
+                  "node"
+                ],
+                "env": [
+                  {
+                    "name": "SYNTHETIC_CONFIG_REVISION",
+                    "value": "pccz6a4u6a26c"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint', '2024-11-30').clientId]"
+                  },
+                  {
+                    "name": "AZURE_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "ENABLE_LIVE_M365",
+                    "value": "true"
+                  },
+                  {
+                    "name": "ENABLE_BETA_SERVICE_ACTIVITY",
+                    "value": "true"
+                  },
+                  {
+                    "name": "M365_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  }
+                ],
+                "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+                "name": "sharepoint-synthetic",
+                "resources": {
+                  "cpu": 0.25,
+                  "memory": "0.5Gi"
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/probe",
+                    "volumeName": "probe-config"
+                  }
+                ]
+              }
+            ],
+            "scale": {
+              "maxReplicas": 1,
+              "minReplicas": 1
+            },
+            "terminationGracePeriodSeconds": 60,
+            "volumes": [
+              {
+                "name": "probe-config",
+                "secrets": [
+                  {
+                    "path": "monitoring.config.json",
+                    "secretRef": "monitoring-config"
+                  },
+                  {
+                    "path": "service.json",
+                    "secretRef": "service-config"
+                  }
+                ],
+                "storageType": "Secret"
+              }
+            ]
+          },
+          "workloadProfileName": "Consumption"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/containerApps"
+      },
+      "before": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-sharepoint",
+        "identity": {
+          "type": "UserAssigned",
+          "userAssignedIdentities": {
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint": {}
+          }
+        },
+        "location": "centralus",
+        "name": "m365-ctbcoa-sharepoint",
+        "properties": {
+          "configuration": {
+            "activeRevisionsMode": "Single",
+            "registries": [
+              {
+                "identity": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint",
+                "server": "crm365ctbcoagujf67a.azurecr.io"
+              }
+            ],
+            "secrets": [
+              {
+                "name": "monitoring-config",
+                "value": "*******"
+              },
+              {
+                "name": "service-config",
+                "value": "*******"
+              }
+            ]
+          },
+          "environmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "managedEnvironmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "template": {
+            "containers": [
+              {
+                "args": [
+                  "dist/sharepoint/src/worker.js",
+                  "--project-config",
+                  "/etc/probe/monitoring.config.json",
+                  "--config",
+                  "/etc/probe/service.json"
+                ],
+                "command": [
+                  "node"
+                ],
+                "env": [
+                  {
+                    "name": "SYNTHETIC_CONFIG_REVISION",
+                    "value": "pccz6a4u6a26c"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "b4e47f27-b5c8-46b5-a2f8-a98131696b6b"
+                  },
+                  {
+                    "name": "AZURE_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "ENABLE_LIVE_M365",
+                    "value": "true"
+                  },
+                  {
+                    "name": "ENABLE_BETA_SERVICE_ACTIVITY",
+                    "value": "true"
+                  },
+                  {
+                    "name": "M365_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  }
+                ],
+                "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82",
+                "name": "sharepoint-synthetic",
+                "resources": {
+                  "cpu": 0.25,
+                  "memory": "0.5Gi"
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/probe",
+                    "volumeName": "probe-config"
+                  }
+                ]
+              }
+            ],
+            "scale": {
+              "cooldownPeriod": 300,
+              "maxReplicas": 1,
+              "minReplicas": 1,
+              "pollingInterval": 30
+            },
+            "terminationGracePeriodSeconds": 60,
+            "volumes": [
+              {
+                "name": "probe-config",
+                "secrets": [
+                  {
+                    "path": "monitoring.config.json",
+                    "secretRef": "monitoring-config"
+                  },
+                  {
+                    "path": "service.json",
+                    "secretRef": "service-config"
+                  }
+                ],
+                "storageType": "Secret"
+              }
+            ]
+          },
+          "workloadProfileName": "Consumption"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/containerApps"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a', '2025-11-01').loginServer]",
+                  "before": "crm365ctbcoagujf67a.azurecr.io",
+                  "children": null,
+                  "path": "server",
+                  "propertyChangeType": "Modify"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.configuration.registries",
+          "propertyChangeType": "Array"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": null,
+                  "before": null,
+                  "children": [
+                    {
+                      "after": null,
+                      "before": null,
+                      "children": [
+                        {
+                          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint', '2024-11-30').clientId]",
+                          "before": "b4e47f27-b5c8-46b5-a2f8-a98131696b6b",
+                          "children": null,
+                          "path": "value",
+                          "propertyChangeType": "Modify"
+                        }
+                      ],
+                      "path": "1",
+                      "propertyChangeType": "Modify"
+                    }
+                  ],
+                  "path": "env",
+                  "propertyChangeType": "Array"
+                },
+                {
+                  "after": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+                  "before": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82",
+                  "children": null,
+                  "path": "image",
+                  "propertyChangeType": "Modify"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.template.containers",
+          "propertyChangeType": "Array"
+        },
+        {
+          "after": null,
+          "before": 300,
+          "children": null,
+          "path": "properties.template.scale.cooldownPeriod",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": 30,
+          "children": null,
+          "path": "properties.template.scale.pollingInterval",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-sharepoint",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-teams",
+        "identity": {
+          "type": "UserAssigned",
+          "userAssignedIdentities": {
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams": {}
+          }
+        },
+        "location": "centralus",
+        "name": "m365-ctbcoa-teams",
+        "properties": {
+          "configuration": {
+            "activeRevisionsMode": "Single",
+            "ingress": {
+              "allowInsecure": false,
+              "external": true,
+              "targetPort": 8080,
+              "transport": "Http"
+            },
+            "registries": [
+              {
+                "identity": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams",
+                "server": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a', '2025-11-01').loginServer]"
+              }
+            ],
+            "secrets": [
+              {
+                "name": "monitoring-config",
+                "value": "*******"
+              },
+              {
+                "name": "service-config",
+                "value": "*******"
+              }
+            ]
+          },
+          "environmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "managedEnvironmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "template": {
+            "containers": [
+              {
+                "args": [
+                  "dist/teams/src/worker.js",
+                  "--project-config",
+                  "/etc/probe/monitoring.config.json",
+                  "--config",
+                  "/etc/probe/service.json"
+                ],
+                "command": [
+                  "node"
+                ],
+                "env": [
+                  {
+                    "name": "SYNTHETIC_CONFIG_REVISION",
+                    "value": "rlc4dbqyldmcc"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').clientId]"
+                  },
+                  {
+                    "name": "AZURE_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "ENABLE_LIVE_M365",
+                    "value": "true"
+                  },
+                  {
+                    "name": "ENABLE_BETA_SERVICE_ACTIVITY",
+                    "value": "true"
+                  },
+                  {
+                    "name": "M365_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "BOT_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "BOT_CLIENT_ID",
+                    "value": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').clientId]"
+                  }
+                ],
+                "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+                "name": "teams-synthetic",
+                "probes": [
+                  {
+                    "httpGet": {
+                      "path": "/healthz",
+                      "port": 8080
+                    },
+                    "periodSeconds": 10,
+                    "timeoutSeconds": 2,
+                    "type": "Readiness"
+                  },
+                  {
+                    "httpGet": {
+                      "path": "/healthz",
+                      "port": 8080
+                    },
+                    "initialDelaySeconds": 30,
+                    "periodSeconds": 30,
+                    "timeoutSeconds": 2,
+                    "type": "Liveness"
+                  }
+                ],
+                "resources": {
+                  "cpu": 0.25,
+                  "memory": "0.5Gi"
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/probe",
+                    "volumeName": "probe-config"
+                  }
+                ]
+              }
+            ],
+            "scale": {
+              "maxReplicas": 1,
+              "minReplicas": 1
+            },
+            "terminationGracePeriodSeconds": 60,
+            "volumes": [
+              {
+                "name": "probe-config",
+                "secrets": [
+                  {
+                    "path": "monitoring.config.json",
+                    "secretRef": "monitoring-config"
+                  },
+                  {
+                    "path": "service.json",
+                    "secretRef": "service-config"
+                  }
+                ],
+                "storageType": "Secret"
+              }
+            ]
+          },
+          "workloadProfileName": "Consumption"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/containerApps"
+      },
+      "before": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-teams",
+        "identity": {
+          "type": "UserAssigned",
+          "userAssignedIdentities": {
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourcegroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams": {}
+          }
+        },
+        "location": "centralus",
+        "name": "m365-ctbcoa-teams",
+        "properties": {
+          "configuration": {
+            "activeRevisionsMode": "Single",
+            "ingress": {
+              "allowInsecure": false,
+              "exposedPort": 0,
+              "external": true,
+              "targetPort": 8080,
+              "traffic": [
+                {
+                  "latestRevision": true,
+                  "weight": 100
+                }
+              ],
+              "transport": "Http"
+            },
+            "registries": [
+              {
+                "identity": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams",
+                "server": "crm365ctbcoagujf67a.azurecr.io"
+              }
+            ],
+            "secrets": [
+              {
+                "name": "monitoring-config",
+                "value": "*******"
+              },
+              {
+                "name": "service-config",
+                "value": "*******"
+              }
+            ]
+          },
+          "environmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "managedEnvironmentId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+          "template": {
+            "containers": [
+              {
+                "args": [
+                  "dist/teams/src/worker.js",
+                  "--project-config",
+                  "/etc/probe/monitoring.config.json",
+                  "--config",
+                  "/etc/probe/service.json"
+                ],
+                "command": [
+                  "node"
+                ],
+                "env": [
+                  {
+                    "name": "SYNTHETIC_CONFIG_REVISION",
+                    "value": "rlc4dbqyldmcc"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "559938ef-2862-4473-b06e-d198a736cb32"
+                  },
+                  {
+                    "name": "AZURE_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "ENABLE_LIVE_M365",
+                    "value": "true"
+                  },
+                  {
+                    "name": "ENABLE_BETA_SERVICE_ACTIVITY",
+                    "value": "true"
+                  },
+                  {
+                    "name": "M365_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "BOT_TENANT_ID",
+                    "value": "5e7897a0-4a38-43f3-914d-195d5355e969"
+                  },
+                  {
+                    "name": "BOT_CLIENT_ID",
+                    "value": "559938ef-2862-4473-b06e-d198a736cb32"
+                  }
+                ],
+                "image": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82",
+                "name": "teams-synthetic",
+                "probes": [
+                  {
+                    "httpGet": {
+                      "path": "/healthz",
+                      "port": 8080
+                    },
+                    "initialDelaySeconds": 30,
+                    "periodSeconds": 30,
+                    "timeoutSeconds": 2,
+                    "type": "Liveness"
+                  },
+                  {
+                    "httpGet": {
+                      "path": "/healthz",
+                      "port": 8080
+                    },
+                    "periodSeconds": 10,
+                    "timeoutSeconds": 2,
+                    "type": "Readiness"
+                  }
+                ],
+                "resources": {
+                  "cpu": 0.25,
+                  "memory": "0.5Gi"
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/probe",
+                    "volumeName": "probe-config"
+                  }
+                ]
+              }
+            ],
+            "scale": {
+              "cooldownPeriod": 300,
+              "maxReplicas": 1,
+              "minReplicas": 1,
+              "pollingInterval": 30
+            },
+            "terminationGracePeriodSeconds": 60,
+            "volumes": [
+              {
+                "name": "probe-config",
+                "secrets": [
+                  {
+                    "path": "monitoring.config.json",
+                    "secretRef": "monitoring-config"
+                  },
+                  {
+                    "path": "service.json",
+                    "secretRef": "service-config"
+                  }
+                ],
+                "storageType": "Secret"
+              }
+            ]
+          },
+          "workloadProfileName": "Consumption"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/containerApps"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": 0,
+          "children": null,
+          "path": "properties.configuration.ingress.exposedPort",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": [
+            {
+              "latestRevision": true,
+              "weight": 100
+            }
+          ],
+          "children": null,
+          "path": "properties.configuration.ingress.traffic",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a', '2025-11-01').loginServer]",
+                  "before": "crm365ctbcoagujf67a.azurecr.io",
+                  "children": null,
+                  "path": "server",
+                  "propertyChangeType": "Modify"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.configuration.registries",
+          "propertyChangeType": "Array"
+        },
+        {
+          "after": null,
+          "before": null,
+          "children": [
+            {
+              "after": null,
+              "before": null,
+              "children": [
+                {
+                  "after": null,
+                  "before": null,
+                  "children": [
+                    {
+                      "after": null,
+                      "before": null,
+                      "children": [
+                        {
+                          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').clientId]",
+                          "before": "559938ef-2862-4473-b06e-d198a736cb32",
+                          "children": null,
+                          "path": "value",
+                          "propertyChangeType": "Modify"
+                        }
+                      ],
+                      "path": "1",
+                      "propertyChangeType": "Modify"
+                    },
+                    {
+                      "after": null,
+                      "before": null,
+                      "children": [
+                        {
+                          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').clientId]",
+                          "before": "559938ef-2862-4473-b06e-d198a736cb32",
+                          "children": null,
+                          "path": "value",
+                          "propertyChangeType": "Modify"
+                        }
+                      ],
+                      "path": "7",
+                      "propertyChangeType": "Modify"
+                    }
+                  ],
+                  "path": "env",
+                  "propertyChangeType": "Array"
+                },
+                {
+                  "after": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:c30eb4681e8477478548be524718e891beb1baff3e1f6c60a9865514fb495b53",
+                  "before": "crm365ctbcoagujf67a.azurecr.io/m365-synthetic@sha256:d9ffec32e11a207f6393e92e2b1ec2ede7e197eb4cd585d5e0b54d56e7038a82",
+                  "children": null,
+                  "path": "image",
+                  "propertyChangeType": "Modify"
+                },
+                {
+                  "after": null,
+                  "before": null,
+                  "children": [
+                    {
+                      "after": null,
+                      "before": null,
+                      "children": [
+                        {
+                          "after": null,
+                          "before": 30,
+                          "children": null,
+                          "path": "initialDelaySeconds",
+                          "propertyChangeType": "Delete"
+                        },
+                        {
+                          "after": 10,
+                          "before": 30,
+                          "children": null,
+                          "path": "periodSeconds",
+                          "propertyChangeType": "Modify"
+                        },
+                        {
+                          "after": "Readiness",
+                          "before": "Liveness",
+                          "children": null,
+                          "path": "type",
+                          "propertyChangeType": "Modify"
+                        }
+                      ],
+                      "path": "0",
+                      "propertyChangeType": "Modify"
+                    },
+                    {
+                      "after": null,
+                      "before": null,
+                      "children": [
+                        {
+                          "after": 30,
+                          "before": 10,
+                          "children": null,
+                          "path": "periodSeconds",
+                          "propertyChangeType": "Modify"
+                        },
+                        {
+                          "after": "Liveness",
+                          "before": "Readiness",
+                          "children": null,
+                          "path": "type",
+                          "propertyChangeType": "Modify"
+                        },
+                        {
+                          "after": 30,
+                          "before": null,
+                          "children": null,
+                          "path": "initialDelaySeconds",
+                          "propertyChangeType": "Create"
+                        }
+                      ],
+                      "path": "1",
+                      "propertyChangeType": "Modify"
+                    }
+                  ],
+                  "path": "probes",
+                  "propertyChangeType": "Array"
+                }
+              ],
+              "path": "0",
+              "propertyChangeType": "Modify"
+            }
+          ],
+          "path": "properties.template.containers",
+          "propertyChangeType": "Array"
+        },
+        {
+          "after": null,
+          "before": 300,
+          "children": null,
+          "path": "properties.template.scale.cooldownPeriod",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": 30,
+          "children": null,
+          "path": "properties.template.scale.pollingInterval",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/containerApps/m365-ctbcoa-teams",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+        "location": "centralus",
+        "name": "cae-m365-experience-consto",
+        "properties": {
+          "workloadProfiles": [
+            {
+              "enableFips": false,
+              "name": "Consumption",
+              "workloadProfileType": "Consumption"
+            }
+          ],
+          "zoneRedundant": false
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/managedEnvironments"
+      },
+      "before": {
+        "apiVersion": "2026-07-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+        "location": "centralus",
+        "name": "cae-m365-experience-consto",
+        "properties": {
+          "environmentMode": "WorkloadProfiles",
+          "peerAuthentication": {
+            "mtls": {
+              "enabled": false
+            }
+          },
+          "peerTrafficConfiguration": {
+            "encryption": {
+              "enabled": false
+            }
+          },
+          "publicNetworkAccess": "Enabled",
+          "workloadProfiles": [
+            {
+              "enableFips": false,
+              "name": "Consumption",
+              "workloadProfileType": "Consumption"
+            }
+          ],
+          "zoneRedundant": false
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.App/managedEnvironments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": "WorkloadProfiles",
+          "children": null,
+          "path": "properties.environmentMode",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": {
+            "mtls": {
+              "enabled": false
+            }
+          },
+          "children": null,
+          "path": "properties.peerAuthentication",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": {
+            "encryption": {
+              "enabled": false
+            }
+          },
+          "children": null,
+          "path": "properties.peerTrafficConfiguration",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": "Enabled",
+          "children": null,
+          "path": "properties.publicNetworkAccess",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.App/managedEnvironments/cae-m365-experience-consto",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+        "name": "8d71efea-df05-5195-be5a-afa3b76552f6",
+        "properties": {
+          "assignableScopes": [
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto"
+          ],
+          "description": "Publish health reports only; no model administration or Microsoft 365 access.",
+          "permissions": [
+            {
+              "actions": [
+                "Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action"
+              ]
+            }
+          ],
+          "roleName": "m365-experience-consto health report writer",
+          "type": "CustomRole"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleDefinitions"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+        "name": "8d71efea-df05-5195-be5a-afa3b76552f6",
+        "properties": {
+          "assignableScopes": [
+            "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto"
+          ],
+          "description": "Publish health reports only; no model administration or Microsoft 365 access.",
+          "permissions": [
+            {
+              "actions": [
+                "Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action"
+              ]
+            }
+          ],
+          "roleName": "m365-experience-consto health report writer",
+          "type": "CustomRole"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleDefinitions"
+      },
+      "changeType": "NoChange",
+      "delta": [],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.BotService/botServices/bot-m365-consto",
+        "kind": "azurebot",
+        "location": "global",
+        "name": "bot-m365-consto",
+        "resourceGroup": "rg-m365-consto",
+        "sku": {
+          "name": "F0"
+        },
+        "type": "Microsoft.BotService/botServices"
+      },
+      "before": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.BotService/botServices/bot-m365-consto",
+        "kind": "azurebot",
+        "location": "global",
+        "name": "bot-m365-consto",
+        "resourceGroup": "rg-m365-consto",
+        "sku": {
+          "name": "F0"
+        },
+        "type": "Microsoft.BotService/botServices"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.BotService/botServices/bot-m365-consto",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "deploymentStage": "federated-direct-reports-optional-otel",
+          "intendedRunnerHost": "Azure Container Apps",
+          "purpose": "Microsoft 365 synthetic monitoring proof of concept"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "before": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "deploymentStage": "federated-direct-reports-optional-otel",
+          "intendedRunnerHost": "Azure Container Apps",
+          "purpose": "Microsoft 365 synthetic monitoring proof of concept"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-exchange",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto-exchange",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "Microsoft 365 synthetic monitoring",
+          "service": "exchange"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "before": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-exchange",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto-exchange",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "Microsoft 365 synthetic monitoring",
+          "service": "exchange"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-exchange",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-exchange/providers/Microsoft.Authorization/roleAssignments/14b8cda3-823a-5be0-8abf-f5c3724ea448",
+        "name": "14b8cda3-823a-5be0-8abf-f5c3724ea448",
+        "properties": {
+          "principalId": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange', '2024-11-30').principalId]",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-exchange/providers/Microsoft.Authorization/roleAssignments/14b8cda3-823a-5be0-8abf-f5c3724ea448",
+        "name": "14b8cda3-823a-5be0-8abf-f5c3724ea448",
+        "properties": {
+          "principalId": "6b3b66c0-4283-4b5f-9cf9-d1302622f542",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange', '2024-11-30').principalId]",
+          "before": "6b3b66c0-4283-4b5f-9cf9-d1302622f542",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+          "before": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+          "children": null,
+          "path": "properties.roleDefinitionId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-exchange/providers/Microsoft.Authorization/roleAssignments/14b8cda3-823a-5be0-8abf-f5c3724ea448",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-sharepoint",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto-sharepoint",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "Microsoft 365 synthetic monitoring",
+          "service": "sharepoint"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "before": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-sharepoint",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto-sharepoint",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "Microsoft 365 synthetic monitoring",
+          "service": "sharepoint"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-sharepoint",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-sharepoint/providers/Microsoft.Authorization/roleAssignments/121f960d-89ad-59d5-929c-af3cdcabe430",
+        "name": "121f960d-89ad-59d5-929c-af3cdcabe430",
+        "properties": {
+          "principalId": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint', '2024-11-30').principalId]",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-sharepoint/providers/Microsoft.Authorization/roleAssignments/121f960d-89ad-59d5-929c-af3cdcabe430",
+        "name": "121f960d-89ad-59d5-929c-af3cdcabe430",
+        "properties": {
+          "principalId": "39f67f0e-02f9-488a-88f5-e01dde66b467",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint', '2024-11-30').principalId]",
+          "before": "39f67f0e-02f9-488a-88f5-e01dde66b467",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+          "before": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+          "children": null,
+          "path": "properties.roleDefinitionId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-sharepoint/providers/Microsoft.Authorization/roleAssignments/121f960d-89ad-59d5-929c-af3cdcabe430",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-teams",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto-teams",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "Microsoft 365 synthetic monitoring",
+          "service": "teams"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "before": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-teams",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "location": "centralus",
+        "name": "m365-experience-consto-teams",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "Microsoft 365 synthetic monitoring",
+          "service": "teams"
+        },
+        "type": "Microsoft.CloudHealth/healthmodels"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-teams",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-teams/providers/Microsoft.Authorization/roleAssignments/c5e05f77-8389-58ac-b695-974ef40a4688",
+        "name": "c5e05f77-8389-58ac-b695-974ef40a4688",
+        "properties": {
+          "principalId": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').principalId]",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-teams/providers/Microsoft.Authorization/roleAssignments/c5e05f77-8389-58ac-b695-974ef40a4688",
+        "name": "c5e05f77-8389-58ac-b695-974ef40a4688",
+        "properties": {
+          "principalId": "e65cd05f-ff37-46a2-883c-15fbfc566ac9",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').principalId]",
+          "before": "e65cd05f-ff37-46a2-883c-15fbfc566ac9",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+          "before": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/8d71efea-df05-5195-be5a-afa3b76552f6",
+          "children": null,
+          "path": "properties.roleDefinitionId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.CloudHealth/healthmodels/m365-experience-consto-teams/providers/Microsoft.Authorization/roleAssignments/c5e05f77-8389-58ac-b695-974ef40a4688",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2025-11-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a",
+        "location": "centralus",
+        "name": "crm365ctbcoagujf67a",
+        "properties": {
+          "adminUserEnabled": false,
+          "anonymousPullEnabled": false,
+          "networkRuleBypassOptions": "AzureServices",
+          "policies": {
+            "azureADAuthenticationAsArmPolicy": {
+              "status": "enabled"
+            },
+            "exportPolicy": {
+              "status": "enabled"
+            },
+            "quarantinePolicy": {
+              "status": "disabled"
+            },
+            "retentionPolicy": {
+              "days": 7,
+              "status": "disabled"
+            },
+            "trustPolicy": {
+              "status": "disabled",
+              "type": "Notary"
+            }
+          },
+          "publicNetworkAccess": "Enabled",
+          "roleAssignmentMode": "LegacyRegistryPermissions",
+          "zoneRedundancy": "Disabled"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "sku": {
+          "name": "Basic"
+        },
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ContainerRegistry/registries"
+      },
+      "before": {
+        "apiVersion": "2025-11-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a",
+        "location": "centralus",
+        "name": "crm365ctbcoagujf67a",
+        "properties": {
+          "adminUserEnabled": false,
+          "anonymousPullEnabled": false,
+          "dataEndpointEnabled": false,
+          "encryption": {
+            "status": "disabled"
+          },
+          "networkRuleBypassAllowedForTasks": false,
+          "networkRuleBypassOptions": "AzureServices",
+          "policies": {
+            "azureADAuthenticationAsArmPolicy": {
+              "status": "enabled"
+            },
+            "exportPolicy": {
+              "status": "enabled"
+            },
+            "quarantinePolicy": {
+              "status": "disabled"
+            },
+            "retentionPolicy": {
+              "days": 7,
+              "status": "disabled"
+            },
+            "trustPolicy": {
+              "status": "disabled",
+              "type": "Notary"
+            }
+          },
+          "publicNetworkAccess": "Enabled",
+          "roleAssignmentMode": "LegacyRegistryPermissions",
+          "zoneRedundancy": "Disabled"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "sku": {
+          "name": "Basic"
+        },
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ContainerRegistry/registries"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": false,
+          "children": null,
+          "path": "properties.dataEndpointEnabled",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": {
+            "status": "disabled"
+          },
+          "children": null,
+          "path": "properties.encryption",
+          "propertyChangeType": "Delete"
+        },
+        {
+          "after": null,
+          "before": false,
+          "children": null,
+          "path": "properties.networkRuleBypassAllowedForTasks",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/28328696-e281-5bf0-8ff1-a3e41414b1e9",
+        "name": "28328696-e281-5bf0-8ff1-a3e41414b1e9",
+        "properties": {
+          "principalId": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').principalId]",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/28328696-e281-5bf0-8ff1-a3e41414b1e9",
+        "name": "28328696-e281-5bf0-8ff1-a3e41414b1e9",
+        "properties": {
+          "principalId": "e65cd05f-ff37-46a2-883c-15fbfc566ac9",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams', '2024-11-30').principalId]",
+          "before": "e65cd05f-ff37-46a2-883c-15fbfc566ac9",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/28328696-e281-5bf0-8ff1-a3e41414b1e9",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/aa8cd87b-276a-53bb-b3b0-7e4e86f2e400",
+        "name": "aa8cd87b-276a-53bb-b3b0-7e4e86f2e400",
+        "properties": {
+          "principalId": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange', '2024-11-30').principalId]",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/aa8cd87b-276a-53bb-b3b0-7e4e86f2e400",
+        "name": "aa8cd87b-276a-53bb-b3b0-7e4e86f2e400",
+        "properties": {
+          "principalId": "6b3b66c0-4283-4b5f-9cf9-d1302622f542",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange', '2024-11-30').principalId]",
+          "before": "6b3b66c0-4283-4b5f-9cf9-d1302622f542",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/aa8cd87b-276a-53bb-b3b0-7e4e86f2e400",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/b7228217-b011-5791-8cc2-a4518b9313bf",
+        "name": "b7228217-b011-5791-8cc2-a4518b9313bf",
+        "properties": {
+          "principalId": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint', '2024-11-30').principalId]",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "before": {
+        "apiVersion": "2022-04-01",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/b7228217-b011-5791-8cc2-a4518b9313bf",
+        "name": "b7228217-b011-5791-8cc2-a4518b9313bf",
+        "properties": {
+          "principalId": "39f67f0e-02f9-488a-88f5-e01dde66b467",
+          "roleDefinitionId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "type": "Microsoft.Authorization/roleAssignments"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": "[reference('/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint', '2024-11-30').principalId]",
+          "before": "39f67f0e-02f9-488a-88f5-e01dde66b467",
+          "children": null,
+          "path": "properties.principalId",
+          "propertyChangeType": "Modify"
+        },
+        {
+          "after": "ServicePrincipal",
+          "before": null,
+          "children": null,
+          "path": "properties.principalType",
+          "propertyChangeType": "NoEffect"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ContainerRegistry/registries/crm365ctbcoagujf67a/providers/Microsoft.Authorization/roleAssignments/b7228217-b011-5791-8cc2-a4518b9313bf",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2024-11-30",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange",
+        "location": "centralus",
+        "name": "uami-m365-experience-consto-exchange",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+      },
+      "before": {
+        "apiVersion": "2024-11-30",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange",
+        "location": "centralus",
+        "name": "uami-m365-experience-consto-exchange",
+        "properties": {
+          "isolationScope": "None"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": {
+            "isolationScope": "None"
+          },
+          "children": null,
+          "path": "properties",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-exchange",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2024-11-30",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint",
+        "location": "centralus",
+        "name": "uami-m365-experience-consto-sharepoint",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+      },
+      "before": {
+        "apiVersion": "2024-11-30",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint",
+        "location": "centralus",
+        "name": "uami-m365-experience-consto-sharepoint",
+        "properties": {
+          "isolationScope": "None"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": {
+            "isolationScope": "None"
+          },
+          "children": null,
+          "path": "properties",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-sharepoint",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "apiVersion": "2024-11-30",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams",
+        "location": "centralus",
+        "name": "uami-m365-experience-consto-teams",
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+      },
+      "before": {
+        "apiVersion": "2024-11-30",
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams",
+        "location": "centralus",
+        "name": "uami-m365-experience-consto-teams",
+        "properties": {
+          "isolationScope": "None"
+        },
+        "resourceGroup": "rg-m365-consto",
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+      },
+      "changeType": "Modify",
+      "delta": [
+        {
+          "after": null,
+          "before": {
+            "isolationScope": "None"
+          },
+          "children": null,
+          "path": "properties",
+          "propertyChangeType": "Delete"
+        }
+      ],
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-m365-experience-consto-teams",
+      "symbolicName": null,
+      "unsupportedReason": null
+    },
+    {
+      "after": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Storage/storageAccounts/stm365ctbcoagujf67a",
+        "kind": "StorageV2",
+        "location": "centralus",
+        "name": "stm365ctbcoagujf67a",
+        "resourceGroup": "rg-m365-consto",
+        "sku": {
+          "name": "Standard_LRS",
+          "tier": "Standard"
+        },
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.Storage/storageAccounts"
+      },
+      "before": {
+        "id": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Storage/storageAccounts/stm365ctbcoagujf67a",
+        "kind": "StorageV2",
+        "location": "centralus",
+        "name": "stm365ctbcoagujf67a",
+        "resourceGroup": "rg-m365-consto",
+        "sku": {
+          "name": "Standard_LRS",
+          "tier": "Standard"
+        },
+        "tags": {
+          "purpose": "synthetic-worker",
+          "workload": "m365-experience-consto"
+        },
+        "type": "Microsoft.Storage/storageAccounts"
+      },
+      "changeType": "Ignore",
+      "delta": null,
+      "deploymentId": null,
+      "extension": null,
+      "identifiers": null,
+      "resourceId": "/subscriptions/17a37fff-b1ef-4af7-9bd2-70898b286aaf/resourceGroups/rg-m365-consto/providers/Microsoft.Storage/storageAccounts/stm365ctbcoagujf67a",
+      "symbolicName": null,
+      "unsupportedReason": null
+    }
+  ],
+  "diagnostics": null,
+  "error": null,
+  "potentialChanges": null,
+  "status": "Succeeded"
+}

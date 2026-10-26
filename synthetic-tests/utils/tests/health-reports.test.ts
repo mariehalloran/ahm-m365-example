@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { aggregateHealthReports, createHealthReporter, serviceHealthReport, type HealthReporter, type CycleResults } from "../src/health-reports.js";
+import { aggregateHealthReports, createHealthReporter, serviceHealthReport, serviceHealthIssuesReport, type HealthReporter, type CycleResults } from "../src/health-reports.js";
 import { readProjectConfig } from "../src/project-config.js";
 import { baseResult } from "../src/probes.js";
 import { runCycle } from "../src/runner.js";
@@ -59,6 +59,12 @@ describe("single-cycle journey/action health aggregation", () => {
       expect(report.body).not.toHaveProperty("value");
     }
     expect(JSON.stringify(reports)).not.toContain("opaque-target");
+    for (const report of reports) {
+      expect(JSON.parse(report.body.additionalContext).unit).toBe(
+        report.body.signalName === "synthetic-success-percentage" ? "Percent" : "Milliseconds",
+      );
+      expect(report.body).not.toHaveProperty("dataUnit");
+    }
   });
   it.each([
     { successes: 100, expected: "Healthy" }, { successes: 99, expected: "Healthy" },
@@ -120,6 +126,7 @@ describe("direct health reports", () => {
     expect(JSON.parse(String(requests[0]!.init.body))).toMatchObject({
       signalName: "synthetic-success-percentage", healthState: "Healthy", value: 100, expiresInMinutes: 15,
     });
+    expect(JSON.parse(JSON.parse(String(requests[0]!.init.body)).additionalContext)).toMatchObject({ unit: "Percent" });
     expect(output.emit.mock.calls.filter(([event]) => event === "health-report-published")).toHaveLength(8);
   });
   it("fails explicitly on denied ingestion, tries other signals, and never logs response bodies or credentials", async () => {
@@ -228,9 +235,10 @@ describe("independent reporting failure paths", () => {
       ["serviceDegradation", 50, "Degraded"] as const,
     ])("maps observed overview %s to %s (%s)", (status, value, healthState) => {
       expect(report([diagnostic(String(status))])).toMatchObject({
-        entityName: "exchange-service-health",
+        entityName: "exchange-service-health-health-overviews",
         body: { signalName: "microsoft-reported-service-status", value, healthState, expiresInMinutes: 15 },
       });
+      expect(JSON.parse(report([diagnostic(String(status))]).body.additionalContext)).toMatchObject({ unit: "status-score" });
     });
     it.each(["unknownFutureStatus", "investigating", "restoringService", "serviceRestored", "resolved"]
       .map(status => ({ records: [diagnostic(status)] })).concat([{ records: [] }]))("reports missing/unrecognized observations as Unknown without a score", ({ records }) => {
@@ -292,10 +300,46 @@ describe("independent reporting failure paths", () => {
           return new Response(null, { status: 204 });
         },
       })({ cycleId: "provider-cycle", providerDiagnostics: [{ ...diagnostic("serviceOperational"), service: type }] });
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health/`);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health-health-overviews/`);
       expect(requests[0]?.body).toMatchObject({ signalName: "microsoft-reported-service-status", healthState: "Healthy", value: 100 });
+      expect(requests[1]?.url).toContain(`/entities/${type}-service-health-issues/`);
+      expect(requests[1]?.body).toMatchObject({ signalName: "microsoft-reported-issue-count", healthState: "Unknown" });
       expect(credential.getToken).toHaveBeenCalledWith("https://management.azure.com/.default", expect.anything());
+    });
+  });
+
+  describe("diagnostic issue counts", () => {
+    const now = Date.parse("2026-10-26T12:30:00Z");
+    const summary: ProviderDiagnostic = {
+      kind: "issue-summary", service: "exchange", collectedAt: new Date(now).toISOString(), count: 0,
+    };
+    const report = (records: ProviderDiagnostic[]) =>
+      serviceHealthIssuesReport("exchange", { cycleId: "issues", providerDiagnostics: records }, 15, now);
+    it.each([0, 4])("displays a complete %i-issue snapshot without evaluating availability", count => {
+      const observed = report([{ ...summary, count }]);
+      expect(observed).toMatchObject({
+        entityName: "exchange-service-health-issues",
+        body: { signalName: "microsoft-reported-issue-count", healthState: "Unknown", value: count },
+      });
+      expect(observed.body).not.toHaveProperty("evaluationRules");
+      expect(observed.body).not.toHaveProperty("dataUnit");
+      expect(JSON.parse(observed.body.additionalContext)).toMatchObject({ unit: "Count", evaluated: false });
+    });
+    it("never converts absent, failed, stale, future, duplicate or other-service snapshots to zero issues", () => {
+      for (const records of [
+        [],
+        [{ ...summary, collectedAt: new Date(now - 61 * 60000).toISOString() }],
+        [{ ...summary, collectedAt: new Date(now + 60000).toISOString() }],
+        [{ ...summary, service: "teams" as const }],
+        [{ ...summary, count: -1 }],
+        [summary, summary],
+        [summary, { kind: "failure" as const, service: "exchange" as const, collectedAt: new Date(now).toISOString(),
+          source: "serviceAnnouncement.issues" as const, apiVersion: "v1.0" as const, category: "permission-failure" as const }],
+      ]) {
+        expect(report(records).body.healthState).toBe("Unknown");
+        expect(report(records).body).not.toHaveProperty("value");
+      }
     });
   });
 });

@@ -270,8 +270,8 @@ describe("worker health-report independence", () => {
         shutdown: async () => {},
       }),
     })).rejects.toThrow(TelemetryExportError);
-    expect(fetcher).toHaveBeenCalledTimes(63);
-    const providerReport = fetcher.mock.calls.find(([url]) => String(url).includes("/entities/exchange-service-health/"));
+    expect(fetcher).toHaveBeenCalledTimes(64);
+    const providerReport = fetcher.mock.calls.find(([url]) => String(url).includes("/entities/exchange-service-health-health-overviews/"));
     expect(JSON.parse(String(providerReport?.[1]?.body))).toMatchObject({ healthState: "Healthy", value: 100 });
     expect(events.emit).toHaveBeenCalledWith("telemetry-output-failed", expect.any(Object));
   });

@@ -44,7 +44,18 @@ describe("all approved Exchange/Teams beta provider functions", () => {
     expect(paths).toHaveLength(5);
     expect(paths.every(path => path.startsWith("https://graph.microsoft.com/beta/reports/serviceActivity/"))).toBe(true);
     expect(records.filter(record => record.kind === "activity")).toHaveLength(5);
-    expect(serviceActivityReports(config, { cycleId: "provider-only", providerDiagnostics: records }, 15, now)).toEqual([]);
+    const reports = serviceActivityReports(config, { cycleId: "provider-only", providerDiagnostics: records }, 15, now);
+    expect(reports).toHaveLength(5);
+    for (const [index, report] of reports.entries()) {
+      const name = activityFunctions[type][index]!;
+      expect(report.entityName).toBe(`${type}-service-health-${name}`);
+      expect(report.body).toMatchObject({ healthState: "Unknown", value: isPercentageActivity(name) ? 97 : 120 });
+      expect(report.body).not.toHaveProperty("evaluationRules");
+      expect(report.body).not.toHaveProperty("dataUnit");
+      expect(JSON.parse(report.body.additionalContext)).toMatchObject({
+        unit: isPercentageActivity(name) ? "Percent" : "Count", evaluated: false,
+      });
+    }
     expect(config.providerIntervalSeconds).toBe(300);
   });
 
@@ -59,9 +70,9 @@ describe("all approved Exchange/Teams beta provider functions", () => {
     const reports = serviceActivityReports(config, {
       cycleId: "provider-cycle", providerDiagnostics: [row("2026-10-26T12:00:00Z", 100), row("2026-10-26T12:15:00Z", 97)],
     }, 15, now);
-    expect(reports).toHaveLength(1);
+    expect(reports).toHaveLength(5);
     expect(reports[0]).toMatchObject({
-      entityName: "exchange-service-health", body: {
+      entityName: "exchange-service-health-getConnectivityMetricsForExchange", body: {
         signalName: "microsoft-activity-getConnectivityMetricsForExchange", value: 97, healthState: "Degraded",
       },
     });
@@ -92,9 +103,31 @@ describe("all approved Exchange/Teams beta provider functions", () => {
         intervalEnd: new Date(now).toISOString(), aggregationIntervalMinutes: 15, percentage: 70 },
     ];
     const reports = serviceActivityReports(config, { cycleId: "thresholds", providerDiagnostics }, 15, now);
-    expect(reports.map(report => report.body.healthState)).toEqual(["Degraded", "Unhealthy"]);
-    expect(reports.every(report => report.entityName === "teams-service-health")).toBe(true);
-    expect(reports[1]?.body.additionalContext).toContain("telemetry-coverage-not-call-quality");
+    expect(reports.map(report => report.body.healthState)).toEqual(["Degraded", "Unknown", "Unknown", "Unhealthy", "Unknown"]);
+    expect(reports.every(report => report.entityName.startsWith("teams-service-health-get"))).toBe(true);
+    expect(reports[3]?.body.additionalContext).toContain("telemetry-coverage-not-call-quality");
+  });
+
+  it("reports exactly the selected calls and replaces missing or failed observations with Unknown", () => {
+    const config = parseServiceConfig({
+      ...service("teams"), serviceActivity: { enabled: true, functions: ["getAudioStreamQoEMetricsForTeams"] },
+    });
+    const failure: ProviderDiagnostic = {
+      kind: "failure", service: "teams", collectedAt: new Date(now).toISOString(),
+      source: "getAudioStreamQoEMetricsForTeams", apiVersion: "beta", category: "permission-failure",
+    };
+    for (const providerDiagnostics of [[], [failure]]) {
+      const reports = serviceActivityReports(config, { cycleId: "failed", providerDiagnostics }, 15, now);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatchObject({
+        entityName: "teams-service-health-getAudioStreamQoEMetricsForTeams",
+        body: { healthState: "Unknown", signalName: "microsoft-activity-getAudioStreamQoEMetricsForTeams" },
+      });
+      expect(reports[0]?.body).not.toHaveProperty("value");
+      expect(reports[0]?.body).not.toHaveProperty("evaluationRules");
+    }
+    expect(serviceActivityReports({ ...config, serviceActivity: { ...config.serviceActivity, enabled: false } },
+      { cycleId: "disabled", providerDiagnostics: [] }, 15, now)).toEqual([]);
   });
 
   it("rejects duplicate/wrong-service functions and inverted/invalid percentage thresholds", () => {

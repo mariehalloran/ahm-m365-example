@@ -1,0 +1,17 @@
+test_cross_tenant_certificates_are_key_vault_references_and_separate_from_azure_identity (test_templates.WorkerTemplateContracts.test_cross_tenant_certificates_are_key_vault_references_and_separate_from_azure_identity) ... ok
+test_default_bot_uses_the_attached_uami_without_user_storage_or_certificate_fallback (test_templates.WorkerTemplateContracts.test_default_bot_uses_the_attached_uami_without_user_storage_or_certificate_fallback) ... ok
+test_delegated_cache_is_conditional_encrypted_https_and_container_scoped (test_templates.WorkerTemplateContracts.test_delegated_cache_is_conditional_encrypted_https_and_container_scoped) ... ok
+test_delegated_worker_has_metadata_not_embedded_tokens_and_provider_auth_stays_separate (test_templates.WorkerTemplateContracts.test_delegated_worker_has_metadata_not_embedded_tokens_and_provider_auth_stays_separate) ... ok
+test_explicit_beta_approval_is_mounted_without_hidden_profile_settings (test_templates.WorkerTemplateContracts.test_explicit_beta_approval_is_mounted_without_hidden_profile_settings) ... ok
+test_live_gate_uses_exact_lowercase_values (test_templates.WorkerTemplateContracts.test_live_gate_uses_exact_lowercase_values) ... ok
+test_minimal_report_permission_without_log_forwarding (test_templates.WorkerTemplateContracts.test_minimal_report_permission_without_log_forwarding) ... ok
+test_mounted_configuration_changes_roll_the_worker_revision (test_templates.WorkerTemplateContracts.test_mounted_configuration_changes_roll_the_worker_revision) ... ok
+test_public_callback_is_only_for_selected_live_teams_individual_calls (test_templates.WorkerTemplateContracts.test_public_callback_is_only_for_selected_live_teams_individual_calls) ... ok
+test_real_worker_image_and_private_identity_pull_without_web_ingress (test_templates.WorkerTemplateContracts.test_real_worker_image_and_private_identity_pull_without_web_ingress) ... ok
+test_worker_adds_telemetry_secret_and_environment_only_for_azure_export (test_templates.WorkerTemplateContracts.test_worker_adds_telemetry_secret_and_environment_only_for_azure_export) ... ok
+test_worker_selection_checks_every_configured_journey (test_templates.WorkerTemplateContracts.test_worker_selection_checks_every_configured_journey) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 1.236s
+
+OK
