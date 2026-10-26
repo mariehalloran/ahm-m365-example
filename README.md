@@ -21,12 +21,14 @@ This example combines **synthetic user journeys** with **Azure Monitor Health Mo
 
 All six core journeys are **implemented**:
 
-1. **Send and receive email** — send from mailbox A to B and verify delivery in B's Inbox. Runs every **minute**.
-2. **Create, edit and reopen a draft** — save a draft, reopen it, update it and verify the saved changes.
-3. **Send an attachment and receive a reply** — verify the received attachment's hash, reply and confirm the reply reaches the sender.
-4. **Send to a distribution list** — confirm delivery to every configured expected recipient.
-5. **Manage a recurring calendar event** — create a series, verify its occurrences and changes, then delete it.
-6. **Send and accept a meeting invitation** — invite the attendee, accept, verify the response and cancel the meeting.
+| User journey | Completion evidence | Status | Cadence |
+| --- | --- | --- | --- |
+| Send and receive email | Send from mailbox A to B and verify delivery in B's Inbox | Implemented | 1 minute |
+| Create, edit and reopen a draft | Save a draft, reopen it, update it and verify the saved changes | Implemented | 5 minutes |
+| Send an attachment and receive a reply | Verify the received attachment's hash, reply and confirm the reply reaches the sender | Implemented | 5 minutes |
+| Send to a distribution list | Confirm delivery to every configured expected recipient | Implemented | 5 minutes |
+| Manage a recurring calendar event | Create a series, verify its occurrences and changes, then delete it | Implemented | 5 minutes |
+| Send and accept a meeting invitation | Invite the attendee, accept, verify the response and cancel the meeting | Implemented | 5 minutes |
 
 Journeys 2–6 run every **five minutes**. Mail delivery, drafts, attachment/reply and distribution-list delivery have been verified Healthy live; calendar journeys still have observed authorization/403 failures. **Planned variants:** mailbox search/organization, external mail and Outlook Web.
 
@@ -36,11 +38,13 @@ Journeys 2–6 run every **five minutes**. Mail delivery, drafts, attachment/rep
 
 The five target journey families are:
 
-1. **Complete a channel conversation** — Bot A posts, Bot B receives and replies, then verify the persisted conversation. **Planned full flow**; implemented coverage is one bot posting/replying with Graph readback, not Bot B receipt.
-2. **Complete an answered audio call** — two parties answer and exchange a reference audio signal in both directions. **Planned full flow**; implemented coverage only places calls to configured users, waits and hangs up, without verifying an answer or media.
-3. **Join and leave a scheduled meeting** — verify joining, participant roster, bidirectional media and departure. **Planned**.
-4. **Share and open a file** — verify the intended recipient receives the reference, can access the file and reads matching content. **Planned**.
-5. **Complete an Adaptive Card workflow** — send a card, perform an action and verify its callback/result. **Planned**.
+| User journey | Completion evidence | Status / current boundary |
+| --- | --- | --- |
+| Complete a channel conversation | Bot A posts, Bot B receives and replies, then verify the persisted conversation | Full flow planned; implemented: one bot posting/replying with Graph readback, not Bot B receipt |
+| Complete an answered audio call | Two parties answer and exchange a reference audio signal in both directions | Full flow planned; implemented: call placement, wait and hang-up, without answer or media verification |
+| Join and leave a scheduled meeting | Verify joining, participant roster, bidirectional media and departure | Planned |
+| Share and open a file | Verify the intended recipient receives the reference, can access the file and reads matching content | Planned |
+| Complete an Adaptive Card workflow | Send a card, perform an action and verify its callback/result | Planned |
 
 The three implemented probes—channel post/readback, thread reply/readback and call placement/wait/hang-up—run every **two minutes** and have been verified Healthy live within those narrower boundaries. Teams Web messaging/meeting variants are **planned**.
 
@@ -50,11 +54,13 @@ The three implemented probes—channel post/readback, thread reply/readback and 
 
 The five target journey families are:
 
-1. **Save and reopen library content** — verify site/library access, folder hierarchy, upload, enumeration, download/hash and deletion. **Partially implemented**: save/reopen and a separate rename/reopen journey exist; the expanded folder workflow is planned.
-2. **Create, read, update and delete a list item** — verify each saved change. **Planned**.
-3. **Share content with a recipient** — verify recipient access, then revoke it. **Planned**.
-4. **Verify versions and recover content** — retrieve history/prior content and recover it; check-in/check-out is a variant. **Planned**.
-5. **Find content through search** — wait for indexing, locate the expected result and retrieve it. **Planned**.
+| User journey | Completion evidence | Status / current boundary |
+| --- | --- | --- |
+| Save and reopen library content | Verify site/library access, folder hierarchy, upload, enumeration, download/hash and deletion | Partially implemented: save/reopen and separate rename/reopen; expanded folder workflow planned |
+| Create, read, update and delete a list item | Verify each saved change | Planned |
+| Share content with a recipient | Verify recipient access, then revoke it | Planned |
+| Verify versions and recover content | Retrieve history/prior content and recover it; check-in/check-out variant | Planned |
+| Find content through search | Wait for indexing, locate the expected result and retrieve it | Planned |
 
 Implemented file journeys run every **five minutes**; live target/access setup is still incomplete. Browser variants are **planned**.
 
@@ -64,13 +70,30 @@ Implemented file journeys run every **five minutes**; live target/access setup i
 
 All five journey families are **planned**, with no worker, execution cadence or live verification:
 
-1. **Save and reopen user-drive content** — create folders, upload a file, download/hash-check it and delete test content.
-2. **Persist content in an app folder** — save and reopen application-owned content; the exact authentication model remains to be selected.
-3. **Share content with a recipient** — verify recipient read access, then revoke it.
-4. **Retrieve file versions** — verify previous content, with optional restore.
-5. **Find and retrieve content through search** — locate the expected file and verify its contents.
+| User journey | Completion evidence | Status |
+| --- | --- | --- |
+| Save and reopen user-drive content | Create folders, upload a file, download/hash-check it and delete test content | Planned |
+| Persist content in an app folder | Save and reopen application-owned content; authentication model remains to be selected | Planned |
+| Share content with a recipient | Verify recipient read access, then revoke it | Planned |
+| Retrieve file versions | Verify previous content, with optional restore | Planned |
+| Find and retrieve content through search | Locate the expected file and verify its contents | Planned |
 
 Browser variants are also **planned**. [OneDrive journey details](./synthetic-tests/README.md#onedrive-target-catalog-planned)
+
+## How authentication works
+
+Hosted workers use an **explicitly selected user-assigned managed identity** to obtain short-lived tokens from Microsoft Entra ID, without storing a user password or client secret. Authentication identifies the worker; administrators must separately authorize its access.
+
+| Access path | Authentication and permission boundary |
+| --- | --- |
+| Exchange | Managed identity with Exchange application RBAC scoped to the approved test mailboxes |
+| SharePoint | Managed identity with Graph `Sites.Selected` and an explicit grant on the dedicated test site |
+| Teams | Managed-identity bot for messaging/calls; a separate Entra application trusts the worker identity through federation for team-scoped Graph readback. Default bot mode requires no user sign-in or MFA |
+| Microsoft-reported Service Health | Separate application-only provider access, optionally using managed-identity federation, with approved Service Health/beta activity permissions |
+| Azure health reports | Worker managed identity with ingest-only access to its own service health model, independent of M365 permissions |
+| OneDrive | Planned; no worker authentication flow is implemented |
+
+Optional delegated Teams coverage requires test-user sign-in and may require MFA/reauthentication. Certificate authentication is an explicitly configured alternative for approved Graph scenarios, not a silent fallback. See [access setup](./docs/cross-tenant-access.md) and [administrator configuration](./synthetic-tests/README.md#administrator-setup-enable-authentication-and-live-tests).
 
 ## Why synthetic tests?
 
