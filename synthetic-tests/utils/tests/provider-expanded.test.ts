@@ -3,7 +3,6 @@ import { exchangeProviders } from "../../exchange/src/providers.js";
 import { teamsProviders } from "../../teams/src/providers.js";
 import { GraphClient } from "../src/graph.js";
 import { serviceActivityReports } from "../src/health-reports.js";
-import { AuthenticatedHttp } from "../src/http.js";
 import { activityFunctions, isPercentageActivity } from "../src/provider-catalog.js";
 import type { ProviderDiagnostic } from "../src/provider-diagnostics.js";
 import { parseServiceConfig } from "../src/service-config.js";
@@ -24,9 +23,9 @@ describe("all approved Exchange/Teams beta provider functions", () => {
     const config = service(type);
     const records: ProviderDiagnostic[] = [];
     const paths: string[] = [];
-    const graph = new GraphClient(new AuthenticatedHttp({
+    const graph = new GraphClient({
       getToken: async () => ({ token: "unit-test-token", expiresOnTimestamp: now + 100000 }),
-    }, "https://graph.microsoft.com/.default", {
+    }, {
       fetch: async url => {
         paths.push(String(url));
         const name = activityFunctions[type].find(name => String(url).includes(name))!;
@@ -35,7 +34,7 @@ describe("all approved Exchange/Teams beta provider functions", () => {
           value: [{ intervalStartDateTime: "2026-10-26T12:15:00Z", ...(isPercentageActivity(name) ? { percentage: 97 } : { value: 120 }) }],
         }));
       },
-    }));
+    });
     const summary = await (type === "exchange" ? exchangeProviders : teamsProviders)({
       service: config, graph, signal: new AbortController().signal,
       results: { recordDiagnostic: record => { records.push(record); } }, now: () => now,

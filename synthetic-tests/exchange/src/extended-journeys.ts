@@ -7,6 +7,7 @@ import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
 import { authenticate } from "./steps.js";
+import { readReplySeed } from "./reply-seed.js";
 
 const identified = z.object({ id: z.string().min(1) });
 const message = identified.extend({
@@ -39,7 +40,7 @@ interface Attempt {
   subject: string;
   mutated: boolean;
   mailboxes: Set<string>;
-  mailSubjects: Set<string>;
+  mailSubjects: Map<string, string>;
   ownedMail: Map<string, Set<string>>;
   ownedEvents: Map<string, Set<string>>;
 }
@@ -95,28 +96,35 @@ async function send(a: Attempt, sender: string, recipients: string[], attachment
   await a.graph.request(`${item(sender, "messages", draft.id)}/send`, a.context.signal, "POST", undefined, false);
 }
 
-async function receive(a: Attempt, mailbox: string, subject = a.subject) {
+function mailFilter(a: Attempt, subject: string, marker?: string): string {
+  const exactSubject = `subject eq '${quote(subject)}'`;
+  // Retained replies share a subject; keep old attempts from filling the first page.
+  return marker === undefined ? exactSubject
+    : `${exactSubject} and receivedDateTime ge ${new Date(a.startedAt - 60000).toISOString()}`;
+}
+
+async function receive(a: Attempt, mailbox: string, subject = a.subject, marker?: string) {
   a.mailboxes.add(mailbox);
   const query = new URLSearchParams({
-    "$filter": `subject eq '${quote(subject)}'`, "$top": "100",
+    "$filter": mailFilter(a, subject, marker), "$top": "100",
     "$select": "id,subject,conversationId,internetMessageId,internetMessageHeaders,bodyPreview,from",
   });
   return poll(a, async () => {
     const found = await a.graph.json(`${user(mailbox)}/mailFolders/inbox/messages?${query}`, messages, a.context.signal);
     if (found["@odata.nextLink"]) throw new IntegrationError("read-failure");
-    const matching = found.value.filter(message => message.subject === subject);
+    const matching = found.value.filter(message => message.subject === subject &&
+      (marker === undefined || message.bodyPreview?.includes(marker)));
     for (const message of matching) own(a.ownedMail, mailbox, message.id);
     return matching[0];
   });
 }
 
-async function attachmentReply(a: Attempt): Promise<void> {
+async function attachmentDelivery(a: Attempt): Promise<void> {
   const { sender, recipient } = participants(a);
   const bytes = Buffer.from(`Synthetic attachment ${a.result.correlationId}\n`, "utf8");
   await step(a, "send-attachment", () => send(a, sender, [recipient], bytes.toString("base64")));
-  const delivered = await step(a, "verify-attachment", async () => {
+  await step(a, "verify-attachment", async () => {
     const delivered = await receive(a, recipient);
-    if (!delivered.conversationId || !delivered.internetMessageId) throw new IntegrationError("read-failure");
     const attachments = await a.graph.json(`${item(recipient, "messages", delivered.id)}/attachments`,
       z.object({ value: z.array(identified.extend({ name: z.string() })), "@odata.nextLink": z.string().optional() }), a.context.signal);
     if (attachments["@odata.nextLink"]) throw new IntegrationError("read-failure");
@@ -125,30 +133,38 @@ async function attachmentReply(a: Attempt): Promise<void> {
     const saved = await a.graph.json(`${item(recipient, "messages", delivered.id)}/attachments/${encodeURIComponent(attachment.id)}`,
       z.object({ contentBytes: z.string() }), a.context.signal);
     if (hash(Buffer.from(saved.contentBytes, "base64")) !== hash(bytes)) throw new IntegrationError("read-failure");
-    return delivered;
   });
+}
+
+async function replyMail(a: Attempt): Promise<void> {
+  const { sender, recipient } = participants(a);
+  const marker = `Correlated reply ${a.result.correlationId}`;
+  let originalMessageId = "";
   const replySubject = await step(a, "reply-mail", async () => {
+    const delivered = await readReplySeed(a.graph, a.probe, a.context.signal);
+    originalMessageId = delivered.internetMessageId;
+    a.mutated = true;
     const reply = await a.graph.json(`${item(recipient, "messages", delivered.id)}/createReply`, message, a.context.signal, "POST", {}, false);
     own(a.ownedMail, recipient, reply.id);
-    if (!reply.subject?.includes(a.result.correlationId) || reply.conversationId !== delivered.conversationId) {
+    if (!reply.subject?.endsWith(delivered.subject) || reply.conversationId !== delivered.conversationId) {
       throw new IntegrationError("read-failure");
     }
-    a.mailSubjects.add(reply.subject);
+    a.mailSubjects.set(reply.subject, marker);
     await a.graph.request(item(recipient, "messages", reply.id), a.context.signal, "PATCH", {
-      body: { contentType: "Text", content: `Correlated reply ${a.result.correlationId}` },
+      body: { contentType: "Text", content: marker },
     }, false);
     await a.graph.request(`${item(recipient, "messages", reply.id)}/send`, a.context.signal, "POST", undefined, false);
     return reply.subject;
   });
   await step(a, "confirm-reply-mail", async () => {
-    const reply = await receive(a, sender, replySubject);
+    const reply = await receive(a, sender, replySubject, marker);
     // Conversation IDs are mailbox-local; transport Message-ID/In-Reply-To links A and B.
     const inReplyTo = reply.internetMessageHeaders?.filter(header => header.name.toLowerCase() === "in-reply-to") ?? [];
     const replyHeaderMatched = inReplyTo.length === 1 &&
-      inReplyTo[0]!.value.trim() === delivered.internetMessageId!.trim() &&
-      !!reply.internetMessageId && reply.internetMessageId !== delivered.internetMessageId;
+      inReplyTo[0]!.value.trim() === originalMessageId.trim() &&
+      !!reply.internetMessageId && reply.internetMessageId !== originalMessageId;
     const senderMatched = reply.from?.emailAddress.address.toLowerCase() === recipient.toLowerCase();
-    const bodyMarkerMatched = reply.bodyPreview?.includes(`Correlated reply ${a.result.correlationId}`) ?? false;
+    const bodyMarkerMatched = reply.bodyPreview?.includes(marker) ?? false;
     if (!replyHeaderMatched || !senderMatched || !bodyMarkerMatched) {
       a.context.telemetry.emit("exchange-reply-validation-failed", {
         testId: a.probe.id, correlationId: a.result.correlationId, replyHeaderMatched, senderMatched, bodyMarkerMatched,
@@ -314,11 +330,19 @@ async function clean(a: Attempt, signal: AbortSignal): Promise<void> {
   }
   if (a.context.config.EXCHANGE_CLEANUP_ENABLED !== "false") {
     for (const mailbox of a.mailboxes) {
-      for (const subject of new Set([a.subject, ...a.mailSubjects])) {
+      const subjects = new Map<string, string | undefined>(a.mailSubjects);
+      if (a.probe.type !== "exchange-reply") subjects.set(a.subject, undefined);
+      for (const [subject, marker] of subjects) {
         try {
-          const query = new URLSearchParams({ "$filter": `subject eq '${quote(subject)}'`, "$top": "100" });
+          const query = new URLSearchParams({
+            "$filter": mailFilter(a, subject, marker), "$top": "100", "$select": "id,subject,bodyPreview",
+          });
           const copies = await a.graph.json(`${user(mailbox)}/messages?${query}`, messages, signal);
-          for (const copy of copies.value) if (copy.subject === subject) own(a.ownedMail, mailbox, copy.id);
+          for (const copy of copies.value) {
+            if (copy.subject === subject && (marker === undefined || copy.bodyPreview?.includes(marker))) {
+              own(a.ownedMail, mailbox, copy.id);
+            }
+          }
           if (copies["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
         } catch (error) { failures.push(error); }
       }
@@ -339,7 +363,7 @@ function journey(calendar: boolean, operation: (attempt: Attempt) => Promise<voi
     const a: Attempt = {
       probe, context, result, startedAt, now, graph: context.graph!,
       subject: `AHM synthetic ${result.correlationId}`, mutated: false,
-      mailboxes: new Set(), mailSubjects: new Set(), ownedMail: new Map(), ownedEvents: new Map(),
+      mailboxes: new Set(), mailSubjects: new Map(), ownedMail: new Map(), ownedEvents: new Map(),
     };
     try {
       await step(a, "authenticate", async () => {
@@ -358,7 +382,8 @@ function journey(calendar: boolean, operation: (attempt: Attempt) => Promise<voi
   };
 }
 
-export const exchangeAttachmentProbe = journey(false, attachmentReply);
+export const exchangeAttachmentProbe = journey(false, attachmentDelivery);
+export const exchangeReplyProbe = journey(false, replyMail);
 export const exchangeDistributionProbe = journey(false, distribution);
 export const exchangeRecurringProbe = journey(true, recurring);
 export const exchangeMeetingProbe = journey(true, meeting);

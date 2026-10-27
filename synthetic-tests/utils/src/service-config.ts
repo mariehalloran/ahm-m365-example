@@ -1,7 +1,6 @@
-import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import { probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
-import { ConfigurationError, loadConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
+import { maxOneDriveTargets, probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
+import { ConfigurationError, createRuntimeConfig, readConfigJson, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 export { activityFunctions } from "./provider-catalog.js";
 
@@ -19,6 +18,8 @@ export const serviceActivitySchema = z.object({
 const serviceFields = {
   intervalSeconds: z.number().int().min(1).max(86400),
   timeoutSeconds: z.number().int().min(1).max(120),
+  maxConcurrentProbes: z.number().int().min(1).max(20).default(3),
+  cycleTimeoutSeconds: z.number().int().min(1).max(86400).default(170),
   mode: z.enum(["simulation", "live"]),
   scenario: z.enum(scenarios).default("healthy"),
   cohort: probeSchema.shape.cohort,
@@ -29,9 +30,7 @@ const serviceFields = {
   providerClientId: z.string().uuid().optional(),
   teamsCallingCallbackUrl: teamsCallingCallbackUrlSchema.optional(),
   teamsCallingPort: z.number().int().min(1024).max(65535).default(8080),
-  teamsCallingPlaybackEnabled: z.boolean().default(false),
   teamsCallingAnswerTimeoutSeconds: z.number().int().min(1).max(30).default(20),
-  teamsCallingPlaybackTimeoutSeconds: z.number().int().min(2).max(30).default(10),
   teamsCallQuality: z.object({
     enabled: z.boolean().default(false),
     maxWaitSeconds: z.number().int().min(1).max(60).default(30),
@@ -59,35 +58,42 @@ const common = {
   enabled: z.boolean(),
 };
 const target = probeSchema.pick({ id: true, region: true, scenario: true });
+export const serviceTargetSchemas = {
+  exchange: z.array(target.extend({
+    mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
+    replySeed: probeSchema.shape.replySeed,
+    distributionList: probeSchema.shape.distributionList,
+  }).strict()).max(30),
+  onedrive: z.array(target.extend({
+    userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
+    driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
+    folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
+  }).strict()).max(maxOneDriveTargets),
+  teams: z.array(target.extend({
+    tenantId: probeSchema.shape.tenantId,
+    teamId: probeSchema.shape.teamId,
+    channelId: probeSchema.shape.channelId,
+    serviceUrl: probeSchema.shape.serviceUrl,
+  }).strict()).max(30),
+};
+export const teamsCallTargetsSchema = z.array(target.extend({
+  tenantId: z.string().uuid(),
+  meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
+  organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
+}).strict()).max(30).default([]);
 const serviceSchema = z.discriminatedUnion("type", [
   z.object({
     ...common, type: z.literal("exchange"),
-    targets: z.array(target.extend({
-      mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
-      distributionList: probeSchema.shape.distributionList,
-    }).strict()).max(30),
+    targets: serviceTargetSchemas.exchange,
   }).strict(),
   z.object({
     ...common, type: z.literal("onedrive"),
-    targets: z.array(target.extend({
-      userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
-      driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
-      folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
-    }).strict()).max(30),
+    targets: serviceTargetSchemas.onedrive,
   }).strict(),
   z.object({
     ...common, type: z.literal("teams"),
-    targets: z.array(target.extend({
-      tenantId: probeSchema.shape.tenantId,
-      teamId: probeSchema.shape.teamId,
-      channelId: probeSchema.shape.channelId,
-      serviceUrl: probeSchema.shape.serviceUrl,
-    }).strict()).max(30),
-    callTargets: z.array(target.extend({
-      tenantId: z.string().uuid(),
-      meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
-      organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
-    }).strict()).max(30).default([]),
+    targets: serviceTargetSchemas.teams,
+    callTargets: teamsCallTargetsSchema,
   }).strict(),
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
@@ -164,13 +170,7 @@ export function parseServiceConfig(raw: unknown): ServiceConfig {
 }
 
 export async function readServiceConfig(file: string): Promise<ServiceFileConfig> {
-  let text: string;
-  try { text = await readFile(file, "utf8"); }
-  catch { throw new ConfigurationError("Cannot read the service config file"); }
-  let raw: unknown;
-  try { raw = JSON.parse(text); }
-  catch { throw new ConfigurationError("Service config must contain a valid JSON object"); }
-  return parseServiceFileConfig(raw);
+  return parseServiceFileConfig(await readConfigJson(file, "service"));
 }
 
 export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readonly<Record<string, boolean>>): Probe[] {
@@ -189,20 +189,19 @@ export function serviceSettings(
   if (service.serviceActivity.enabled && env.ENABLE_BETA_SERVICE_ACTIVITY !== "true") {
     throw new ConfigurationError("serviceActivity.enabled requires ENABLE_BETA_SERVICE_ACTIVITY=true (experimental diagnostics only)");
   }
-  return loadConfig({
-    ...env,
+  return createRuntimeConfig({
     EXECUTION_MODE: service.mode,
     TEAMS_AUTHENTICATION: service.teamsAuthentication,
     BOT_AUTHENTICATION: service.botAuthentication,
     TEAMS_CALLING_CALLBACK_URL: service.teamsCallingCallbackUrl,
-    TEAMS_CALLING_PORT: String(service.teamsCallingPort),
-    TEAMS_CALLING_PLAYBACK_ENABLED: String(service.teamsCallingPlaybackEnabled),
-    TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: String(service.teamsCallingAnswerTimeoutSeconds),
-    TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS: String(service.teamsCallingPlaybackTimeoutSeconds),
-    TEAMS_CLEANUP_ENABLED: String(service.teamsCleanupEnabled),
-    EXCHANGE_CLEANUP_ENABLED: String(service.exchangeCleanupEnabled),
+    TEAMS_CALLING_PORT: service.teamsCallingPort,
+    TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: service.teamsCallingAnswerTimeoutSeconds,
+    TEAMS_CLEANUP_ENABLED: service.teamsCleanupEnabled ? "true" : "false",
+    EXCHANGE_CLEANUP_ENABLED: service.exchangeCleanupEnabled ? "true" : "false",
     SYNTHETIC_SCENARIO: service.scenario,
-    PROBE_TIMEOUT_MS: String(service.timeoutSeconds * 1000),
-    PROBES_JSON: JSON.stringify(serviceProbes(service, selectedScenarios)),
-  });
+    PROBE_TIMEOUT_MS: service.timeoutSeconds * 1000,
+    MAX_CONCURRENT_PROBES: service.maxConcurrentProbes,
+    CYCLE_TIMEOUT_MS: service.cycleTimeoutSeconds * 1000,
+    probes: serviceProbes(service, selectedScenarios),
+  }, env);
 }

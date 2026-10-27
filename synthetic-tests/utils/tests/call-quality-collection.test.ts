@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { GraphClient } from "../src/graph.js";
-import { AuthenticatedHttp, IntegrationError } from "../src/http.js";
+import { IntegrationError } from "../src/http.js";
 import { baseResult } from "../src/probes.js";
-import { collectCycleCallQuality } from "../src/teams-call-quality-collection.js";
+import { collectAudioFeasibilityQuality, collectCycleCallQuality } from "../src/teams-call-quality-collection.js";
 import { collectCallQuality, type CallQualityObservation } from "../src/teams-call-quality.js";
 
 vi.mock("../src/teams-call-quality.js", async original => ({
@@ -15,9 +15,9 @@ const observation: CallQualityObservation = {
   endDateTime: "2026-10-26T16:00:10.000Z", audioStreamCount: 1, codecs: ["opus"],
   streamDirections: ["callerToCallee"], metrics: { jitterMs: { value: 10, sampleCount: 1 } },
 };
-const graph = new GraphClient(new AuthenticatedHttp({
+const graph = new GraphClient({
   getToken: async () => ({ token: "fake-token", expiresOnTimestamp: Date.now() + 60000 }),
-}, "https://graph.microsoft.com/.default"));
+});
 const settings = { enabled: true, maxWaitSeconds: 3, pollIntervalSeconds: 1 };
 function fixture(withChain = true) {
   const result = baseResult({ id: "bot-target", type: "teams-call", cohort: "teams-global" }, Date.now());
@@ -33,6 +33,44 @@ function fixture(withChain = true) {
 beforeEach(() => { vi.mocked(collectCallQuality).mockReset(); });
 
 describe("bounded post-call enrichment", () => {
+  function completedPilot() {
+    const f = fixture();
+    f.cycle.results[0]!.call!.endedAt = "2026-10-26T16:00:10.000Z";
+    f.cycle.results[0]!.diagnosticContext.cleanupSucceeded = true;
+    return f;
+  }
+  it("waits beyond the meeting deadline for a 404, an empty first version and a later populated version", async () => {
+    const empty = { ...observation, audioStreamCount: 0, metrics: {} };
+    vi.mocked(collectCallQuality).mockResolvedValueOnce(undefined).mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce({ ...observation, version: 2 });
+    const f = completedPilot();
+    const quality = await collectAudioFeasibilityQuality(f.cycle, graph, {
+      acknowledgeTenantWideCallRecords: true, maxWaitSeconds: 240, pollIntervalSeconds: 60,
+    }, f.telemetry, new AbortController().signal, f.now, f.sleep);
+    expect(quality.callQuality).toEqual([{ status: "available", observation: { ...observation, version: 2 } }]);
+    expect(f.now()).toBe(120000);
+    expect(collectCallQuality).toHaveBeenCalledTimes(3);
+    expect(f.telemetry.emit).toHaveBeenCalledWith("teams-call-quality-record-empty", expect.objectContaining({ version: 1 }));
+  });
+  it("requires tenant-wide acknowledgement and verified two-leg cleanup before any pilot read", async () => {
+    const f = completedPilot();
+    await expect(collectAudioFeasibilityQuality(f.cycle, graph, { acknowledgeTenantWideCallRecords: false },
+      f.telemetry, new AbortController().signal, f.now, f.sleep)).rejects.toThrow("tenant-wide");
+    delete f.cycle.results[0]!.call!.endedAt;
+    await expect(collectAudioFeasibilityQuality(f.cycle, graph, { acknowledgeTenantWideCallRecords: true },
+      f.telemetry, new AbortController().signal, f.now, f.sleep)).rejects.toThrow("both calls ended");
+    expect(collectCallQuality).not.toHaveBeenCalled();
+  });
+  it("does not mistake an empty initial record for a successful measurement at the pilot deadline", async () => {
+    vi.mocked(collectCallQuality).mockResolvedValue({ ...observation, audioStreamCount: 0, metrics: {} });
+    const f = completedPilot();
+    const quality = await collectAudioFeasibilityQuality(f.cycle, graph, {
+      acknowledgeTenantWideCallRecords: true, maxWaitSeconds: 3, pollIntervalSeconds: 1,
+    }, f.telemetry, new AbortController().signal, f.now, f.sleep);
+    expect(quality.callQuality).toMatchObject([{ status: "available", observation: { audioStreamCount: 0, metrics: {} } }]);
+    expect(collectCallQuality).toHaveBeenCalledTimes(3);
+    expect(f.now()).toBe(3000);
+  });
   it("retries only an explicitly pending record and never re-runs or changes the journey", async () => {
     vi.mocked(collectCallQuality).mockResolvedValueOnce(undefined).mockResolvedValueOnce(observation);
     const f = fixture();

@@ -38,15 +38,8 @@ export interface AzureExporterFactory {
   metrics(options: AzureMonitorExporterOptions): PushMetricExporter;
 }
 const azureExporters: AzureExporterFactory = {
-  logs: options => {
-    const exporter = new AzureMonitorLogExporter(options);
-    return {
-      export: exporter.export.bind(exporter),
-      shutdown: () => exporter.shutdown(),
-      // The Azure exporter sends each batch immediately; the checked callback tracks its completion.
-      forceFlush: async () => undefined,
-    };
-  },
+  // Keep export callbacks observable instead of hiding failures in distro-owned processors.
+  logs: options => new AzureMonitorLogExporter(options),
   metrics: options => new AzureMonitorMetricExporter(options),
 };
 

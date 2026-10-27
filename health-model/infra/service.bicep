@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-import { ServiceDefinition, providerActivityFunctions } from './service-catalog.bicep'
+import { ServiceDefinition, providerActivityFunctions, getJourneyGroups } from './service-catalog.bicep'
 
 @minLength(3)
 @maxLength(44)
@@ -8,6 +8,7 @@ param modelName string
 param location string
 param service ServiceDefinition
 param policy object
+param enableServiceHealth bool = false
 param suppressOneDriveRestore bool = false
 param enableOtel bool = false
 param workspaceName string
@@ -45,6 +46,7 @@ func sourceGroup(name string, displayName string, members string[]) object => {
 }
 
 var contextName = '${service.service}-service-health'
+var journeyGroups = getJourneyGroups(service.journeys)
 var providerSignalNames = concat(
   ['microsoft-reported-service-status', 'microsoft-reported-issue-count'],
   map(providerActivityFunctions[service.service], name => 'microsoft-activity-${name}')
@@ -53,20 +55,24 @@ var telemetryQuery = loadTextContent('../queries/synthetic.kql')
 var teamsCallSignals = [
   'teams-call-connection-success-percentage'
   'teams-call-mean-connection-duration'
-  'teams-call-playback-success-percentage'
-  'teams-call-mean-playback-duration'
   'teams-call-disconnection-success-percentage'
   'teams-call-mean-disconnection-duration'
-  'teams-call-quality-packet-loss'
-  'teams-call-quality-max-packet-loss'
-  'teams-call-quality-jitter'
-  'teams-call-quality-max-jitter'
-  'teams-call-quality-round-trip-time'
-  'teams-call-quality-max-round-trip-time'
-  'teams-call-quality-audio-degradation'
-  'teams-call-quality-concealed-samples'
-  'teams-call-quality-max-concealed-samples'
 ]
+var teamsCallQualitySignalNames = {
+  packetLossPercent: 'teams-call-quality-packet-loss'
+  maxPacketLossPercent: 'teams-call-quality-max-packet-loss'
+  jitterMs: 'teams-call-quality-jitter'
+  maxJitterMs: 'teams-call-quality-max-jitter'
+  roundTripTimeMs: 'teams-call-quality-round-trip-time'
+  maxRoundTripTimeMs: 'teams-call-quality-max-round-trip-time'
+  audioDegradation: 'teams-call-quality-audio-degradation'
+  concealedSamplesPercent: 'teams-call-quality-concealed-samples'
+  maxConcealedSamplesPercent: 'teams-call-quality-max-concealed-samples'
+}
+var selectedCallQualitySignals = map(
+  items(policy.?callQualityThresholds ?? {}),
+  threshold => teamsCallQualitySignalNames[threshold.key]
+)
 var telemetryMetrics = [
   {
     name: 'otel-success-percentage'
@@ -103,7 +109,7 @@ var nodes = concat(
       y: 0
     }
   ],
-  [
+  enableServiceHealth ? [
     {
       name: contextName
       displayName: 'Service Health'
@@ -115,7 +121,21 @@ var nodes = concat(
       x: 0
       y: 240
     }
-  ],
+  ] : [],
+  map(journeyGroups, group => {
+    name: group.entityName
+    displayName: group.displayName
+    kind: 'journey-group'
+    journey: ''
+    step: ''
+    rollup: true
+    impact: 'Standard'
+    x: 400 + indexOf(service.journeys, first(filter(
+      service.journeys,
+      journey => journey.?group.?entityName == group.entityName
+    ))) * 500
+    y: 240
+  }),
   map(service.journeys, journey => {
     name: journey.entityName
     displayName: journey.displayName
@@ -125,7 +145,7 @@ var nodes = concat(
     rollup: true
     impact: 'Standard'
     x: 400 + indexOf(service.journeys, journey) * 500
-    y: 240
+    y: journey.?group != null ? 440 : 240
   }),
   flatten(map(
     service.journeys,
@@ -139,13 +159,17 @@ var nodes = concat(
         rollup: false
         impact: suppressOneDriveRestore && service.service == 'onedrive' && journey.name == 'document-versions' && step.name == 'step-4' ? 'Suppressed' : 'Standard'
         x: 400 + indexOf(service.journeys, journey) * 500
-        y: 440 + indexOf(journey.steps, step) * 170
+        y: (journey.?group != null ? 640 : 440) + indexOf(journey.steps, step) * 170
       })
   ))
 )
 var relationships = concat(
-  [{ parent: modelName, child: contextName }],
-  map(service.journeys, journey => { parent: modelName, child: journey.entityName }),
+  enableServiceHealth ? [{ parent: modelName, child: contextName }] : [],
+  map(journeyGroups, group => { parent: modelName, child: group.entityName }),
+  map(service.journeys, journey => {
+    parent: journey.?group.?entityName ?? modelName
+    child: journey.entityName
+  }),
   flatten(map(
     service.journeys,
     journey =>
@@ -222,10 +246,10 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
             : {}
         )
       },
-      node.kind == 'journey'
+      node.kind == 'journey' || node.kind == 'journey-group'
         ? { icon: { iconName: 'UserFlow' } }
         : {},
-      node.kind == 'root'
+      node.kind == 'root' || node.kind == 'journey-group'
         ? {}
         : {
             signalAggregationGroups: concat(
@@ -237,7 +261,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                     ? providerSignalNames
                     : concat(
                         ['synthetic-success-percentage', 'synthetic-mean-duration'],
-                        node.name == 'teams-call' ? teamsCallSignals : []
+                        node.name == 'teams-call' ? concat(teamsCallSignals, selectedCallQualitySignals) : []
                       )
                 )
               ],

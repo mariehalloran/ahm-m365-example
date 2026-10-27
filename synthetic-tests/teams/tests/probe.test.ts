@@ -133,7 +133,7 @@ async function run(options: RunOptions = {}) {
     fetch: fetcher, attempts: options.attempts ?? 1,
     sleep: async (ms: number, signal: AbortSignal) => { signal.throwIfAborted(); clock += ms; },
   };
-  const graph = new GraphClient(new AuthenticatedHttp(credential("graph"), graphScope, httpOptions));
+  const graph = new GraphClient(credential("graph"), httpOptions);
   const teamsBot = new TeamsBotClient(new AuthenticatedHttp(credential("bot"), botScope, httpOptions), applicationId);
   const result = await teamsProbe(options.target ?? probe, {
     config: {
@@ -214,7 +214,7 @@ describe("Teams same-bot channel and thread roundtrip", () => {
       if (init?.method === "DELETE") return new Response(null, { status: 204 });
       return json({ value: [message(marker)] });
     };
-    const graph = new GraphClient(new AuthenticatedHttp(credential, graphScope, { fetch: fetcher }));
+    const graph = new GraphClient(credential, { fetch: fetcher });
     const bot = new TeamsBotClient(new AuthenticatedHttp(credential, botScope, { fetch: fetcher }), applicationId);
     const attempt: ChannelAttempt = { tenantId, teamId, channelId, serviceUrl, marker, mutationAttempted: false };
     const signal = new AbortController().signal;
@@ -256,7 +256,7 @@ describe("Teams same-bot channel and thread roundtrip", () => {
       type: "message", text: `AHM synthetic reply ${result.correlationId}`,
       from: { id: `28:${applicationId}` }, replyToId: activityId,
     });
-    expect(scopes.every(call => call.scope === (call.identity === "graph" ? graphScope : botScope))).toBe(true);
+    expect(scopes.every(call => String(call.scope) === (call.identity === "graph" ? graphScope : botScope))).toBe(true);
     for (const call of calls) {
       expect(call.authorization).toBe(new URL(call.url).hostname === "graph.microsoft.com" ? "Bearer graph-test-token" : "Bearer bot-test-token");
       if (new URL(call.url).hostname === "smba.trafficmanager.net") expect(call.redirect).toBe("error");
@@ -447,12 +447,31 @@ describe("Teams same-bot channel and thread roundtrip", () => {
     expect(reads.every(call => new URL(call.url).pathname === `/v1.0${messagesPath}`)).toBe(true);
   });
 
-  it("fails an incomplete five-page search instead of reporting healthy or scanning indefinitely", async () => {
+  it("bounds each no-match scan to five pages and times out rather than reporting healthy or scanning indefinitely", async () => {
     const { result, calls } = await run({
       onRead: ({ page }) => json({ value: [], "@odata.nextLink": nextLink(`page-${page + 1}`) }),
     });
-    expect(result.diagnosticCategory).toBe("read-failure");
-    expect(calls.filter(call => call.method === "GET")).toHaveLength(5);
+    expect(result.success).toBe(false);
+    expect(result.diagnosticCategory).toBe("delivery-timeout");
+    const reads = calls.filter(call => call.method === "GET");
+    expect(reads).toHaveLength(25);
+    expect(reads.filter(call => !new URL(call.url).searchParams.has("$skiptoken"))).toHaveLength(5);
+    expect(reads.every(call => {
+      const token = new URL(call.url).searchParams.get("$skiptoken");
+      return token === null || ["page-2", "page-3", "page-4", "page-5"].includes(token);
+    })).toBe(true);
+    expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
+  });
+  it("restarts a bounded scan while the new bot post is absent from Graph's initial collection snapshot", async () => {
+    const { result, calls } = await run({
+      onRead: ({ poll, page, marker }) => poll === 1
+        ? json({ value: [], "@odata.nextLink": nextLink(`page-${page + 1}`) })
+        : json({ value: [message(marker)] }),
+    });
+    expect(result.success).toBe(true);
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    expect(result.steps.find(step => step.name === "confirm-reply")?.status).toBe("succeeded");
+    expect(calls.filter(call => call.method === "GET" && !call.url.includes("/replies"))).toHaveLength(6);
     expect(result.diagnosticContext.cleanupSucceeded).toBe(true);
   });
 

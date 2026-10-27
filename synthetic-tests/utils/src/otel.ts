@@ -143,7 +143,6 @@ export function createResultTelemetry(
   };
   const callPhases = [
     { name: "connection", step: "wait-for-answer" },
-    { name: "playback", step: "play-audio" },
     { name: "disconnection", step: "end-call" },
   ].map(phase => ({
     ...phase,
@@ -156,11 +155,15 @@ export function createResultTelemetry(
     }),
   ]));
 
-  const lifecycle = async (operation: () => Promise<unknown>) => {
+  const lifecycle = async (method: "forceFlush" | "shutdown") => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        operation(),
+        Promise.allSettled([meters, loggers].map(provider => Promise.resolve().then(() => provider[method]())))
+          .then(async settled => {
+            await Promise.all(activeExports);
+            if (settled.some(result => result.status === "rejected")) throw new TelemetryExportError();
+          }),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new TelemetryExportError()), timeoutMs + 500);
         }),
@@ -242,20 +245,12 @@ export function createResultTelemetry(
     },
     async forceFlush() {
       if (closed) throw new TelemetryExportError();
-      await lifecycle(async () => {
-        const settled = await Promise.allSettled([meters.forceFlush(), loggers.forceFlush()]);
-        await Promise.all([...activeExports]);
-        if (settled.some(result => result.status === "rejected")) throw new TelemetryExportError();
-      });
+      await lifecycle("forceFlush");
     },
     async shutdown() {
       if (closed) return;
       closed = true;
-      await lifecycle(async () => {
-        const settled = await Promise.allSettled([meters.shutdown(), loggers.shutdown()]);
-        await Promise.all([...activeExports]);
-        if (settled.some(result => result.status === "rejected")) throw new TelemetryExportError();
-      });
+      await lifecycle("shutdown");
     },
   };
 }

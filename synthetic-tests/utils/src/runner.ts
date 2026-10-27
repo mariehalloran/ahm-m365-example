@@ -1,16 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
-import { resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { maxExchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
-import type { TeamsCallOperations } from "./teams-call-operations.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
 import type { ResultOutput } from "./results.js";
 import type { CycleResults, HealthReporter } from "./health-reports.js";
 
-const MAX_CONCURRENT_PROBES = 3;
-const CYCLE_TIMEOUT_MS = 170_000;
 const CLEANUP_GRACE_MS = 12_000;
 
 export interface RunnerDependencies {
@@ -20,7 +17,6 @@ export interface RunnerDependencies {
   teamsBot?: TeamsBotClient;
   teamsCalling?: GraphClient;
   teamsCallingPeer?: GraphClient;
-  teamsCallOperations?: TeamsCallOperations;
   shutdown?: () => Promise<void>;
   handler?: ProbeHandler;
   now?: () => number;
@@ -35,13 +31,15 @@ interface CycleContext {
   externalSignal?: AbortSignal | undefined;
 }
 
-function createCompletionDeadline(signal: AbortSignal, probeTimeoutMs: number, cycleStartedAt: number) {
+function createCompletionDeadline(
+  signal: AbortSignal, config: Pick<Config, "PROBE_TIMEOUT_MS" | "CYCLE_TIMEOUT_MS">, cycleStartedAt: number,
+) {
   let executionTimer: ReturnType<typeof setTimeout> | undefined;
   let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
   let onCancellation: (() => void) | undefined;
   const promise = new Promise<never>((_, reject) => {
-    const probeBudgetMs = probeTimeoutMs + CLEANUP_GRACE_MS;
-    const remainingCycleMs = CYCLE_TIMEOUT_MS + CLEANUP_GRACE_MS
+    const probeBudgetMs = config.PROBE_TIMEOUT_MS + CLEANUP_GRACE_MS;
+    const remainingCycleMs = config.CYCLE_TIMEOUT_MS + CLEANUP_GRACE_MS
       - (performance.now() - cycleStartedAt);
     const completionBudgetMs = Math.max(0, Math.min(probeBudgetMs, remainingCycleMs));
     executionTimer = setTimeout(() => reject(new IntegrationError("cancelled")), completionBudgetMs);
@@ -69,6 +67,10 @@ async function runSingleProbe(
   dependencies: RunnerDependencies,
   cycle: CycleContext,
 ): Promise<SyntheticResult> {
+  const liveExchange = config.EXECUTION_MODE === "live" && probeServices[probe.type].service === "exchange";
+  if (liveExchange) {
+    config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, maxExchangeJourneyMilliseconds) };
+  }
   const { telemetry, now = Date.now } = dependencies;
   const execution = new AbortController();
   const executionTimer = setTimeout(() => execution.abort(), config.PROBE_TIMEOUT_MS);
@@ -86,7 +88,7 @@ async function runSingleProbe(
   try {
     if (!handler) throw new IntegrationError("collector-failure");
     probeSignal.throwIfAborted();
-    deadline = createCompletionDeadline(probeSignal, config.PROBE_TIMEOUT_MS, cycle.startedAt);
+    deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt);
 
     const rawResult = await Promise.race([
       handler(probe, {
@@ -98,10 +100,10 @@ async function runSingleProbe(
         ...(dependencies.teamsBot ? { teamsBot: dependencies.teamsBot } : {}),
         ...(dependencies.teamsCalling ? { teamsCalling: dependencies.teamsCalling } : {}),
         ...(dependencies.teamsCallingPeer ? { teamsCallingPeer: dependencies.teamsCallingPeer } : {}),
-        ...(dependencies.teamsCallOperations ? { teamsCallOperations: dependencies.teamsCallOperations } : {}),
       }),
       deadline.promise,
     ]);
+    if (liveExchange && now() - attemptStartedAt >= config.PROBE_TIMEOUT_MS) execution.abort();
     if (probeSignal.aborted) {
       // A handler may finish cleanup after cancellation, but cannot turn a deadline into success.
       const timedOut = resultSchema.safeParse(rawResult);
@@ -164,7 +166,7 @@ async function executeProbes(
       }
     }
   };
-  const concurrency = Math.min(MAX_CONCURRENT_PROBES, config.probes.length);
+  const concurrency = Math.min(config.MAX_CONCURRENT_PROBES, config.probes.length);
   const executions = Array.from({ length: concurrency }, async () => {
     try { await runNextProbes(); }
     catch (error) {
@@ -202,7 +204,7 @@ export async function runCycle(
   const cycleStartedAt = performance.now();
   const stopOtherProbes = new AbortController();
   const deadline = new AbortController();
-  const cycleTimer = setTimeout(() => deadline.abort(), CYCLE_TIMEOUT_MS);
+  const cycleTimer = setTimeout(() => deadline.abort(), config.CYCLE_TIMEOUT_MS);
   const cancellationSignals = [
     stopOtherProbes.signal,
     deadline.signal,

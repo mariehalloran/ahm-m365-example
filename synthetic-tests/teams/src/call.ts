@@ -1,22 +1,30 @@
-import { randomUUID } from "node:crypto";
 import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
 import { categoryOf, IntegrationError } from "../../utils/src/http.js";
-import { callIdSchema, leaveCall, playAudio, verifyMeetingMetadata, verifyParticipants, waitForAnswer } from "./call-steps.js";
-import { testToneUri } from "../../utils/src/teams-call-media.js";
+import { callIdSchema, leaveCall, verifyCallEstablished, verifyMeetingMetadata, verifyParticipants, waitForAnswer } from "./call-steps.js";
+import { teamsCallingCallbackUrlSchema } from "../../utils/src/config.js";
 import type { GraphClient } from "../../utils/src/graph.js";
 import { z } from "zod";
 
-export const teamsCallProbe: ProbeHandler = async (probe, context) => {
+export interface ConnectedTeamsCall {
+  primary: { graph: GraphClient; id: string };
+  peer: { graph: GraphClient; id: string };
+  signal: AbortSignal;
+  deadline: number;
+  verifyConnected: (signal: AbortSignal) => Promise<void>;
+}
+export type TeamsCallConnectedHook = (call: ConnectedTeamsCall) => Promise<void>;
+
+export const createTeamsCallProbe = (onConnected?: TeamsCallConnectedHook): ProbeHandler => async (probe, context) => {
   const { config, signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const deadline = startedAt + config.PROBE_TIMEOUT_MS;
   const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(config.PROBE_TIMEOUT_MS)]);
   const result = baseResult(probe, startedAt);
   result.call = { resultCodes: [] };
-  const legs: { name: "primary" | "peer"; graph: GraphClient | undefined; id?: string; disconnected: boolean }[] = [
-    { name: "primary", graph: context.teamsCalling, disconnected: false },
-    { name: "peer", graph: context.teamsCallingPeer, disconnected: false },
+  const legs: { name: "primary" | "peer"; graph: GraphClient | undefined; id?: string; established: boolean; disconnected: boolean }[] = [
+    { name: "primary", graph: context.teamsCalling, established: false, disconnected: false },
+    { name: "peer", graph: context.teamsCallingPeer, established: false, disconnected: false },
   ];
   let mutationAttempted = false;
   let unknownCreation = false;
@@ -25,11 +33,20 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
   const onState = (leg: typeof legs[number]) =>
     (state: string, resultCode?: number, resultSubcode?: number, callChainId?: string) => {
       const field = leg.name === "primary" ? "callChainId" : "peerCallChainId";
-      if (callChainId) {
+      // A provisional join chain can become the conference chain during establishment.
+      // Teardown metadata must not replace that record or prevent verified departure.
+      if (callChainId && (state === "established" || !leg.established)) {
         callChainId = callChainId.toLowerCase();
-        if (result.call![field] && result.call![field] !== callChainId) throw new IntegrationError("read-failure");
+        const previousCallChainId = result.call![field];
         result.call![field] = callChainId;
+        if (previousCallChainId && previousCallChainId !== callChainId && stateDiagnostics < 24) {
+          telemetry.emit("teams-call-chain-changed", {
+            testId: result.testId, correlationId: result.correlationId, leg: leg.name,
+            phase, state, previousCallChainId, callChainId,
+          });
+        }
       }
+      if (state === "established") leg.established = true;
       if (resultCode !== undefined && !result.call!.resultCodes.includes(resultCode) && result.call!.resultCodes.length < 12) {
         result.call!.resultCodes.push(resultCode);
       }
@@ -56,12 +73,10 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
           "callUserId" in probe || !config.BOT_CLIENT_ID || !config.TEAMS_CALLING_PEER_CLIENT_ID ||
           config.BOT_CLIENT_ID.toLowerCase() === config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
           probe.peerBotClientId.toLowerCase() !== config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
-          !config.TEAMS_CALLING_CALLBACK_URL || !context.teamsCallOperations ||
-          config.TEAMS_CALLING_PLAYBACK_ENABLED !== "true" ||
-          !config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS || !config.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS) {
+          !teamsCallingCallbackUrlSchema.safeParse(config.TEAMS_CALLING_CALLBACK_URL).success ||
+          !config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS) {
         throw new IntegrationError("configuration-failure");
       }
-      testToneUri(config.TEAMS_CALLING_CALLBACK_URL);
       await settleBoth(legs.map(leg => leg.graph!.authenticate(executionSignal)));
     }, now, classify);
     result.diagnosticContext.testStage = "send";
@@ -99,7 +114,7 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
     }, now, classify);
     result.diagnosticContext.testStage = "poll";
     const joinDeadline = Math.min(now() + config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS! * 1000,
-      deadline - config.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS! * 1000 - 1000);
+      deadline - 1000);
     await measureStep(result, "wait-for-answer", async () => {
       if (joinDeadline <= now()) throw new IntegrationError("delivery-timeout");
       await settleBoth(legs.map(leg => waitForAnswer(leg.graph!, leg.id!, executionSignal,
@@ -114,27 +129,25 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
     await measureStep(result, "verify-participants", async () => {
       if (result.call!.callChainId && result.call!.peerCallChainId &&
           result.call!.callChainId !== result.call!.peerCallChainId) throw new IntegrationError("read-failure");
-      await settleBoth(legs.map(leg => verifyParticipants(leg.graph!, leg.id!,
-        [config.BOT_CLIENT_ID!, config.TEAMS_CALLING_PEER_CLIENT_ID!],
-        executionSignal, joinDeadline, interval, now, context.sleep)));
+      await settleBoth(legs.map(async leg => {
+        await verifyParticipants(leg.graph!, leg.id!,
+          [config.BOT_CLIENT_ID!, config.TEAMS_CALLING_PEER_CLIENT_ID!],
+          executionSignal, joinDeadline, interval, now, context.sleep);
+        await waitForAnswer(leg.graph!, leg.id!, executionSignal,
+          joinDeadline, interval, now, context.sleep, onState(leg));
+      }));
     }, now, classify);
-    phase = "playback";
-    await measureStep(result, "play-audio", async () => {
-      const playback = (leg: typeof legs[number], clientContext: string) => playAudio(
-        leg.graph!, context.teamsCallOperations!, leg.id!, clientContext,
-        testToneUri(config.TEAMS_CALLING_CALLBACK_URL!),
-        leg.name === "primary" ? config.BOT_CLIENT_ID! : config.TEAMS_CALLING_PEER_CLIENT_ID!, executionSignal,
-        Math.min(now() + config.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS! * 1000, deadline),
-        interval, now, context.sleep, onState(leg),
-        (operationId, status, resultCode) => telemetry.emit("teams-call-playback-observed", {
-          testId: result.testId, correlationId: result.correlationId, leg: leg.name, operationId, status,
-          ...(resultCode !== undefined ? { resultCode } : {}),
-        }));
-      await settleBoth([
-        playback(legs[0]!, result.correlationId),
-        playback(legs[1]!, randomUUID()),
-      ]);
-    }, now, classify);
+    if (onConnected) {
+      phase = "pilot";
+      await onConnected({
+        primary: { graph: legs[0]!.graph!, id: legs[0]!.id! },
+        peer: { graph: legs[1]!.graph!, id: legs[1]!.id! },
+        signal: executionSignal, deadline,
+        verifyConnected: signal => settleBoth(legs.map(leg => verifyCallEstablished(leg.graph!, leg.id!,
+          AbortSignal.any([executionSignal, signal]), onState(leg)))),
+      });
+      executionSignal.throwIfAborted();
+    }
     result.success = true;
   } catch (error) {
     if (unknownCreation && error instanceof IntegrationError && error.status !== undefined &&
@@ -172,3 +185,5 @@ export const teamsCallProbe: ProbeHandler = async (probe, context) => {
   if (result.success) result.diagnosticContext.testStage = "complete";
   return finishJourney(result, startedAt, now);
 };
+
+export const teamsCallProbe = createTeamsCallProbe();

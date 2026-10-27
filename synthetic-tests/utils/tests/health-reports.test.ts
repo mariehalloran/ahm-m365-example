@@ -1,15 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import { aggregateHealthReports, callQualityReports, createHealthReporter, serviceHealthReport, serviceHealthIssuesReport, type HealthReporter, type CycleResults, type CallQualityCycle } from "../src/health-reports.js";
+import { readFile } from "node:fs/promises";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { aggregateHealthReports, callQualityReports, createHealthReporter, serviceActivityReports, serviceHealthReport, serviceHealthIssuesReport, type HealthReporter, type CycleResults, type CallQualityCycle } from "../src/health-reports.js";
 import { readProjectConfig } from "../src/project-config.js";
 import { baseResult } from "../src/probes.js";
 import { runCycle } from "../src/runner.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
-import type { SyntheticResult } from "../src/contracts.js";
+import { probeServices, testTypes, type SyntheticResult, type TestType } from "../src/contracts.js";
+import { modelCatalog } from "../src/catalog.js";
 import type { ProviderDiagnostic } from "../src/provider-diagnostics.js";
 import { activityFunctions, isPercentageActivity } from "../src/provider-catalog.js";
 import { serviceHealthNames } from "../src/service-health.js";
 
 const project = await readProjectConfig("../monitoring.config.json");
+const providerProject = { ...project, serviceHealth: { enabled: true } };
 const service = parseServiceConfig({
   type: "exchange", enabled: true, intervalSeconds: 60, timeoutSeconds: 45, mode: "simulation",
   cohort: "exchange-global", targets: [{ id: "opaque-target" }],
@@ -25,16 +28,61 @@ const sample = (): SyntheticResult => ({
 });
 const cycle = (results = [sample()]): CycleResults => ({ cycleId: "cycle-001", results });
 
+describe("shared runtime/model catalogue", () => {
+  it("keeps the checked-in Bicep projection fresh", async () => {
+    const projection = await readFile(new URL("../src/catalog.json", import.meta.url), "utf8");
+    expect(projection, "Run npm run catalog:generate after editing the catalogue").toBe(
+      `${JSON.stringify(modelCatalog, null, 2)}\n`,
+    );
+  });
+  it("propagates filesystem failures from the projection freshness check", async () => {
+    const failure = Object.assign(new Error("Cannot read catalogue projection"), { code: "EACCES" });
+    const argv = process.argv;
+    process.argv = [...argv, "--check"];
+    vi.doMock("node:fs/promises", () => ({
+      readFile: vi.fn().mockRejectedValue(failure), writeFile: vi.fn(),
+    }));
+    try {
+      await expect(import("../src/catalog-projection.js")).rejects.toBe(failure);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      process.argv = argv;
+    }
+  });
+  it("preserves service-specific literal contracts for callers", () => {
+    expectTypeOf<Extract<(typeof probeServices)[TestType], { service: "teams" }>["journey"]>()
+      .toEqualTypeOf<"channel-conversation" | "scheduled-meeting">();
+    expectTypeOf(probeServices["exchange-mail-flow"].target).toEqualTypeOf<"Exchange Online">();
+  });
+  it.each(testTypes)("reports %s only on its deployed journey and business-step entities", type => {
+    const definition = probeServices[type];
+    const journey = modelCatalog.serviceDefinitions.find(service => service.service === definition.service)!
+      .journeys.find(journey => journey.name === definition.journey)!;
+    const observed: SyntheticResult = {
+      ...baseResult({ id: "catalogue-test-target", type, cohort: `${definition.service}-global` }, Date.now()),
+      success: true, durationMs: 100,
+      steps: definition.steps.map(name => ({
+        name, status: "succeeded", observedAt: new Date().toISOString(), durationMs: 1,
+      })),
+    };
+    const reports = aggregateHealthReports(definition.service, cycle([observed]), project.healthModel);
+    expect(new Set(reports.map(report => report.entityName))).toEqual(new Set([
+      journey.entityName, ...journey.steps.map(step => `${journey.entityName}-${step.name}`),
+    ]));
+    expect(reports.every(report => report.body.value !== undefined)).toBe(true);
+    expect(JSON.stringify(reports)).not.toContain("catalogue-test-target");
+  });
+});
+
 describe("single-cycle journey/action health aggregation", () => {
-  it("returns aggregated connection, playback and disconnection metrics on the call entity", () => {
+  it("returns only aggregated connection and disconnection metrics on the call entity", () => {
     const observedAt = "2026-10-26T16:00:00.000Z";
     const call: SyntheticResult = {
       ...baseResult({ id: "bot-target", type: "teams-call", cohort: "teams-global" }, Date.parse(observedAt)),
-      success: true, durationMs: 5000,
+      success: true, durationMs: 3000,
       steps: [
         { name: "place-call", status: "succeeded", durationMs: 500, observedAt },
         { name: "wait-for-answer", status: "succeeded", durationMs: 1500, observedAt },
-        { name: "play-audio", status: "succeeded", durationMs: 2000, observedAt },
         { name: "end-call", status: "succeeded", durationMs: 1000, observedAt },
       ],
     };
@@ -43,7 +91,6 @@ describe("single-cycle journey/action health aggregation", () => {
       steps: [
         { name: "place-call", status: "succeeded", durationMs: 500, observedAt },
         { name: "wait-for-answer", status: "failed", durationMs: 19500, diagnosticCategory: "delivery-timeout", observedAt },
-        { name: "play-audio", status: "skipped", reason: "prerequisite-failed", observedAt },
         { name: "end-call", status: "succeeded", durationMs: 500, observedAt },
       ],
     };
@@ -51,12 +98,13 @@ describe("single-cycle journey/action health aggregation", () => {
     const measurement = (signal: string) => reports.find(report => report.body.signalName === signal)!;
     expect(measurement("teams-call-connection-success-percentage").body).toMatchObject({ value: 50, healthState: "Unhealthy" });
     expect(measurement("teams-call-mean-connection-duration").body.value).toBe(11000);
-    expect(measurement("teams-call-playback-success-percentage").body.value).toBe(100);
-    expect(measurement("teams-call-mean-playback-duration").body.value).toBe(2000);
+    expect(measurement("teams-call-disconnection-success-percentage").body.value).toBe(100);
     expect(measurement("teams-call-mean-disconnection-duration").body.value).toBe(750);
-    expect(JSON.parse(measurement("teams-call-playback-success-percentage").body.additionalContext)).toMatchObject({
-      attempted: 1, succeeded: 1, skipped: 1, unit: "Percent", observedAt,
+    expect(JSON.parse(measurement("teams-call-disconnection-success-percentage").body.additionalContext)).toMatchObject({
+      attempted: 2, succeeded: 2, skipped: 0, unit: "Percent", observedAt,
+      evidence: "graph-confirmed-meeting-connectivity",
     });
+    expect(reports.some(report => /play-audio|playback/.test(`${report.entityName}/${report.body.signalName}`))).toBe(false);
     expect(reports.filter(report => report.body.signalName.startsWith("teams-call-")).every(report => report.entityName === "teams-call")).toBe(true);
     expect(JSON.stringify(reports)).not.toContain("bot-target");
   });
@@ -65,7 +113,7 @@ describe("single-cycle journey/action health aggregation", () => {
     call.diagnosticCategory = "configuration-failure";
     const reports = aggregateHealthReports("teams", cycle([call]), project.healthModel)
       .filter(report => report.body.signalName.startsWith("teams-call-"));
-    expect(reports).toHaveLength(6);
+    expect(reports).toHaveLength(4);
     expect(reports.every(report => report.body.value === undefined && report.body.healthState === "Unknown")).toBe(true);
   });
   it("publishes only the observed lane without overwriting other journey entities", () => {
@@ -145,13 +193,13 @@ describe("direct health reports", () => {
           audioStreamCount: 2, codecs: ["opus"], streamDirections: ["callerToCallee"],
           metrics: {
             jitterMs: { value: 15, sampleCount: 2 },
-            packetLossPercent: { value: 2, sampleCount: 1 },
+            packetLossPercent: { value: 0, sampleCount: 1 },
           },
         },
       }],
     };
     const reports = callQualityReports(quality, project.healthModel);
-    expect(reports).toHaveLength(9);
+    expect(reports).toHaveLength(2);
     expect(reports.every(report => report.entityName === "teams-call" && report.body.healthState === "Unknown")).toBe(true);
     const jitter = reports.find(report => report.body.signalName === "teams-call-quality-jitter")!;
     expect(jitter.body.value).toBe(15);
@@ -160,7 +208,8 @@ describe("direct health reports", () => {
       sampleCount: 2, complete: true, unit: "Milliseconds", availableCalls: 1,
       observedThrough: "2026-10-26T16:00:10.000Z",
     });
-    expect(reports.find(report => report.body.signalName === "teams-call-quality-round-trip-time")?.body).not.toHaveProperty("value");
+    expect(reports.find(report => report.body.signalName === "teams-call-quality-packet-loss")?.body.value).toBe(0);
+    expect(reports.find(report => report.body.signalName === "teams-call-quality-round-trip-time")).toBeUndefined();
     const policy = {
       ...project.healthModel,
       callQualityThresholds: {
@@ -180,8 +229,12 @@ describe("direct health reports", () => {
   it("publishes quality-only reports to the existing Teams entity through the ARM ingestion API", async () => {
     const requests: { url: string; body: Record<string, unknown> }[] = [];
     const teams = parseServiceConfig({ ...service, type: "teams", cohort: "teams-global", mode: "live" });
-    const reporter = createHealthReporter(project, teams, { emit: vi.fn() }, {}, {
-      credential: { getToken: async () => ({ token: "mock-token", expiresOnTimestamp: Date.now() + 60000 }) },
+    const selectedProject = {
+      ...project, healthModel: { ...project.healthModel, callQualityThresholds: { jitterMs: { degradedAbove: 10, unhealthyAbove: 20 } } },
+    };
+    const credential = { getToken: vi.fn(async () => ({ token: "mock-token", expiresOnTimestamp: Date.now() + 60000 })) };
+    const reporter = createHealthReporter(selectedProject, teams, { emit: vi.fn() }, {}, {
+      credential,
       fetch: async (input, init) => {
         requests.push({ url: String(input), body: JSON.parse(String(init?.body)) });
         return new Response(null, { status: 204 });
@@ -191,11 +244,37 @@ describe("direct health reports", () => {
       cycleId: "quality-cycle", collectedAt: new Date().toISOString(),
       callQuality: [{ status: "pending", callChainId: "11111111-1111-4111-8111-111111111111" }],
     });
-    expect(requests).toHaveLength(9);
+    expect(requests).toHaveLength(0);
+    expect(credential.getToken).not.toHaveBeenCalled();
+    const observed: CallQualityCycle = {
+      cycleId: "quality-cycle", collectedAt: new Date().toISOString(),
+      callQuality: [{ status: "available", observation: {
+        callChainId: "11111111-1111-4111-8111-111111111111", version: 1,
+        startDateTime: "2026-10-26T16:00:00.000Z", endDateTime: "2026-10-26T16:00:10.000Z",
+        audioStreamCount: 1, codecs: ["opus"], streamDirections: ["callerToCallee"],
+        metrics: { jitterMs: { value: 0, sampleCount: 1 }, packetLossPercent: { value: 0, sampleCount: 1 } },
+      } }],
+    };
+    await reporter(observed);
+    expect(requests).toHaveLength(1);
     expect(new Set(requests.map(request => request.url)).size).toBe(1);
     expect(requests[0]?.url).toContain("/healthmodels/m365-experience-poc-teams/entities/teams-call/ingestHealthReport?");
     expect(requests.every(request => String(request.body.signalName).startsWith("teams-call-quality-"))).toBe(true);
-    expect(requests.every(request => request.body.healthState === "Unknown" && !("value" in request.body))).toBe(true);
+    expect(requests[0]?.body).toMatchObject({ signalName: "teams-call-quality-jitter", healthState: "Healthy", value: 0 });
+  });
+  it("omits unavailable, failed, pending and no-stream quality reports instead of creating placeholders", () => {
+    const quality: CallQualityCycle = {
+      cycleId: "empty-quality", collectedAt: new Date().toISOString(), callQuality: [
+        { status: "pending" }, { status: "unavailable" },
+        { status: "failed", callChainId: "11111111-1111-4111-8111-111111111111", category: "permission-failure", httpStatus: 403 },
+        { status: "available", observation: {
+          callChainId: "22222222-2222-4222-8222-222222222222", version: 1,
+          startDateTime: "2026-10-26T16:00:00.000Z", endDateTime: "2026-10-26T16:00:10.000Z",
+          audioStreamCount: 0, codecs: [], streamDirections: [], metrics: {},
+        } },
+      ],
+    };
+    expect(callQualityReports(quality, project.healthModel)).toEqual([]);
   });
   it("uses no credentials/network in simulation and clearly previews rather than publishes", async () => {
     const output = { emit: vi.fn() };
@@ -325,7 +404,7 @@ describe("independent reporting failure paths", () => {
     const report = (providerDiagnostics: ProviderDiagnostic[]) => serviceHealthReport("exchange", {
       cycleId: "provider-cycle", providerDiagnostics,
     }, project.healthModel.reportTtlMinutes);
-    it("replaces stale/future or malformed overview observations with Unknown", () => {
+    it("reports stale/future or malformed overview observations as Unknown without a value", () => {
       for (const record of [
         { ...diagnostic("serviceOperational"), collectedAt: new Date(Date.now() - 61 * 60000).toISOString() },
         { ...diagnostic("serviceOperational"), collectedAt: new Date(Date.now() + 60000).toISOString() },
@@ -374,7 +453,7 @@ describe("independent reporting failure paths", () => {
         source: "getConnectivityMetricsForExchange", apiVersion: "beta", category: "collector-failure",
       }]).body).toMatchObject({ healthState: "Healthy", value: 100 });
     });
-    it("ignores other service snapshots, treats skipped source data as Unknown, and bounds approved context", () => {
+    it("ignores other service snapshots, leaves missing source data Unknown, and bounds approved context", () => {
       expect(report([{ ...diagnostic("serviceInterruption"), service: "teams" }]).body.healthState).toBe("Unknown");
       expect(report([diagnostic("serviceOperational"), {
         kind: "skipped", service: "exchange", collectedAt: "2026-10-19T12:00:00.000Z",
@@ -391,7 +470,7 @@ describe("independent reporting failure paths", () => {
       const output = { emit: vi.fn() };
       const credential = { getToken: vi.fn() };
       const fetcher = vi.fn();
-      await createHealthReporter(project, { ...service, ...settings }, output, {}, { credential, fetch: fetcher })({
+      await createHealthReporter(providerProject, { ...service, ...settings }, output, {}, { credential, fetch: fetcher })({
         cycleId: "provider-cycle", providerDiagnostics: [diagnostic("serviceInterruption")],
       });
       expect(fetcher).not.toHaveBeenCalled();
@@ -401,7 +480,7 @@ describe("independent reporting failure paths", () => {
     it.each(["exchange", "teams", "onedrive"] as const)("uses the authenticated bounded publisher and selected %s model", async type => {
       const requests: { url: string; body: unknown }[] = [];
       const credential = { getToken: vi.fn(async () => ({ token: "test-only", expiresOnTimestamp: Date.now() + 60000 })) };
-      await createHealthReporter(project, { ...service, type, mode: "live", serviceHealth: true } as typeof service, { emit: vi.fn() }, {}, {
+      await createHealthReporter(providerProject, { ...service, type, mode: "live", serviceHealth: true } as typeof service, { emit: vi.fn() }, {}, {
         credential, fetch: async (url, init) => {
           requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
           return new Response(null, { status: 204 });
@@ -409,12 +488,12 @@ describe("independent reporting failure paths", () => {
       })({ cycleId: "provider-cycle", providerDiagnostics: [{
         ...diagnostic("serviceOperational"), service: type, serviceName: serviceHealthNames[type],
         serviceId: type === "onedrive" ? "OneDriveForBusiness" : "reported-service",
-      }] });
+      }, { kind: "issue-summary", service: type, collectedAt: new Date().toISOString(), count: 0 }] });
       expect(requests).toHaveLength(2);
       expect(requests[0]?.url).toContain(`/healthmodels/${project.healthModel.name}-${type}/entities/${type}-service-health/`);
       expect(requests[0]?.body).toMatchObject({ signalName: "microsoft-reported-service-status", healthState: "Healthy", value: 100 });
       expect(requests[1]?.url).toBe(requests[0]?.url);
-      expect(requests[1]?.body).toMatchObject({ signalName: "microsoft-reported-issue-count", healthState: "Unknown" });
+      expect(requests[1]?.body).toMatchObject({ signalName: "microsoft-reported-issue-count", healthState: "Unknown", value: 0 });
       expect(credential.getToken).toHaveBeenCalledWith("https://management.azure.com/.default", expect.anything());
     });
   });
@@ -476,7 +555,7 @@ describe("independent reporting failure paths", () => {
       const requests: { url: string; body: Record<string, unknown> }[] = [];
       vi.spyOn(Date, "now").mockReturnValue(now);
       try {
-        await createHealthReporter(project, selected, { emit: vi.fn() }, {}, {
+        await createHealthReporter(providerProject, selected, { emit: vi.fn() }, {}, {
           credential: { getToken: async () => ({ token: "unit-test-token", expiresOnTimestamp: now + 60000 }) },
           fetch: async (url, init) => {
             requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
@@ -512,7 +591,84 @@ describe("independent reporting failure paths", () => {
       expect(requests.every(({ body }) => !String(body.signalName).startsWith("synthetic-"))).toBe(true);
     });
 
-    it("retains honest OneDrive Unknown context when stable data is missing or denied", () => {
+    it.each(["exchange", "teams", "onedrive"] as const)("does not publish unavailable %s provider observations", async type => {
+      const selected = parseServiceConfig({
+        ...service, type, cohort: `${type}-global`, mode: "live", serviceHealth: true,
+        serviceActivity: { enabled: type !== "onedrive" },
+      });
+      const credential = { getToken: vi.fn() };
+      const fetcher = vi.fn();
+      const output = { emit: vi.fn() };
+      const overview: ProviderDiagnostic = {
+        kind: "overview", service: type, collectedAt: new Date().toISOString(),
+        serviceId: type === "onedrive" ? "OneDriveForBusiness" : "reported-service",
+        serviceName: serviceHealthNames[type], status: "investigating",
+      };
+      for (const providerDiagnostics of [
+        [],
+        [overview],
+        [{ ...overview, status: "" }],
+        [{ ...overview, status: "serviceOperational", collectedAt: new Date(Date.now() - 61 * 60000).toISOString() }],
+      ]) {
+        await createHealthReporter(providerProject, selected, output, {}, { credential, fetch: fetcher })({
+          cycleId: "unavailable-provider-data", providerDiagnostics,
+        });
+      }
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(credential.getToken).not.toHaveBeenCalled();
+      expect(output.emit).not.toHaveBeenCalled();
+    });
+
+    it.each(["authentication-failure", "permission-failure"] as const)("publishes nothing when provider collection fails with %s", async category => {
+      const selected = parseServiceConfig({
+        ...service, mode: "live", serviceHealth: true,
+        serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
+      });
+      const collectedAt = new Date().toISOString();
+      const credential = { getToken: vi.fn() };
+      const fetcher = vi.fn();
+      await createHealthReporter(providerProject, selected, { emit: vi.fn() }, {}, { credential, fetch: fetcher })({
+        cycleId: "failed-provider-data", providerDiagnostics: [
+          { kind: "failure", service: "exchange", collectedAt, category, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0" },
+          { kind: "failure", service: "exchange", collectedAt, category, source: "serviceAnnouncement.issues", apiVersion: "v1.0" },
+          { kind: "failure", service: "exchange", collectedAt, category, source: "getConnectivityMetricsForExchange", apiVersion: "beta" },
+        ],
+      });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(credential.getToken).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["serviceOperational", 100, "Healthy"],
+      ["serviceDegradation", 50, "Degraded"],
+      ["serviceInterruption", 0, "Unhealthy"],
+    ] as const)("publishes observed %s availability and zero issues despite an unavailable sibling", async (status, value, healthState) => {
+      const selected = parseServiceConfig({
+        ...service, mode: "live", serviceHealth: true,
+        serviceActivity: { enabled: true, functions: ["getConnectivityMetricsForExchange"] },
+      });
+      const collectedAt = new Date().toISOString();
+      const bodies: Record<string, unknown>[] = [];
+      await createHealthReporter(providerProject, selected, { emit: vi.fn() }, {}, {
+        credential: { getToken: async () => ({ token: "unit-test-token", expiresOnTimestamp: Date.now() + 60000 }) },
+        fetch: async (_url, init) => {
+          bodies.push(JSON.parse(String(init?.body)));
+          return new Response(null, { status: 204 });
+        },
+      })({
+        cycleId: "partially-available-provider-data", providerDiagnostics: [
+          { kind: "overview", service: "exchange", collectedAt, serviceId: "Exchange", serviceName: "Exchange Online", status },
+          { kind: "issue-summary", service: "exchange", collectedAt, count: 0 },
+          { kind: "failure", service: "exchange", collectedAt, category: "permission-failure",
+            source: "getConnectivityMetricsForExchange", apiVersion: "beta", httpStatus: 403 },
+        ],
+      });
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0]).toMatchObject({ signalName: "microsoft-reported-service-status", value, healthState });
+      expect(bodies[1]).toMatchObject({ signalName: "microsoft-reported-issue-count", value: 0, healthState: "Unknown" });
+    });
+
+    it("reports OneDrive Unknown without data when stable collection is missing or denied", () => {
       const failure: ProviderDiagnostic = {
         kind: "failure", service: "onedrive", collectedAt: new Date(now).toISOString(),
         source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0", category: "permission-failure", httpStatus: 403,
@@ -527,6 +683,33 @@ describe("independent reporting failure paths", () => {
         expect(JSON.parse(report.body.additionalContext).diagnosticCategories)
           .toEqual(providerDiagnostics.length ? ["permission-failure"] : ["no-data"]);
       }
+    });
+    it("never publishes provider reports when the root opt-in is absent or disabled", async () => {
+      const credential = { getToken: vi.fn() };
+      const fetcher = vi.fn();
+      const selected = {
+        ...service, mode: "live" as const, serviceHealth: true,
+        serviceActivity: { ...service.serviceActivity, enabled: true },
+      };
+      await createHealthReporter(project, selected, { emit: vi.fn() }, {}, { credential, fetch: fetcher })({
+        cycleId: "disabled-provider", providerDiagnostics: [],
+      });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(credential.getToken).not.toHaveBeenCalled();
+    });
+    it("reports denied beta metrics as Unknown without inventing a value", () => {
+      const observed = serviceActivityReports({
+        ...service, serviceActivity: { ...service.serviceActivity, enabled: true, functions: ["getConnectivityMetricsForExchange"] },
+      }, { cycleId: "denied-beta", providerDiagnostics: [{
+        kind: "failure", service: "exchange", collectedAt: new Date(now).toISOString(),
+        source: "getConnectivityMetricsForExchange", apiVersion: "beta", category: "permission-failure", httpStatus: 403,
+      }] }, 15, now);
+      expect(observed).toHaveLength(1);
+      expect(observed[0]?.body.healthState).toBe("Unknown");
+      expect(observed[0]?.body).not.toHaveProperty("value");
+      expect(JSON.parse(observed[0]!.body.additionalContext)).toMatchObject({
+        diagnosticCategories: ["permission-failure"], httpStatuses: [403],
+      });
     });
   });
 });

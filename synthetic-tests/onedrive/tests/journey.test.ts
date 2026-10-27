@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { GraphClient } from "../../utils/src/graph.js";
-import { AuthenticatedHttp, IntegrationError } from "../../utils/src/http.js";
+import { IntegrationError } from "../../utils/src/http.js";
 import { resultSchema, type Probe, type TestType } from "../../utils/src/contracts.js";
 import type { ProbeContext } from "../../utils/src/probes.js";
 import { oneDriveProbe } from "../src/journey.js";
@@ -263,9 +263,9 @@ describe("OneDrive Graph content transport", () => {
     const graphFetch = vi.fn<typeof fetch>(async () => new Response(null, {
       status: 302, headers: { location: "https://tenant-my.sharepoint.com/download?key=opaque" },
     }));
-    const graph = new GraphClient(new AuthenticatedHttp({
+    const graph = new GraphClient({
       getToken: async () => ({ token: "test-token", expiresOnTimestamp: Date.now() + 60000 }),
-    }, "https://graph.microsoft.com/.default", { fetch: graphFetch }), download);
+    }, { fetch: graphFetch, downloadFetch: download });
     const bytes = await graph.downloadContent("/drives/d/items/f/versions/1.0/content", new AbortController().signal);
     expect(bytes.toString()).toBe('{"probe":true}');
     expect(download.mock.calls[0]?.[1]).not.toHaveProperty("headers");

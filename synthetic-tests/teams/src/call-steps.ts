@@ -2,8 +2,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { GraphClient } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
-import { playPromptOperationSchema, type TeamsCallOperations } from "../../utils/src/teams-call-operations.js";
-import { testToneResourceId } from "../../utils/src/teams-call-media.js";
 
 export const callIdSchema = z.string().min(1).max(2048).refine(id =>
   id.trim() === id && id !== "." && id !== ".." && !/[\u0000-\u001f\u007f]/.test(id));
@@ -32,6 +30,16 @@ async function readOwnedCall(graph: GraphClient, id: string, signal: AbortSignal
   onState?.(callStates.includes(call.state) ? call.state : "unknown",
     info.success ? info.data.code : undefined, info.success ? info.data.subcode : undefined, call.callChainId ?? undefined);
   return { state: call.state, resultCode: info.success ? info.data.code : undefined };
+}
+
+export async function verifyCallEstablished(
+  graph: GraphClient, id: string, signal: AbortSignal, onState?: StateObserver,
+): Promise<void> {
+  const call = await readOwnedCall(graph, id, signal, onState);
+  signal.throwIfAborted();
+  if (call.state !== "established" || (call.resultCode !== undefined && call.resultCode >= 400)) {
+    throw new IntegrationError("read-failure");
+  }
 }
 
 export async function waitForAnswer(
@@ -117,55 +125,6 @@ export async function verifyMeetingMetadata(
       call.tenantId.toLowerCase() !== expected.tenantId.toLowerCase()) {
     throw new IntegrationError("read-failure");
   }
-}
-
-export async function playAudio(
-  graph: GraphClient, operations: TeamsCallOperations, id: string, clientContext: string, mediaUri: string, botClientId: string,
-  signal: AbortSignal, deadline: number, pollIntervalMs: number,
-  now: () => number = Date.now, sleep = pause, onState?: StateObserver,
-  onOperation?: (operationId: string, status: string, resultCode?: number) => void,
-): Promise<void> {
-  signal.throwIfAborted();
-  const remaining = deadline - now();
-  if (remaining <= 0) throw new IntegrationError("delivery-timeout");
-  const bounded = AbortSignal.timeout(remaining);
-  signal = AbortSignal.any([signal, bounded]);
-  const pending = operations.register(id, clientContext, remaining, botClientId);
-  try {
-    const accepted = await graph.json(`${callPath(id)}/playPrompt`, playPromptOperationSchema, signal, "POST", {
-      clientContext,
-      prompts: [{
-        "@odata.type": "#microsoft.graph.mediaPrompt",
-        mediaInfo: { "@odata.type": "#microsoft.graph.mediaInfo", uri: mediaUri, resourceId: testToneResourceId },
-      }],
-    }, false, "v1.0", 16384);
-    pending.bind(accepted);
-    onOperation?.(accepted.id, accepted.status, accepted.resultInfo?.code);
-    let lastStatus = "";
-    while (now() < deadline) {
-      signal.throwIfAborted();
-      const call = await readOwnedCall(graph, id, signal, onState);
-      if (["terminating", "terminated"].includes(call.state) || (call.resultCode !== undefined && call.resultCode >= 400)) {
-        throw new IntegrationError("read-failure");
-      }
-      signal.throwIfAborted();
-      if (now() >= deadline) throw new IntegrationError("delivery-timeout");
-      const observed = pending.observation();
-      if (observed) {
-        if (lastStatus !== observed.status) {
-          onOperation?.(accepted.id, observed.status, observed.resultInfo?.code);
-          lastStatus = observed.status;
-        }
-        if (observed.status === "failed" || (observed.resultInfo?.code !== undefined && observed.resultInfo.code >= 400)) {
-          throw new IntegrationError("read-failure");
-        }
-        if (observed.status === "completed") return;
-      }
-      const timeLeft = deadline - now();
-      if (timeLeft > 0) await sleep(Math.min(pollIntervalMs, timeLeft), signal);
-    }
-    throw new IntegrationError("delivery-timeout");
-  } finally { pending.dispose(); }
 }
 
 async function waitForCallTermination(

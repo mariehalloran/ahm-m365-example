@@ -24,6 +24,35 @@ describe("OneDrive root selection and independent execution", () => {
     expect(file).not.toHaveProperty("targets");
     expect(file).not.toHaveProperty("enabled");
   });
+  it("executes all three journeys for 500 configured accounts while retaining the same 30 aggregated reports", async () => {
+    const project = structuredClone(checkedIn);
+    project.services.onedrive.targets = Array.from({ length: 500 }, (_, index) => ({
+      id: `account-${index}`, userId: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
+      userPrincipalName: `account-${index}@example.invalid`, folderName: "AHM-Synthetic-Tests",
+    }));
+    const selected = applyProjectConfig(parseProjectConfig(project), file);
+    expect(serviceSettings(selected, {}, project.services.onedrive.scenarios).probes).toHaveLength(1500);
+    const output = { emit: vi.fn() };
+    await runServiceWorker(selected, { project, once: true, telemetry: output, env: {} });
+    expect(output.emit.mock.calls.filter(([event]) => event === "synthetic-result")).toHaveLength(1500);
+    expect(output.emit.mock.calls.filter(([event]) => event === "health-report-preview")).toHaveLength(30);
+  });
+  it("requires a cycle budget for every queued attempt and a TTL covering the configured budget", () => {
+    const project = structuredClone(checkedIn);
+    project.healthModel.subscriptionId = "33333333-3333-4333-8333-333333333333";
+    project.services.onedrive.targets = Array.from({ length: 500 }, (_, index) => ({
+      id: `account-${index}`, userId: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
+      userPrincipalName: `account-${index}@example.invalid`, folderName: "AHM-Synthetic-Tests",
+    }));
+    const live = parseServiceFileConfig({ ...file, mode: "live", maxConcurrentProbes: 20 });
+    expect(() => applyProjectConfig(project, live)).toThrow("cycleTimeoutSeconds >= 3300");
+    const scaled = { ...live, cycleTimeoutSeconds: 3600 };
+    expect(() => applyProjectConfig(project, scaled)).toThrow("TTL");
+    project.healthModel.reportTtlMinutes = 75;
+    const settings = serviceSettings(applyProjectConfig(project, scaled), { ENABLE_LIVE_M365: "true" }, project.services.onedrive.scenarios);
+    expect(settings).toMatchObject({ MAX_CONCURRENT_PROBES: 20, CYCLE_TIMEOUT_MS: 3600000 });
+    expect(settings.probes).toHaveLength(1500);
+  });
   it("requires explicit service selection rather than migrating obsolete profiles silently", () => {
     const { onedrive: _onedrive, ...services } = checkedIn.services;
     expect(() => parseProjectConfig({ ...checkedIn, services })).toThrow("services.onedrive");

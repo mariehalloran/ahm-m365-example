@@ -3,9 +3,8 @@ import { probeServices, type Telemetry } from "./contracts.js";
 import type { RunnerDependencies } from "./runner.js";
 import type { ServiceConfig } from "./service-config.js";
 import { createFederatedGraphClient, createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "./auth.js";
-import { createTeamsCallingVerifier } from "./teams-calling-auth.js";
+import { createTeamsCallingVerifier, type CallingIdentity } from "./teams-calling-auth.js";
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
-import { TeamsCallOperations } from "./teams-call-operations.js";
 import { GraphClient } from "./graph.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
 
@@ -30,6 +29,7 @@ export function providerGraphClient(service: ServiceConfig, env: NodeJS.ProcessE
 export async function serviceRuntime(
   service: ServiceConfig, config: Config, telemetry: Telemetry, env: NodeJS.ProcessEnv = process.env,
   suppliedResults?: ResultOutput,
+  options: { onTeamsCallingNotification?: (notification: unknown, identity: CallingIdentity) => void } = {},
 ): Promise<RunnerDependencies> {
   if (!service.enabled) throw new ConfigurationError("Service runtime requires an enabled probe type");
   const live = config.EXECUTION_MODE === "live";
@@ -73,16 +73,13 @@ export async function serviceRuntime(
     dependencies.teamsCalling = graph;
     dependencies.teamsCallingPeer = peerGraph;
     const verify = await createTeamsCallingVerifier(env);
-    const operations = new TeamsCallOperations();
     const server = await startTeamsCallingCallback({
       port: config.TEAMS_CALLING_PORT, verify,
-      onNotification: (notification, identity) => operations.accept(notification, identity),
-      onMediaServed: () => telemetry.emit("teams-call-tone-served", { bytes: 32044, sampleRateHz: 16000 }),
+      ...(options.onTeamsCallingNotification ? { onNotification: options.onTeamsCallingNotification } : {}),
       onAccepted: () => telemetry.emit("teams-calling-callback-accepted", { authentication: "verified", tenantMatched: true }),
       onRejected: (httpStatus, stage, diagnostic) => telemetry.emit("teams-calling-callback-rejected", { httpStatus, stage, ...diagnostic }),
     });
-    dependencies.teamsCallOperations = operations;
-    dependencies.shutdown = async () => { operations.shutdown(); await server.shutdown(); };
+    dependencies.shutdown = () => server.shutdown();
   }
   return dependencies;
 }

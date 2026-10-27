@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/src/config.js";
 import { resultSchema, type Probe } from "../../utils/src/contracts.js";
 import { GraphClient } from "../../utils/src/graph.js";
-import { AuthenticatedHttp } from "../../utils/src/http.js";
 import { exchangeDraftProbe } from "../src/draft-journey.js";
 import { readDraft, updateDraft } from "../src/draft-steps.js";
 import type { MailAttempt } from "../src/steps.js";
@@ -75,9 +74,9 @@ async function runDraft(options: Options = {}) {
     if (options.mismatch && stage === "read") saved[options.mismatch] = options.mismatch === "isDraft" ? false : "unrelated";
     return json(saved);
   });
-  const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", {
+  const graph = new GraphClient(credential, {
     fetch: fetcher, attempts: 3, sleep: async () => {},
-  }));
+  });
   const selectedProbe = { ...probe };
   if (options.missingMailbox) delete selectedProbe.mailbox;
   const result = await exchangeDraftProbe(selectedProbe, {
@@ -105,9 +104,9 @@ describe("Exchange save/edit/reopen draft journey", () => {
   });
   it("refuses to edit or reopen a message that was not created by this attempt", async () => {
     const fetcher = vi.fn<typeof fetch>();
-    const graph = new GraphClient(new AuthenticatedHttp({
+    const graph = new GraphClient({
       getToken: async () => ({ token: "test-token", expiresOnTimestamp: Date.now() + 60000 }),
-    }, "https://graph.microsoft.com/.default", { fetch: fetcher }));
+    }, { fetch: fetcher });
     const attempt: MailAttempt = {
       mailbox, correlationId: "11111111-1111-4111-8111-111111111111",
       ownedMessageIds: new Set(), mutationAttempted: false,
@@ -149,7 +148,7 @@ describe("Exchange save/edit/reopen draft journey", () => {
     expect(calls.filter(call => call.method === "DELETE").map(call => call.url)).toEqual([ownedDraft]);
     expect(calls.every(call => call.headers.get("prefer") === 'IdType="ImmutableId"')).toBe(true);
     expect(calls.every(call => call.headers.get("authorization") === "Bearer test-token")).toBe(true);
-    expect(credential.getToken).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
+    expect(credential.getToken).toHaveBeenCalledWith(["https://graph.microsoft.com/.default"], expect.anything());
     expect(calls.some(call => call.url.includes("/send") || call.url.includes("/mailFolders"))).toBe(false);
     expect(JSON.stringify(result)).not.toMatch(/test-token|example\.invalid|owned-copy|immutable/);
   });

@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-import { serviceDefinitions, ServiceDefinition } from './service-catalog.bicep'
+import { serviceDefinitions, ServiceDefinition, getJourneyGroups } from './service-catalog.bicep'
 
 @description('The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
@@ -13,6 +13,7 @@ param workspaceName string = 'law-${projectConfig.healthModel.name}'
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
 var modelName = projectConfig.healthModel.name
+var enableServiceHealth = projectConfig.?serviceHealth.?enabled ?? false
 var selectedServices ServiceDefinition[] = map(
   serviceDefinitions,
   service =>
@@ -28,7 +29,9 @@ var enabledServices = filter(
   service => (projectConfig.services[?service.service].?enabled ?? false) && !empty(service.journeys)
 )
 var journeys = flatten(map(enabledServices, service => service.journeys))
+var journeyGroupCount = length(getJourneyGroups(journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
+var serviceHealthCount = enableServiceHealth ? length(enabledServices) : 0
 var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(enabledServices)
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
@@ -81,6 +84,7 @@ module serviceModels './service.bicep' = [
       location: location
       service: service
       policy: projectConfig.healthModel
+      enableServiceHealth: enableServiceHealth
       suppressOneDriveRestore: service.service == 'onedrive' && empty(filter(
         projectConfig.services[?'onedrive'].?targets ?? [],
         target => target.?restoreVersion ?? false
@@ -178,8 +182,8 @@ output serviceModelIds array = [
 ]
 output serviceNames array = [for service in enabledServices: service.service]
 output modelCount int = 1 + length(enabledServices)
-output entityCount int = 1 + length(enabledServices) * 3 + length(journeys) + stepCount
-output relationshipCount int = length(enabledServices) * 2 + length(journeys) + stepCount
+output entityCount int = 1 + length(enabledServices) * 2 + serviceHealthCount + journeyGroupCount + length(journeys) + stepCount
+output relationshipCount int = length(enabledServices) + serviceHealthCount + journeyGroupCount + length(journeys) + stepCount
 output journeyCount int = length(journeys)
 output stepCount int = stepCount
 output telemetryEnabled bool = useOtel

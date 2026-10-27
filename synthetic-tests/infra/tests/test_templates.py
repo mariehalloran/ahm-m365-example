@@ -178,7 +178,10 @@ class WorkerTemplateContracts(unittest.TestCase):
         for name in ("TEAMS_PUBLIC_CLIENT_ID", "TEAMS_CACHE_ACCOUNT_URL", "TEAMS_CACHE_CONTAINER", "TEAMS_CACHE_BLOB"):
             self.assertNotIn(name, environment)
         self.assertIn("needsApplicationGraph", self.worker["variables"]["useM365Certificate"])
-        self.assertIn("serviceHealth", self.worker["variables"]["needsApplicationGraph"])
+        self.assertIn("useProviderContext", self.worker["variables"]["needsApplicationGraph"])
+        provider_context = self.worker["variables"]["useProviderContext"]
+        for required in ("and(", "or(", "parameters('projectConfig')", "parameters('serviceConfig')", "serviceHealth", "serviceActivity"):
+            self.assertIn(required, provider_context)
         self.assertNotIn("accessToken", environment)
         self.assertNotIn("refreshToken", environment)
 

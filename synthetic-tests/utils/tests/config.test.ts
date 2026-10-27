@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { createRuntimeConfig, loadConfig } from "../src/config.js";
 
 describe("safe runtime configuration", () => {
+  it("accepts typed runtime settings without retaining a serialized probe inventory", () => {
+    const probes = [{ id: "typed-probe", type: "exchange-mail-flow", cohort: "exchange-global" }];
+    const config = createRuntimeConfig({ PROBE_TIMEOUT_MS: 45000, probes }, { PROBES_JSON: "not-json" });
+    expect(config.PROBE_TIMEOUT_MS).toBe(45000);
+    expect(config.probes).toEqual(probes);
+    expect(config).not.toHaveProperty("PROBES_JSON");
+  });
+  it("applies live consent and dedicated-resource safeguards to typed settings", () => {
+    const settings = { EXECUTION_MODE: "live", probes: [{ id: "typed-probe", type: "exchange-mail-flow", cohort: "exchange-global" }] } as const;
+    expect(() => createRuntimeConfig(settings, {})).toThrow("ENABLE_LIVE_M365");
+    expect(() => createRuntimeConfig(settings, { ENABLE_LIVE_M365: "true" })).toThrow("Missing dedicated resources");
+  });
   it("defaults to bot MI and rejects unrecognized authentication environment modes", () => {
     expect(loadConfig({})).toMatchObject({ TEAMS_AUTHENTICATION: "bot", BOT_AUTHENTICATION: "managed-identity" });
     expect(() => loadConfig({ TEAMS_AUTHENTICATION: "user-delegated" })).toThrow("TEAMS_AUTHENTICATION");
@@ -12,13 +24,20 @@ describe("safe runtime configuration", () => {
   });
   it("has no model, policy, TTL, or persistence settings", () => {
     expect(Object.keys(loadConfig({})).sort()).toEqual([
-      "BOT_AUTHENTICATION", "ENABLE_LIVE_M365", "EXCHANGE_CLEANUP_ENABLED", "EXECUTION_MODE", "POLL_INTERVAL_MS", "PROBE_TIMEOUT_MS", "SYNTHETIC_SCENARIO", "TEAMS_AUTHENTICATION", "TEAMS_CALLING_PORT", "TEAMS_CALLING_PLAYBACK_ENABLED", "TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS", "TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS", "TEAMS_CLEANUP_ENABLED", "probes",
+      "BOT_AUTHENTICATION", "CYCLE_TIMEOUT_MS", "ENABLE_LIVE_M365", "EXCHANGE_CLEANUP_ENABLED", "EXECUTION_MODE", "MAX_CONCURRENT_PROBES", "POLL_INTERVAL_MS", "PROBE_TIMEOUT_MS", "SYNTHETIC_SCENARIO", "TEAMS_AUTHENTICATION", "TEAMS_CALLING_PORT", "TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS", "TEAMS_CLEANUP_ENABLED", "probes",
     ].sort());
     expect(loadConfig({}).probes).toHaveLength(1);
   });
   it("requires explicit live consent and dedicated resources", () => {
     expect(() => loadConfig({ EXECUTION_MODE: "live" })).toThrow("ENABLE_LIVE_M365");
     expect(() => loadConfig({ EXECUTION_MODE: "live", ENABLE_LIVE_M365: "true" })).toThrow("Missing dedicated resources");
+  });
+  it.each([
+    ["TEAMS_CALLING_PLAYBACK_ENABLED", "true"],
+    ["TEAMS_CALLING_PLAYBACK_ENABLED", "false"],
+    ["TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS", "10"],
+  ])("rejects retired %s settings with explicit migration guidance", (field, value) => {
+    expect(() => loadConfig({ [field]: value })).toThrow("remove them");
   });
   it("rejects duplicate IDs and mixed cohorts", () => {
     const probe = { id: "probe-001", type: "exchange-mail-flow", cohort: "cohort-global" };

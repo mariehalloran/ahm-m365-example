@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/src/config.js";
 import { resultSchema, type Probe } from "../../utils/src/contracts.js";
 import { GraphClient } from "../../utils/src/graph.js";
-import { AuthenticatedHttp } from "../../utils/src/http.js";
 import { exchangeProbe } from "../src/journey.js";
 import { authenticate, cleanup, confirmDelivery, createDraft, sendMessage, type MailAttempt } from "../src/steps.js";
 
@@ -42,7 +41,7 @@ async function exchangeRun(options: { deliveryAfter?: number; sendDurationMs?: n
     throw new Error("Unexpected Graph request");
   });
   const identity = options.authFail ? { getToken: async () => { throw new Error("private auth error"); } } : credential;
-  const graph = new GraphClient(new AuthenticatedHttp(identity, "scope", { fetch: fetcher, attempts: 1 }));
+  const graph = new GraphClient(identity, { fetch: fetcher, attempts: 1 });
   const result = await exchangeProbe(exchange, {
     config: { ...config, EXCHANGE_CLEANUP_ENABLED: options.cleanupEnabled === false ? "false" : "true" },
     graph, telemetry, signal: AbortSignal.timeout(10000), now: () => time,
@@ -67,7 +66,7 @@ describe("Exchange send/poll/cleanup", () => {
   });
   it("exposes independently callable authentication, draft, send, delivery and cleanup actions", async () => {
     const calls: string[] = [];
-    const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", {
+    const graph = new GraphClient(credential, {
       attempts: 1, fetch: async (url, init) => {
         const method = init?.method ?? "GET";
         calls.push(`${method} ${new URL(String(url)).pathname}`);
@@ -76,7 +75,7 @@ describe("Exchange send/poll/cleanup", () => {
         if (method === "GET") return json({ value: [{ id: "direct-received" }] });
         return new Response(null, { status: 204 });
       },
-    }));
+    });
     const attempt: MailAttempt = {
       mailbox, correlationId: "11111111-1111-4111-8111-111111111111", ownedMessageIds: new Set(), mutationAttempted: false,
     };
@@ -175,7 +174,7 @@ describe("Exchange send/poll/cleanup", () => {
     "continues independent discovery and all known owned-copy deletions after %s fails", async failure => {
       const recipientMailbox = "recipient@example.invalid";
       const calls: { path: string; method: string }[] = [];
-      const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", {
+      const graph = new GraphClient(credential, {
         attempts: 1, fetch: async (url, init) => {
           const path = new URL(String(url));
           const method = init?.method ?? "GET";
@@ -188,7 +187,7 @@ describe("Exchange send/poll/cleanup", () => {
           if (failure === `${participant}-delete`) return new Response(null, { status: 403 });
           return new Response(null, { status: 204 });
         },
-      }));
+      });
       await expect(cleanup(graph, {
         mailbox, recipientMailbox, correlationId: "11111111-1111-4111-8111-111111111111",
         mutationAttempted: true, ownedMessageIds: new Set(["known-draft"]), deliveredMessageIds: new Set(["known-delivery"]),
@@ -205,7 +204,7 @@ describe("Exchange send/poll/cleanup", () => {
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => init?.method === "DELETE"
       ? new Response(null, { status: 204 })
       : json({ value: [{ id: "owned-copy" }], "@odata.nextLink": "https://graph.microsoft.com/v1.0/users/unapproved/messages" }));
-    const graph = new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default", { attempts: 1, fetch: fetcher }));
+    const graph = new GraphClient(credential, { attempts: 1, fetch: fetcher });
     await expect(cleanup(graph, {
       mailbox, correlationId: "11111111-1111-4111-8111-111111111111",
       mutationAttempted: true, ownedMessageIds: new Set(["known-draft"]),

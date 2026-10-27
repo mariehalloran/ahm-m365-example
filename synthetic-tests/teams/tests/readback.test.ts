@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { GraphClient, graphBase } from "../../utils/src/graph.js";
-import { AuthenticatedHttp } from "../../utils/src/http.js";
 import { confirmReply, type ChannelReplyAttempt } from "../src/steps.js";
 
 const applicationId = "22222222-2222-4222-8222-222222222222";
@@ -23,9 +22,9 @@ function fixture(read?: (path: string, count: number, marker: string) => Respons
     const marker = path.startsWith(`${repliesPath}?`) ? attempt.replyMarker : attempt.marker;
     return read?.(path, ++reads, marker) ?? Response.json({ value: [message(marker)] });
   });
-  const graph = new GraphClient(new AuthenticatedHttp({
+  const graph = new GraphClient({
     getToken: async () => ({ token: "fake-unit-test", expiresOnTimestamp: Date.now() + 60000 }),
-  }, "https://graph.microsoft.com/.default", { fetch: fetcher, attempts: 1 }));
+  }, { fetch: fetcher, attempts: 1 });
   const confirm = () => confirmReply(graph, applicationId, attempt, controller.signal, 100, 10,
     () => clock, async ms => { clock += ms; });
   return { confirm, attempt, controller, fetcher, advance: (ms: number) => { clock += ms; } };

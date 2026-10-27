@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
-import { AuthenticatedHttp, IntegrationError } from "../src/http.js";
+import { IntegrationError } from "../src/http.js";
 import { baseResult } from "../src/probes.js";
 import { runCycle } from "../src/runner.js";
 import { parseServiceConfig, serviceSettings, type ServiceConfig } from "../src/service-config.js";
@@ -37,7 +37,7 @@ describe("stateless per-attempt execution", () => {
   it("does not run global heartbeat/provider/control-plane queries or leak target resources", async () => {
     const config = serviceSettings(liveService(), { ENABLE_LIVE_M365: "true" });
     const deps = dependencies();
-    const graph = new GraphClient(new AuthenticatedHttp({ getToken: async () => null }, "scope"));
+    const graph = new GraphClient({ getToken: async () => null });
     const request = vi.spyOn(graph, "request").mockRejectedValue(new Error("Must never run"));
     const healthy = vi.fn(async probe => ({ ...baseResult(probe, Date.now()), success: true, durationMs: 1000 }));
     await runCycle(config, { ...deps, graph, handler: healthy });
@@ -74,6 +74,37 @@ describe("stateless per-attempt execution", () => {
     const deps = dependencies();
     await expect(runCycle(serviceSettings(service, {}), deps, AbortSignal.abort())).rejects.toThrow();
     expect(deps.results.record).not.toHaveBeenCalled();
+  });
+  it("runs a queued non-Exchange cohort beyond the old cycle deadline with the selected concurrency", async () => {
+    vi.useFakeTimers();
+    const config = serviceSettings(parseServiceConfig({
+      ...liveService(), type: "onedrive", cohort: "onedrive-global",
+      maxConcurrentProbes: 2, cycleTimeoutSeconds: 300, timeoutSeconds: 120,
+      targets: Array.from({ length: 6 }, (_, index) => ({
+        id: `account-${index}`, userId: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
+        userPrincipalName: `user-${index}@example.invalid`, folderName: "synthetic-tests",
+      })),
+    }), { ENABLE_LIVE_M365: "true" });
+    const deps = dependencies();
+    let active = 0;
+    let peak = 0;
+    const cycle = runCycle(config, {
+      ...deps,
+      handler: async (probe, context) => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise<void>(resolve => setTimeout(resolve, 90000));
+        active--;
+        context.signal.throwIfAborted();
+        return { ...baseResult(probe, Date.now()), success: true };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(270000);
+    const completed = await cycle;
+    expect(peak).toBe(2);
+    expect(completed.results).toHaveLength(6);
+    expect(completed.results.every(result => result.success && result.durationMs === 90000)).toBe(true);
+    expect(deps.results.record).toHaveBeenCalledTimes(6);
   });
 });
 

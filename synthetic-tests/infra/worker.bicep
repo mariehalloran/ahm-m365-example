@@ -25,7 +25,8 @@ var useTeamsBot = serviceConfig.type == 'teams' && serviceConfig.mode == 'live' 
 var needsTeamsPeer = serviceConfig.type == 'teams' && serviceConfig.mode == 'live' && (projectConfig.services.teams.scenarios[?'scheduled-meeting'] ?? false)
 var useTeamsCallback = serviceConfig.type == 'teams' && serviceConfig.mode == 'live' && (projectConfig.services.teams.scenarios[?'scheduled-meeting'] ?? false)
 var useBotIdentity = useTeamsBot || needsTeamsPeer
-var needsApplicationGraph = serviceConfig.type != 'teams' || useTeamsBot || (serviceConfig.?serviceHealth ?? false) || (serviceConfig.?serviceActivity.?enabled ?? false)
+var useProviderContext = (projectConfig.?serviceHealth.?enabled ?? false) && ((serviceConfig.?serviceHealth ?? false) || (serviceConfig.?serviceActivity.?enabled ?? false))
+var needsApplicationGraph = serviceConfig.type != 'teams' || useTeamsBot || useProviderContext
 var useM365Certificate = serviceConfig.mode == 'live' && needsApplicationGraph && serviceConfig.graphAuthentication == 'certificate'
 var credentialSecrets = useM365Certificate ? [
     (serviceAccess.?m365CertificateSource ?? 'key-vault') == 'container-app'

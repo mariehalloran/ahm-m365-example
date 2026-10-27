@@ -5,11 +5,11 @@ configuration, dependencies and build output live here. The three service
 workers run independently in Azure Container Apps and publish health directly;
 no telemetry worker or persistent journey state is required.
 
-Supported workflows: [six Exchange journeys](./exchange/README.md),
+Supported workflows: [Exchange journeys](./exchange/README.md),
 [two bot-backed Teams journeys](./teams/README.md), and
 [three OneDrive journeys](./onedrive/README.md). Every selected target is attempted.
 There is no SharePoint project, proposal catalog, delegated-user bootstrap,
-separate reply probe, P2P audio, card, sharing or search prototype.
+P2P audio, card, sharing or search prototype.
 
 ## Run locally
 
@@ -42,7 +42,7 @@ directory and cannot override root selection, targets or report policy.
 
 | Root field | Purpose |
 | --- | --- |
-| `services.exchange.scenarios` | The six documented mail/draft/attachment/list/calendar/invitation switches |
+| `services.exchange.scenarios` | The documented mail/draft/attachment/reply/list/calendar/invitation switches |
 | `services.teams.scenarios` | Only `channel-conversation` and `scheduled-meeting` |
 | `services.onedrive.scenarios` | Only `user-drive-roundtrip`, `app-folder-lifecycle`, `document-versions` |
 | `services.<service>.enabled` / `configFile` | Service selection and its execution-file path |
@@ -63,7 +63,7 @@ and never overlap themselves. Missed slots are skipped, not replayed.
 
 Default lanes:
 
-- Exchange: mail every 60 seconds; the other five journeys every 300 seconds.
+- Exchange: mail every 60 seconds; all other journeys every 300 seconds.
 - Teams: one lane containing channel conversation and scheduled meeting, every 120 seconds.
 - OneDrive: three independent lanes, each every 300 seconds.
 - Each service's optional providers: a separate lane, default `providerIntervalSeconds: 300`.
@@ -78,11 +78,16 @@ belong in a service file.
 - Replace old Teams scenario switches with exactly `channel-conversation` and
   `scheduled-meeting`. Keep dedicated `callTargets` and both approved UAMIs;
   use one execution lane containing both keys.
+- Remove `teamsCallingPlaybackEnabled`/`teamsCallingPlaybackTimeoutSeconds` and
+  `TEAMS_CALLING_PLAYBACK_*` environment settings. Meeting connectivity no longer
+  requires audio testing; retire its old child/signals through the
+  [model migration](../health-model/README.md#retiring-teams-audio-testing).
 - Keep exactly the three documented OneDrive scenarios and their three lanes;
   remove sharing/search switches and lanes. Do not rename deployed
   `onedrive-planned-*` roots or their `step-1`…`step-4` IDs.
-- Keep all six Exchange switches, with mail on the 60-second lane and the other
-  five families on the 300-second lane.
+- Select separate `attachment-mail` and `reply-mail` scenarios with root-owned
+  `replySeed` bindings. Keep mail on the 60-second lane and other journeys on
+  the 300-second lane.
 - Remove public-client/token-cache and bot-certificate settings. Teams accepts
   only bot participants with explicitly selected managed identities; there is
   no bootstrap command or user-token compatibility path.
@@ -104,6 +109,8 @@ retire only owned obsolete resources under the approved cleanup procedure.
 3. Grant only required Microsoft 365 access. Exchange uses mailbox-scoped
    application RBAC; Teams uses installed managed-identity bots and team-scoped
    Graph readback; OneDrive uses Selected folder grants and AppFolder.
+   [Bulk OneDrive setup](../docs/onedrive-setup.md) creates/reuses folders, grants
+   scoped write access and saves real bindings for every approved account.
 4. Use a private live service profile, approved root destination, and
    `ENABLE_LIVE_M365=true`. This gate is separate from `mode: "live"`.
 
@@ -115,7 +122,11 @@ Exchange retains explicit `graphAuthentication: "certificate"` with
 `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for approved
 local/alternative access; Azure reporting credentials stay independent.
 
-Providers are optional: stable `ServiceHealth.Read.All` for all three services,
+Providers require root `"serviceHealth": { "enabled": true }`; omission or false
+excludes their model entities and stops all provider collection/reporting.
+Sources without usable data publish no health reports; collection failures remain
+diagnostic-only. Observed Service Health statuses map to 100/50/0 availability.
+Permissions are stable `ServiceHealth.Read.All` for all three services,
 and separately gated Exchange/Teams beta permissions/`ENABLE_BETA_SERVICE_ACTIVITY=true`. See
 [provider setup](../docs/provider-monitoring.md). Provider failures/counts cannot
 rewrite synthetic success or Experience rollup.

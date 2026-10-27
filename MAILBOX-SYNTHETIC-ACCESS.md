@@ -43,7 +43,7 @@ Use **Exchange Online RBAC for Applications only**, scoped to the dedicated part
 | `Application Mail.Send` | Submit the test draft as that mailbox |
 | `Application Calendars.ReadWrite` | Create/read/update/delete recurring events, invite/accept/observe/cancel meetings; needed only for selected calendar journeys |
 
-The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles only to approved A/B participants. Configure root `mailbox`, `recipientMailbox`, and `distributionList: { address, expectedRecipients }`; the worker neither discovers members nor adds grants. Verify actual Graph access as well as RBAC diagnostics after propagation, including denial of an unrelated control account. See [six journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
+The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles only to approved A/B participants. Configure root `mailbox`, `recipientMailbox`, and `distributionList: { address, expectedRecipients }`; the worker neither discovers members nor adds grants. Verify actual Graph access as well as RBAC diagnostics after propagation, including denial of an unrelated control account. See [seven journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
 
 **Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite`, `Mail.Send`, or `Calendars.ReadWrite` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
 
@@ -168,9 +168,9 @@ Same-tenant hosted Exchange remains keyless by default. The shared hosting templ
 
 The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, journeys, action functions and tests. Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
 
-The six families are send/verify, draft lifecycle, attachment/reply, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
+The seven journeys are send/verify, draft lifecycle, attachment delivery, reply delivery, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. The reply journey retains a dedicated received starter message per approved pair, provisioned outside timed attempts with separately visible setup evidence. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 
-The root health model references an independent Exchange model. Its six journey entities receive whole-journey reports and 25 business-step children receive action reports through **External Reports**. Token acquisition and compensating cleanup remain internal; deliberate draft deletion and calendar deletion/cancellation are business steps. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. API-backed dedicated participants do not establish Outlook UI or tenant-wide availability.
+The root health model references an independent Exchange model. Its seven journey entities receive whole-journey reports and 25 business-step children receive action reports through **External Reports**. Token acquisition and compensating cleanup remain internal; deliberate draft deletion and calendar deletion/cancellation are business steps. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. API-backed dedicated participants do not establish Outlook UI or tenant-wide availability.
 
 ## 7. Not required by this Exchange test
 
@@ -197,7 +197,7 @@ Cross-tenant managed identity and federation are not implemented. Different-tena
 >
 > Please do not add equivalent unscoped Entra Graph mail grants. We need allowed/denied authorization checks, a review of effective grants, and one live Graph validation before scheduling.
 >
-> The six selected families cover A→B mail, drafts, attachment/reply, list fanout, recurrence, and meeting acceptance/cancellation. Please approve the one-minute mail cadence and five-minute other journeys, mailbox licensing, recipient restrictions, owned-artifact cleanup/retention, an out-of-scope control mailbox, and named ownership/escalation.
+> The seven selected journeys cover A→B mail, drafts, separate attachment/reply delivery, list fanout, recurrence, and meeting acceptance/cancellation. Please approve the retained received reply fixture per pair, one-minute mail cadence and five-minute other journeys, mailbox licensing, recipient restrictions, owned-artifact cleanup/retention, an out-of-scope control mailbox, and named ownership/escalation.
 >
 > We do not need a mailbox password, application secret/certificate for hosted Exchange authentication, or administrator privileges for the running worker. Please return approved tenant/mailbox IDs, identity/scope/assignment details, test results, and operating constraints.
 

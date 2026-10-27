@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyProjectConfig, parseProjectConfig, readProjectConfig, readProjectService } from "../src/project-config.js";
-import { parseServiceConfig, serviceProbes, serviceSettings } from "../src/service-config.js";
+import { parseServiceConfig, readServiceConfig, serviceProbes, serviceSettings } from "../src/service-config.js";
 import { parseWorkerArguments, runServiceWorker } from "../src/worker.js";
 import { baseResult } from "../src/probes.js";
 
@@ -19,6 +19,45 @@ const service = parseServiceConfig({
 });
 
 describe("project-root monitoring configuration", () => {
+  it.each([undefined, {}, { enabled: false }])("defaults Service Health off for %j", setting => {
+    const configured = parseProjectConfig({ ...checkedIn, serviceHealth: setting });
+    expect(configured.serviceHealth.enabled).toBe(false);
+  });
+  it.each(["exchange", "teams", "onedrive"] as const)(
+    "gates both stable and beta %s providers without changing journey selection", async type => {
+      const file = await readServiceConfig(`${type}/config.json`);
+      const configured = {
+        ...file, serviceHealth: true,
+        serviceActivity: { ...file.serviceActivity, enabled: type !== "onedrive" },
+      };
+      const disabled = applyProjectConfig(checkedIn, configured);
+      expect(disabled.serviceHealth).toBe(false);
+      expect(disabled.serviceActivity.enabled).toBe(false);
+      const enabled = applyProjectConfig({ ...checkedIn, serviceHealth: { enabled: true } }, configured);
+      expect(enabled.serviceHealth).toBe(true);
+      expect(enabled.serviceActivity.enabled).toBe(type !== "onedrive");
+      expect(serviceProbes(disabled, checkedIn.services[type].scenarios))
+        .toEqual(serviceProbes(enabled, checkedIn.services[type].scenarios));
+    },
+  );
+  it("does not schedule collection, obtain credentials or preview provider reports when omitted", async () => {
+    const configured = parseProjectConfig({ ...checkedIn, serviceHealth: undefined });
+    const providers = vi.fn();
+    const fetcher = vi.fn();
+    const output = { emit: vi.fn() };
+    vi.stubGlobal("fetch", fetcher);
+    await runServiceWorker({
+      ...service, serviceHealth: true, serviceActivity: { ...service.serviceActivity, enabled: true },
+    }, { project: configured, providers, once: true, env: {}, telemetry: output });
+    expect(providers).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(output.emit.mock.calls.filter(([event]) => event === "synthetic-result")).toHaveLength(7);
+    expect(output.emit.mock.calls.some(([, data]) => data.entityName === "exchange-service-health")).toBe(false);
+    expect(output.emit.mock.calls.some(([event]) => event === "service-provider-summary")).toBe(false);
+  });
+  it.each(["true", 1, null])("rejects a non-boolean Service Health opt-in %j", enabled => {
+    expect(() => parseProjectConfig({ ...checkedIn, serviceHealth: { enabled } })).toThrow("serviceHealth.enabled");
+  });
   it("keeps call quality diagnostic unless explicit, ordered root thresholds are supplied", () => {
     expect(checkedIn.healthModel.callQualityThresholds).toEqual({});
     for (const thresholds of [
@@ -41,7 +80,7 @@ describe("project-root monitoring configuration", () => {
       } },
     };
     const migrated = parseProjectConfig(old);
-    expect(migrated.services.exchange.scenarios["attachment-reply-mail"]).toBe(true);
+    expect(migrated.services.exchange.scenarios["attachment-mail"]).toBe(true);
     expect(migrated.services.exchange.scenarios["meeting-invitation"]).toBe(true);
     project.services.exchange.targets.push({
       id: "second-pair", mailbox: "second@example.invalid", recipientMailbox: "third@example.invalid",
@@ -51,21 +90,35 @@ describe("project-root monitoring configuration", () => {
     expect(selected.targets[0]).toHaveProperty("distributionList");
     expect(selected.targets[1]).toHaveProperty("recipientMailbox", "third@example.invalid");
   });
-  it("supports all six journeys for thirty root-owned target sets", () => {
+  it("supports all seven journeys for thirty root-owned target sets", () => {
     const project = structuredClone(checkedIn);
     project.services.exchange.targets = Array.from({ length: 30 }, (_, index) => ({
       ...project.services.exchange.targets[0]!, id: `exchange-pair-${index}`,
     }));
     const configured = applyProjectConfig(project, service);
-    expect(serviceProbes(configured, project.services.exchange.scenarios)).toHaveLength(180);
-    expect(serviceSettings(configured, {}, project.services.exchange.scenarios).probes).toHaveLength(180);
+    expect(serviceProbes(configured, project.services.exchange.scenarios)).toHaveLength(210);
+    expect(serviceSettings(configured, {}, project.services.exchange.scenarios).probes).toHaveLength(210);
+  });
+  it("keeps retained reply fixtures root-owned and rejects the obsolete combined scenario explicitly", () => {
+    const project = structuredClone(checkedIn);
+    project.services.exchange.targets[0]!.replySeed = {
+      messageId: "received-immutable-id", correlationId: "11111111-1111-4111-8111-111111111111",
+    };
+    const configured = applyProjectConfig(project, service);
+    expect(serviceProbes(configured, project.services.exchange.scenarios)
+      .find(probe => probe.type === "exchange-reply")?.replySeed).toEqual(project.services.exchange.targets[0]!.replySeed);
+    expect(() => parseProjectConfig({
+      ...project, services: { ...project.services, exchange: {
+        ...project.services.exchange, scenarios: { ...project.services.exchange.scenarios, "attachment-reply-mail": true },
+      } },
+    })).toThrow("select attachment-mail and reply-mail separately");
   });
   it("selects exactly Exchange, Teams and OneDrive without enabling live I/O", async () => {
-    expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "services"]);
+    expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "serviceHealth", "services"]);
     expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
     for (const type of ["exchange", "teams", "onedrive"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
-      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 6 : type === "teams" ? 2 : 3).fill(true));
+      expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 7 : type === "teams" ? 2 : 3).fill(true));
       const selected = await readProjectService(type, "../monitoring.config.json");
       expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
@@ -108,8 +161,8 @@ describe("project-root monitoring configuration", () => {
     const output = { emit: vi.fn() };
     await runServiceWorker(service, { project, once: true, env: {}, telemetry: output });
     const events = output.emit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event === "health-report-preview")).toHaveLength(62);
-    expect(events.filter(event => event === "synthetic-result")).toHaveLength(6);
+    expect(events.filter(event => event === "health-report-preview")).toHaveLength(64);
+    expect(events.filter(event => event === "synthetic-result")).toHaveLength(7);
     expect(events).not.toContain("probe-metrics");
     expect(events).not.toContain("health-report-published");
     expect(JSON.stringify(output.emit.mock.calls)).not.toContain("dedicated-synthetic@example.invalid");

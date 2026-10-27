@@ -1,14 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../../utils/src/graph.js";
-import { AuthenticatedHttp } from "../../utils/src/http.js";
 import { leaveCall, verifyMeetingMetadata, verifyParticipants, waitForAnswer } from "../src/call-steps.js";
 
 function fixture(responses: Response[]) {
   let now = 0;
   const fetcher = vi.fn<typeof fetch>(async () => responses.shift() ?? Response.json({ id: "owned-call", state: "establishing" }));
-  const graph = new GraphClient(new AuthenticatedHttp({
+  const graph = new GraphClient({
     getToken: async () => ({ token: "fake-test", expiresOnTimestamp: Date.now() + 60000 }),
-  }, "unused", { fetch: fetcher, attempts: 1 }));
+  }, { fetch: fetcher, attempts: 1 });
   return { graph, fetcher, now: () => now, sleep: async (ms: number) => { now += ms; } };
 }
 const call = (state: string, id = "owned-call") => Response.json({ id, state });
@@ -81,6 +80,16 @@ describe("owned call answer and verified disconnection", () => {
     const current = fixture([call("ringing"), call("established")]);
     await waitForAnswer(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep);
     expect(current.now()).toBe(10);
+  });
+  it("accepts Graph's explicit null call diagnostics without losing the owned call's valid conference chain", async () => {
+    const callChainId = "33333333-3333-4333-8333-333333333333";
+    const current = fixture([Response.json({
+      id: "owned-call", state: "established", callChainId, resultInfo: null, answeredBy: null,
+    })]);
+    const onState = vi.fn();
+    await waitForAnswer(current.graph, "owned-call", signal(), 30, 10, current.now, current.sleep, onState);
+    expect(onState).toHaveBeenCalledExactlyOnceWith("established", undefined, undefined, callChainId);
+    expect(current.fetcher).toHaveBeenCalledOnce();
   });
   it.each(["terminated", "404"])("DELETE acceptance requires subsequent GET proof: %s", async state => {
     const current = fixture([

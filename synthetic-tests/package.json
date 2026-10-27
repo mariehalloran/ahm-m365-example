@@ -8,29 +8,30 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc --project tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "npm run catalog:check && node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc --project tsconfig.build.json",
+    "typecheck": "npm run catalog:check && tsc --noEmit",
     "test": "vitest run",
+    "catalog:generate": "tsx utils/src/catalog-projection.ts",
+    "catalog:check": "tsx utils/src/catalog-projection.ts --check",
     "exchange": "tsx exchange/src/worker.ts",
+    "exchange:mail-test": "tsx exchange/src/mail-test-command.ts",
     "teams": "tsx teams/src/worker.ts",
+    "teams:audio-quality": "tsx teams/src/audio-quality-command.ts",
     "onedrive": "tsx onedrive/src/worker.ts",
-    "deployment:prepare": "tsx utils/src/prepare-deployment.ts"
+    "onedrive:setup": "tsx onedrive/src/setup-command.ts",
+    "deployment:prepare": "npm run catalog:check && tsx utils/src/prepare-deployment.ts"
   },
   "dependencies": {
     "jose": "^6.1.0",
     "@azure/identity": "^4.12.0",
-    "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.32",
-    "@opentelemetry/api": "1.9.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.44",
+    "@opentelemetry/api": "1.9.1",
     "@opentelemetry/core": "2.12.0",
     "@opentelemetry/resources": "2.12.0",
-    "@opentelemetry/sdk-logs": "0.223.0",
+    "@opentelemetry/sdk-logs": "0.220.0",
     "@opentelemetry/sdk-metrics": "2.12.0",
     "zod": "^3.25.0"
-  },
-  "overrides": {
-    "@azure/monitor-opentelemetry-exporter": {
-      "@opentelemetry/sdk-logs": "$@opentelemetry/sdk-logs"
-    }
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

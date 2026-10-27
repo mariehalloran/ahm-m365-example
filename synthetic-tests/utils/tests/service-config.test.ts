@@ -163,6 +163,7 @@ describe("strict config-first service settings", () => {
     });
     expect(config).toMatchObject({ EXECUTION_MODE: "simulation", SYNTHETIC_SCENARIO: "slow", PROBE_TIMEOUT_MS: 45000, POLL_INTERVAL_MS: 50 });
     expect(config.probes.every(probe => probe.type === "onedrive-roundtrip")).toBe(true);
+    expect(config).not.toHaveProperty("PROBES_JSON");
   });
   it("keeps root-owned fields out of all simulation and live service files", async () => {
     await expect(readServiceConfig("utils/tests/nonexistent-config.json")).rejects.toThrow("Cannot read");

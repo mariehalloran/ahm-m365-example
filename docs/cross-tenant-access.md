@@ -12,7 +12,7 @@
    | --- | --- |
    | Exchange | Mailbox-scoped `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` through [Exchange application RBAC](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), **not tenant-wide Graph mail/calendar permissions** |
    | Teams | [Managed-identity bots](../synthetic-tests/teams/README.md#primary-setup-unattended-bot), installed Teams app and separate Entra readback registration with team-scoped RSC and worker-UAMI federation; meeting access requires separate application-permission approval |
-   | OneDrive | [Selected folder write grants and AppFolder](../synthetic-tests/onedrive/README.md#primary-setup), with real approved drive/folder IDs; no broad file-permission fallback |
+   | OneDrive | [Bulk Selected-folder setup](./onedrive-setup.md) with a separate approved provisioning identity; saves real drive/folder IDs and scoped worker write grants. Approve AppFolder separately; no broad runtime file-permission fallback |
    | Provider context | Optional `ServiceHealth.Read.All` and provider-app federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
    | Health reports | The foundation grants each Azure identity ingest-only access on its own service model |
 

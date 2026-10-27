@@ -23,7 +23,8 @@ const project = () => ({
   healthModel: { ...checkedIn.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
   services: {
     exchange: { ...structuredClone(checkedIn.services.exchange), scenarios: {
-      "send-receive-mail": true, "edit-reopen-draft": false, "attachment-reply-mail": false,
+      "send-receive-mail": true, "edit-reopen-draft": false, "attachment-mail": false,
+      "reply-mail": false,
       "distribution-list-mail": false, "recurring-calendar": false, "meeting-invitation": false,
     } },
     teams: {

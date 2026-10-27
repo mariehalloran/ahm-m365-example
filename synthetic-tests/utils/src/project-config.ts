@@ -1,12 +1,23 @@
-import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
-import { ConfigurationError } from "./config.js";
-import { probeSchema } from "./contracts.js";
+import { ConfigurationError, readConfigJson } from "./config.js";
+import { probeServices } from "./contracts.js";
 import { executionLanes } from "./execution-lanes.js";
-import { parseServiceConfig, readServiceConfig, type ServiceConfig, type ServiceFileConfig } from "./service-config.js";
+import {
+  parseServiceConfig, readServiceConfig, serviceTargetSchemas, teamsCallTargetsSchema,
+  type ServiceConfig, type ServiceFileConfig,
+} from "./service-config.js";
 
-const target = probeSchema.pick({ id: true, region: true, scenario: true });
+type ServiceJourney<S extends ServiceConfig["type"]> =
+  Extract<(typeof probeServices)[keyof typeof probeServices], { service: S }>["journey"];
+function scenarioSelection<S extends ServiceConfig["type"]>(service: S) {
+  const shape = Object.fromEntries(Object.values(probeServices)
+    .filter(journey => journey.service === service)
+    .map(journey => [journey.journey, z.boolean().default(true)])) as {
+      [Journey in ServiceJourney<S>]: z.ZodDefault<z.ZodBoolean>;
+    };
+  return z.object(shape).strict();
+}
 const selection = {
   enabled: z.boolean().default(true),
   configFile: z.string().trim().min(1),
@@ -16,6 +27,10 @@ export const projectConfigSchema = z.object({
   otel: z.object({
     enabled: z.boolean().default(false),
     destination: z.enum(["console", "azure-monitor"]).default("console"),
+  }).strict().default({}),
+  serviceHealth: z.object({
+    enabled: z.boolean().default(false),
+    $comment: z.string().optional(),
   }).strict().default({}),
   healthModel: z.object({
     name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,31}[a-zA-Z0-9]$/),
@@ -38,44 +53,19 @@ export const projectConfigSchema = z.object({
   services: z.object({
     exchange: z.object({
       ...selection,
-      scenarios: z.object({
-        "send-receive-mail": z.boolean().default(true), "edit-reopen-draft": z.boolean().default(true),
-        "attachment-reply-mail": z.boolean().default(true), "distribution-list-mail": z.boolean().default(true),
-        "recurring-calendar": z.boolean().default(true), "meeting-invitation": z.boolean().default(true),
-      }).strict(),
-      targets: z.array(target.extend({
-        mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
-        distributionList: probeSchema.shape.distributionList,
-      }).strict()).max(30),
+      scenarios: scenarioSelection("exchange"),
+      targets: serviceTargetSchemas.exchange,
     }).strict(),
     teams: z.object({
       ...selection,
-      scenarios: z.object({
-        "channel-conversation": z.boolean().default(true),
-        "scheduled-meeting": z.boolean().default(true),
-      }).strict(),
-      targets: z.array(target.extend({
-        tenantId: probeSchema.shape.tenantId, teamId: probeSchema.shape.teamId,
-        channelId: probeSchema.shape.channelId, serviceUrl: probeSchema.shape.serviceUrl,
-      }).strict()).max(30),
-      callTargets: z.array(target.extend({
-        tenantId: z.string().uuid(),
-        meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
-        organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
-      }).strict()).max(30).default([]),
+      scenarios: scenarioSelection("teams"),
+      targets: serviceTargetSchemas.teams,
+      callTargets: teamsCallTargetsSchema,
     }).strict(),
     onedrive: z.object({
       ...selection,
-      scenarios: z.object({
-        "user-drive-roundtrip": z.boolean().default(true),
-        "app-folder-lifecycle": z.boolean().default(true),
-        "document-versions": z.boolean().default(true),
-      }).strict(),
-      targets: z.array(target.extend({
-        userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
-        driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
-        folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
-      }).strict()).max(30),
+      scenarios: scenarioSelection("onedrive"),
+      targets: serviceTargetSchemas.onedrive,
     }).strict(),
   }).strict(),
 }).strict();
@@ -84,6 +74,9 @@ export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 export function parseProjectConfig(raw: unknown): ProjectConfig {
   const parsed = projectConfigSchema.safeParse(raw);
   if (!parsed.success) {
+    if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("attachment-reply-mail"))) {
+      throw new ConfigurationError("Obsolete attachment-reply-mail: select attachment-mail and reply-mail separately, then provision root-owned replySeed bindings");
+    }
     if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("callUserId"))) {
       throw new ConfigurationError("Obsolete callUserId: use dedicated meetingThreadId, organizerUserId owner metadata and peerBotClientId; no human-calling compatibility path");
     }
@@ -127,13 +120,7 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
 }
 
 export async function readProjectConfig(file: string): Promise<ProjectConfig> {
-  let text: string;
-  try { text = await readFile(file, "utf8"); }
-  catch { throw new ConfigurationError("Cannot read the project config file"); }
-  let raw: unknown;
-  try { raw = JSON.parse(text); }
-  catch { throw new ConfigurationError("Project config must contain a valid JSON object"); }
-  return parseProjectConfig(raw);
+  return parseProjectConfig(await readConfigJson(file, "project"));
 }
 
 export function applyProjectConfig(project: ProjectConfig, service: ServiceFileConfig): ServiceConfig {
@@ -143,11 +130,22 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceFileC
     if (project.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
-    const cycleBudgetSeconds = project.otel.enabled ? 224 : 212;
-    const longestInterval = Math.max(...executionLanes(service)
-      .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]))
-      .map(lane => lane.intervalSeconds));
-    const providerBudget = service.serviceHealth || service.serviceActivity.enabled
+    // Allow 12 seconds for cleanup, 30 for reports, and optionally 12 for OTEL.
+    const cycleBudgetSeconds = service.cycleTimeoutSeconds + (project.otel.enabled ? 54 : 42);
+    const lanes = executionLanes(service)
+      .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]));
+    if (service.type === "onedrive") {
+      for (const lane of lanes) {
+        const journeys = lane.journeys.filter(journey => (selected.scenarios as Record<string, boolean>)[journey]).length;
+        const attempts = selected.targets.length * journeys;
+        const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + 12);
+        if (service.cycleTimeoutSeconds < required) {
+          throw new ConfigurationError(`OneDrive lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase the budget/concurrency or reduce the cohort`);
+        }
+      }
+    }
+    const longestInterval = Math.max(...lanes.map(lane => lane.intervalSeconds));
+    const providerBudget = project.serviceHealth.enabled && (service.serviceHealth || service.serviceActivity.enabled)
       ? service.providerIntervalSeconds + (project.otel.enabled ? 72 : 60) : 0;
     if (project.healthModel.reportTtlMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
       throw new ConfigurationError(`Health report TTL must exceed the service cadence plus the bounded cycle/report budget (${cycleBudgetSeconds} seconds)`);
@@ -155,6 +153,8 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceFileC
   }
   return parseServiceConfig({
     ...service, enabled, targets: selected.targets,
+    serviceHealth: project.serviceHealth.enabled && service.serviceHealth,
+    serviceActivity: { ...service.serviceActivity, enabled: project.serviceHealth.enabled && service.serviceActivity.enabled },
     ...(service.type === "teams" ? { callTargets: project.services.teams.callTargets } : {}),
   });
 }

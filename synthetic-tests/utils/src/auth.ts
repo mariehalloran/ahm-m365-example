@@ -51,7 +51,7 @@ export function createHealthReportCredential(
 export function createLiveGraphClient(
   env: NodeJS.ProcessEnv = process.env, authentication: ServiceConfig["graphAuthentication"] = "managed-identity",
 ): GraphClient {
-  return new GraphClient(new AuthenticatedHttp(createServiceCredential(env, authentication), "https://graph.microsoft.com/.default"));
+  return new GraphClient(createServiceCredential(env, authentication));
 }
 
 export function createFederatedGraphClient(env: NodeJS.ProcessEnv, clientId: string): GraphClient {
@@ -65,7 +65,7 @@ export function createFederatedGraphClient(env: NodeJS.ProcessEnv, clientId: str
     if (!assertion) throw new IntegrationError("authentication-failure");
     return assertion.token;
   });
-  return new GraphClient(new AuthenticatedHttp(credential, "https://graph.microsoft.com/.default"));
+  return new GraphClient(credential);
 }
 
 export function createTeamsReadbackGraph(env: NodeJS.ProcessEnv, clientId: string): GraphClient {
@@ -136,5 +136,5 @@ export function createTeamsCallingGraph(config: Config, env: NodeJS.ProcessEnv =
     throw new ConfigurationError("Teams meeting targets, peer bot and tenants must match their explicit environment allowlist");
   }
   const clientId = peer ? parsed.data.TEAMS_CALLING_PEER_CLIENT_ID : parsed.data.BOT_CLIENT_ID;
-  return new GraphClient(new AuthenticatedHttp(new ManagedIdentityCredential({ clientId }), teamsCallingScope));
+  return new GraphClient(new ManagedIdentityCredential({ clientId }));
 }

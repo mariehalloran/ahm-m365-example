@@ -11,6 +11,11 @@ OneDrive reuses the environment/registry and receives its own
 It adds no bot, user sign-in, storage account or M365 grants. Its optional stable
 provider uses the distinct Microsoft OneDrive service entry, not SharePoint.
 See the [OneDrive setup and exact permission boundary](../onedrive/README.md).
+After foundation deployment creates its identity, run
+[bulk OneDrive setup](../../docs/onedrive-setup.md) before generating live worker
+parameters. For hundreds of accounts, size the service concurrency/cycle budget
+and root report TTL; neither additional replicas nor the default deadline solve
+queued-account capacity.
 
 The foundation creates the registry, environment, identities and narrowly scoped
 image-pull/report-ingestion roles. It creates no Microsoft 365 resources, bot
@@ -191,9 +196,11 @@ credential rotation and restricted secret-reading/application-modification acces
   cross-cycle journey history or durable outbox.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
-rollup, not just successful ARM provisioning. The checked-in root selects eleven
-active journeys and 47 active business steps across four models, 68 entities and
-64 relationships. There is no proposal catalog. Provider context
+rollup, not just successful ARM provisioning. The checked-in root selects twelve
+active journeys and 46 active business steps, plus Exchange's Mail and Calendar
+parents, across four models, 67 entities and 63 relationships by default;
+enabling Service Health adds three entities and
+relationships. There is no proposal catalog. Provider context
 is separate and impact-suppressed. Invalid schemas or unusable report credentials
 can prevent publication and require independent detection.
 

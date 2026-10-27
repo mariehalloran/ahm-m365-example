@@ -11,19 +11,21 @@ const project = await readProjectConfig("../monitoring.config.json");
 const { service } = await readProjectService("teams", "../monitoring.config.json");
 
 describe("root-selected two-bot meetings alongside existing messaging", () => {
-  it("gates intentional answered playback and rejects obsolete wait/ringing settings", () => {
+  it("configures meeting establishment and rejects retired wait/ringing/playback settings", () => {
     const file = {
       type: "teams", intervalSeconds: 120, timeoutSeconds: 45, mode: "simulation", cohort: "teams-global",
     };
     expect(parseServiceFileConfig(file)).toMatchObject({
-      teamsCallingPlaybackEnabled: false, teamsCallingAnswerTimeoutSeconds: 20, teamsCallingPlaybackTimeoutSeconds: 10,
+      teamsCallingAnswerTimeoutSeconds: 20,
     });
     expect(() => parseServiceFileConfig({ ...file, teamsCallingWaitSeconds: 5 })).toThrow("Invalid service config");
     expect(() => parseServiceFileConfig({ ...file, teamsCallingRingSeconds: 10 })).toThrow("Invalid service config");
+    expect(() => parseServiceFileConfig({ ...file, teamsCallingPlaybackEnabled: true })).toThrow("Invalid service config");
+    expect(() => parseServiceFileConfig({ ...file, teamsCallingPlaybackTimeoutSeconds: 10 })).toThrow("Invalid service config");
     expect(() => parseServiceFileConfig({ ...file, teamsCallingAnswerTimeoutSeconds: 0 })).toThrow("teamsCallingAnswerTimeoutSeconds");
   });
 
-  it("publishes hang-up success separately from failed answer and unexecuted playback", () => {
+  it("publishes hang-up success separately from failed answer and unexecuted meeting verification", () => {
     const probe = serviceProbes(service, project.services.teams.scenarios).find(probe => probe.type === "teams-call")!;
     const result = baseResult(probe, Date.now());
     result.diagnosticCategory = "read-failure";
@@ -31,7 +33,8 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     result.steps = [
       { name: "place-call", status: "succeeded", durationMs: 100, observedAt },
       { name: "wait-for-answer", status: "failed", durationMs: 2000, diagnosticCategory: "delivery-timeout", observedAt },
-      { name: "play-audio", status: "skipped", reason: "prerequisite-failed", observedAt },
+      { name: "verify-meeting-metadata", status: "skipped", reason: "prerequisite-failed", observedAt },
+      { name: "verify-participants", status: "skipped", reason: "prerequisite-failed", observedAt },
       { name: "end-call", status: "succeeded", durationMs: 100, observedAt },
     ];
     const reports = aggregateHealthReports("teams", { cycleId: "failed-wait-ended-call", results: [result] }, project.healthModel);
@@ -39,7 +42,8 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
       report.entityName === entity && report.body.signalName === "synthetic-success-percentage")?.body;
     expect(success("teams-call")).toMatchObject({ healthState: "Unhealthy", value: 0 });
     expect(success("teams-call-wait-for-answer")).toMatchObject({ healthState: "Unhealthy", value: 0 });
-    expect(success("teams-call-play-audio")).toMatchObject({ healthState: "Unknown" });
+    expect(success("teams-call-verify-meeting-metadata")).toMatchObject({ healthState: "Unknown" });
+    expect(success("teams-call-verify-participants")).toMatchObject({ healthState: "Unknown" });
     expect(success("teams-call-end-call")).toMatchObject({ healthState: "Healthy", value: 100 });
   });
   it("keeps one channel-based journey and one dedicated meeting without channel metadata on calls", () => {
@@ -76,7 +80,7 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     expect(results.record).toHaveBeenCalledTimes(2);
   });
 
-  it("aggregates binary user attempts and executed actions into seven shared call entities", async () => {
+  it("aggregates binary user attempts and executed actions into six shared call entities", async () => {
     const config = serviceSettings(service, {}, project.services.teams.scenarios);
     const seed = config.probes.find(probe => probe.type === "teams-call")!;
     const probes = Array.from({ length: 3 }, (_, index) => ({ ...seed, id: `meeting-${index}`,
@@ -88,10 +92,10 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     const failed = baseResult(probes[2]!, Date.now());
     failed.diagnosticCategory = "authentication-failure";
     const reports = aggregateHealthReports("teams", { cycleId: "test-cycle", results: [...successes, failed] }, project.healthModel);
-    expect(reports).toHaveLength(20);
+    expect(reports).toHaveLength(16);
     expect(new Set(reports.map(report => report.entityName))).toEqual(new Set([
       "teams-call", "teams-call-place-call", "teams-call-wait-for-answer", "teams-call-verify-meeting-metadata",
-      "teams-call-verify-participants", "teams-call-play-audio", "teams-call-end-call",
+      "teams-call-verify-participants", "teams-call-end-call",
     ]));
     expect(reports.find(report => report.entityName === "teams-call" && report.body.signalName === "synthetic-success-percentage")?.body.value)
       .toBeCloseTo(200 / 3);
@@ -102,16 +106,16 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
       expect(JSON.stringify(reports)).not.toContain(target.organizerUserId);
     }
   });
-  it("requires explicit live playback approval and feasible bounded answer/playback budgets", () => {
+  it("allows live meeting verification without playback approval and requires a feasible answer budget", () => {
     const call = serviceProbes(service, project.services.teams.scenarios).find(probe => probe.type === "teams-call")!;
     const env = {
       EXECUTION_MODE: "live", ENABLE_LIVE_M365: "true", PROBES_JSON: JSON.stringify([call]),
       TEAMS_CALLING_CALLBACK_URL: "https://approved.example.invalid/api/calls", PROBE_TIMEOUT_MS: "45000",
       BOT_CLIENT_ID: "66666666-6666-4666-8666-666666666666", TEAMS_CALLING_PEER_CLIENT_ID: call.peerBotClientId,
     };
-    expect(() => loadConfig(env)).toThrow("PLAYBACK_ENABLED");
-    expect(loadConfig({ ...env, TEAMS_CALLING_PLAYBACK_ENABLED: "true" }).PROBE_TIMEOUT_MS).toBe(45000);
-    expect(() => loadConfig({ ...env, TEAMS_CALLING_PLAYBACK_ENABLED: "true", PROBE_TIMEOUT_MS: "30000" })).toThrow("budgets");
+    expect(loadConfig(env).PROBE_TIMEOUT_MS).toBe(45000);
+    expect(loadConfig({ ...env, PROBE_TIMEOUT_MS: "25000" }).PROBE_TIMEOUT_MS).toBe(25000);
+    expect(() => loadConfig({ ...env, PROBE_TIMEOUT_MS: "24000" })).toThrow("answer budget");
     expect(() => loadConfig({ ...env, TEAMS_CALLING_WAIT_SECONDS: "10" })).toThrow("Obsolete");
   });
 
@@ -146,7 +150,7 @@ describe("root-selected two-bot meetings alongside existing messaging", () => {
     const call = serviceProbes(service, project.services.teams.scenarios).find(probe => probe.type === "teams-call")!;
     expect(() => loadConfig({
       EXECUTION_MODE: "live", ENABLE_LIVE_M365: "true", PROBES_JSON: JSON.stringify([call]),
-      TEAMS_CALLING_PLAYBACK_ENABLED: "true", TEAMS_CALLING_CALLBACK_URL: "https://approved.example.invalid/api/calls",
+      TEAMS_CALLING_CALLBACK_URL: "https://approved.example.invalid/api/calls",
       BOT_CLIENT_ID: "66666666-6666-4666-8666-666666666666", TEAMS_CALLING_PEER_CLIENT_ID: call.peerBotClientId,
       ...overrides,
     })).toThrow("BOT_AUTHENTICATION" in overrides ? "BOT_AUTHENTICATION" : "two distinct explicit managed identities");

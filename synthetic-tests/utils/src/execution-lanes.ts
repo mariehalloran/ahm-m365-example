@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { probeServices, testTypes, type Telemetry } from "./contracts.js";
+import { maxExchangeJourneyMilliseconds, probeServices, testTypes, type Telemetry } from "./contracts.js";
 import type { ServiceConfig } from "./service-config.js";
 
 export interface ExecutionLane {
@@ -10,11 +10,16 @@ export interface ExecutionLane {
 }
 
 export function executionLanes(service: Pick<ServiceConfig, "type" | "intervalSeconds" | "timeoutSeconds" | "executionLanes">): ExecutionLane[] {
-  if (service.executionLanes) return service.executionLanes;
+  const timeoutSeconds = service.type === "exchange"
+    ? Math.min(service.timeoutSeconds, maxExchangeJourneyMilliseconds / 1000) : service.timeoutSeconds;
+  if (service.executionLanes) return service.type === "exchange"
+    ? service.executionLanes.map(lane => ({
+      ...lane, timeoutSeconds: Math.min(lane.timeoutSeconds, maxExchangeJourneyMilliseconds / 1000),
+    })) : service.executionLanes;
   const journeys = testTypes.filter(type => probeServices[type].service === service.type).map(type => probeServices[type].journey);
   if (service.type === "exchange") return [
-    { name: "mail", intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys: ["send-receive-mail"] },
-    { name: "extended", intervalSeconds: 300, timeoutSeconds: service.timeoutSeconds, journeys: journeys.filter(name => name !== "send-receive-mail") },
+    { name: "mail", intervalSeconds: service.intervalSeconds, timeoutSeconds, journeys: ["send-receive-mail"] },
+    { name: "extended", intervalSeconds: 300, timeoutSeconds, journeys: journeys.filter(name => name !== "send-receive-mail") },
   ];
   return [{ name: service.type, intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys }];
 }

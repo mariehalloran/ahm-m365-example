@@ -1,8 +1,64 @@
+import type { TokenCredential } from "@azure/identity";
+import { AuthenticationHandler, Client, ResponseType, type GraphRequest, type Middleware } from "@microsoft/microsoft-graph-client";
+import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js";
 import { z } from "zod";
-import { AuthenticatedHttp, IntegrationError } from "./http.js";
+import { IntegrationError, requestWithRetry, withAbort, type HttpOptions } from "./http.js";
 
-export const graphBase = "https://graph.microsoft.com/v1.0";
+const graphOrigin = "https://graph.microsoft.com";
+const graphScope = `${graphOrigin}/.default`;
+export const graphBase = `${graphOrigin}/v1.0`;
 export type GraphApiVersion = "v1.0" | "beta";
+
+export interface GraphOptions extends HttpOptions {
+  downloadFetch?: typeof fetch;
+}
+
+function requestUrl(path: string, version: GraphApiVersion): URL {
+  if (!["v1.0", "beta"].includes(version) || !path.startsWith("/") || path.startsWith("//") ||
+      path.includes("\\") || /[\u0000-\u001f\u007f#]/.test(path)) {
+    throw new IntegrationError("collector-failure");
+  }
+  const url = new URL(`${graphOrigin}/${version}${path}`);
+  if (url.pathname !== `/${version}${path.split("?")[0]}`) throw new IntegrationError("collector-failure");
+  return url;
+}
+
+async function readBody(response: Response, maxBytes: number, signal: AbortSignal, category: "malformed-response" | "read-failure"): Promise<Buffer> {
+  if (!response.body) throw new IntegrationError(category);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let finished = false;
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new IntegrationError(category);
+    while (true) {
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) { finished = true; break; }
+      size += chunk.value.byteLength;
+      if (size > maxBytes) throw new IntegrationError(category);
+      chunks.push(chunk.value);
+    }
+    return Buffer.concat(chunks);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    if (!finished) cancel();
+    reader.releaseLock();
+  }
+}
+
+function send(request: GraphRequest, method: string, content: string | undefined): Promise<Response> {
+  switch (method) {
+    case "POST": return request.post(content);
+    case "PUT": return request.put(content);
+    case "PATCH": return request.patch(content);
+    case "DELETE": return request.options(content === undefined ? {} : { body: content }).delete();
+    default: return request.options({ method, ...(content === undefined ? {} : { body: content }) }).get();
+  }
+}
 
 export function graphNextPagePath(nextLink: string, collectionPath: string, version: GraphApiVersion = "v1.0"): string {
   let url: URL;
@@ -11,7 +67,8 @@ export function graphNextPagePath(nextLink: string, collectionPath: string, vers
   } catch {
     throw new IntegrationError("read-failure");
   }
-  if (url.origin !== "https://graph.microsoft.com" ||
+  if (!["v1.0", "beta"].includes(version) || /[\u0000-\u0020\u007f\\]/.test(nextLink) ||
+      url.origin !== graphOrigin ||
       url.pathname !== `/${version}${collectionPath}` ||
       url.username || url.password || url.hash) {
     throw new IntegrationError("read-failure");
@@ -20,56 +77,99 @@ export function graphNextPagePath(nextLink: string, collectionPath: string, vers
 }
 
 export class GraphClient {
-  constructor(private readonly http: AuthenticatedHttp, private readonly downloadFetch: typeof fetch = fetch) {}
-  async authenticate(signal: AbortSignal): Promise<void> { await this.http.token(signal); }
+  private readonly downloadFetch: typeof fetch;
+
+  constructor(private readonly credential: TokenCredential, private readonly options: GraphOptions = {}) {
+    this.downloadFetch = options.downloadFetch ?? fetch;
+  }
+
+  private deadline(signal: AbortSignal): AbortSignal {
+    return AbortSignal.any([signal, AbortSignal.timeout(this.options.timeoutMs ?? 15000)]);
+  }
+
+  private authenticationProvider(signal: AbortSignal): TokenCredentialAuthenticationProvider {
+    return new TokenCredentialAuthenticationProvider(this.credential, {
+      scopes: [graphScope], getTokenOptions: { abortSignal: signal },
+    });
+  }
+
+  async authenticate(signal: AbortSignal): Promise<void> {
+    const bounded = this.deadline(signal);
+    try { await withAbort(bounded, () => this.authenticationProvider(bounded).getAccessToken()); }
+    catch {
+      bounded.throwIfAborted();
+      throw new IntegrationError("authentication-failure");
+    }
+  }
+
   async request(path: string, signal: AbortSignal, method = "GET", body?: unknown, retrySafe = true, version: GraphApiVersion = "v1.0"): Promise<Response> {
-    if (!["v1.0", "beta"].includes(version) || !path.startsWith("/") || path.startsWith("//") ||
-        path.includes("\\") || /[\r\n#]/.test(path)) throw new IntegrationError("collector-failure");
-    const response = await this.http.request(`https://graph.microsoft.com/${version}${path}`, {
-      method, redirect: "error",
-      headers: { "Content-Type": "application/json", Prefer: 'IdType="ImmutableId"' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }, signal, retrySafe);
-    if (response.status === 404 && method !== "DELETE") throw new IntegrationError("read-failure", 404);
+    return this.execute(path, this.deadline(signal), method, body, retrySafe, version, "error");
+  }
+
+  private async execute(
+    path: string, signal: AbortSignal, method: string, body: unknown, retrySafe: boolean,
+    version: GraphApiVersion, redirect: "error" | "manual",
+  ): Promise<Response> {
+    const url = requestUrl(path, version);
+    signal.throwIfAborted();
+    let content: string | undefined;
+    try { content = body === undefined ? undefined : JSON.stringify(body); }
+    catch { throw new IntegrationError("collector-failure"); }
+    let transportFailure: IntegrationError | undefined;
+    const transport: Middleware = {
+      execute: async context => {
+        try {
+          const target = new URL(typeof context.request === "string" ? context.request : context.request.url);
+          if (target.origin !== url.origin || target.pathname !== url.pathname) throw new IntegrationError("collector-failure");
+          context.response = await requestWithRetry(context.request, { ...context.options, redirect }, signal, retrySafe, this.options);
+        } catch (error) {
+          transportFailure = error instanceof IntegrationError ? error : new IntegrationError("collector-failure");
+          throw error;
+        }
+      },
+    };
+    // Exclude SDK retry/redirect middleware: Graph and ARM/Bot share one
+    // abortable retry policy, and authenticated redirects must never be followed.
+    const sdk = Client.initWithMiddleware({
+      middleware: [new AuthenticationHandler(this.authenticationProvider(signal)), transport],
+    });
+    const request = sdk.api(url.href).responseType(ResponseType.RAW)
+      .headers({ "Content-Type": "application/json", Prefer: 'IdType="ImmutableId"' });
+    let response: Response;
+    try { response = await withAbort(signal, () => send(request, method, content)); }
+    catch {
+      signal.throwIfAborted();
+      throw transportFailure ?? new IntegrationError("authentication-failure");
+    }
+    signal.throwIfAborted();
+    if (response.status === 404 && method !== "DELETE") {
+      await withAbort(signal, async () => { await response.body?.cancel(); });
+      throw new IntegrationError("read-failure", 404);
+    }
     return response;
   }
-  async json<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, method = "GET", body?: unknown, retrySafe = true, version: GraphApiVersion = "v1.0", maxResponseBytes?: number): Promise<T> {
-    const response = await this.request(path, signal, method, body, retrySafe, version);
+
+  async json<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, signal: AbortSignal, method = "GET", body?: unknown, retrySafe = true, version: GraphApiVersion = "v1.0", maxResponseBytes?: number): Promise<T> {
+    const bounded = this.deadline(signal);
+    const response = await this.execute(path, bounded, method, body, retrySafe, version, "error");
     let raw: unknown;
     try {
-      if (maxResponseBytes === undefined) raw = await response.json();
-      else {
-        if (!response.body) throw new IntegrationError("malformed-response");
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let size = 0;
-        try {
-          while (true) {
-            signal.throwIfAborted();
-            const chunk = await reader.read();
-            if (chunk.done) break;
-            size += chunk.value.byteLength;
-            if (size > maxResponseBytes) {
-              await reader.cancel();
-              throw new IntegrationError("malformed-response");
-            }
-            chunks.push(chunk.value);
-          }
-        } finally { reader.releaseLock(); }
-        raw = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      }
+      raw = JSON.parse((await readBody(response, maxResponseBytes ?? 2 * 1024 * 1024, bounded, "malformed-response")).toString("utf8"));
+    } catch {
+      bounded.throwIfAborted();
+      throw new IntegrationError("malformed-response");
     }
-    catch { throw new IntegrationError("malformed-response"); }
     const parsed = schema.safeParse(raw);
+    bounded.throwIfAborted();
     if (!parsed.success) throw new IntegrationError("malformed-response");
     return parsed.data;
   }
+
   async downloadContent(path: string, signal: AbortSignal): Promise<Buffer> {
-    if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /[\r\n#]/.test(path)) {
-      throw new IntegrationError("collector-failure");
-    }
-    const response = await this.http.request(`${graphBase}${path}`, { method: "GET", redirect: "manual" }, signal);
+    const graphSignal = this.deadline(signal);
+    const response = await this.execute(path, graphSignal, "GET", undefined, true, "v1.0", "manual");
     const location = response.headers.get("location");
+    await withAbort(graphSignal, async () => { await response.body?.cancel(); });
     if (response.status !== 302 || !location) throw new IntegrationError("read-failure");
     let url: URL;
     try {
@@ -81,27 +181,12 @@ export class GraphClient {
         ![".sharepoint.com", ".sharepointonline.com"].some(suffix => url.hostname.endsWith(suffix))) {
       throw new IntegrationError("read-failure");
     }
-    const download = await this.downloadFetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]), redirect: "error" });
+    const bounded = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
+    const download = await withAbort(bounded, () => this.downloadFetch(url, { signal: bounded, redirect: "error" }));
     if (!download.ok || !download.body) {
+      await withAbort(bounded, async () => { await download.body?.cancel(); });
       throw new IntegrationError("read-failure");
     }
-    const reader = download.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let receivedBytes = 0;
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        receivedBytes += chunk.value.byteLength;
-        if (receivedBytes > 4096) {
-          await reader.cancel();
-          throw new IntegrationError("read-failure");
-        }
-        chunks.push(chunk.value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    return Buffer.concat(chunks);
+    return readBody(download, 4096, bounded, "read-failure");
   }
 }

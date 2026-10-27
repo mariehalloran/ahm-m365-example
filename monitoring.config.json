@@ -1,6 +1,10 @@
 {
   "schemaVersion": "1.0",
   "otel": { "enabled": false, "destination": "console" },
+  "serviceHealth": {
+    "$comment": "Optional provider context; omitted or disabled means no entity or collection. Stable health needs ServiceHealth.Read.All. Beta activity also needs service permissions and tenant eligibility. Related Microsoft 365 monitoring requires 5,000 qualifying E3/E5 licenses and 50 monthly active users; confirm beta API eligibility with Microsoft. These minimums do not apply to stable Service Health.",
+    "enabled": false
+  },
   "healthModel": {
     "name": "m365-experience-poc",
     "subscriptionId": "00000000-0000-0000-0000-000000000000",
@@ -18,7 +22,8 @@
       "configFile": "synthetic-tests/exchange/config.json",
       "scenarios": {
         "send-receive-mail": true, "edit-reopen-draft": true,
-        "attachment-reply-mail": true, "distribution-list-mail": true,
+        "attachment-mail": true, "reply-mail": true,
+        "distribution-list-mail": true,
         "recurring-calendar": true, "meeting-invitation": true
       },
       "targets": [

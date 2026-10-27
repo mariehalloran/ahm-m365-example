@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { callingAuthenticationDiagnostic, callingDiscoveryUrl, callingKeysUrl, createTeamsCallingVerifier } from "../../utils/src/teams-calling-auth.js";
 import { startTeamsCallingCallback } from "../../utils/src/teams-calling-callback.js";
-import { TeamsCallOperations } from "../../utils/src/teams-call-operations.js";
 
 const clientId = "11111111-1111-4111-8111-111111111111";
 const tenantId = "22222222-2222-4222-8222-222222222222";
@@ -35,41 +34,27 @@ async function fixture() {
 }
 
 describe("canonical Microsoft communications callback JWT verification", () => {
-  it("binds both real signed HTTP callback audiences to their own independently correlated operations", async () => {
+  it("authenticates real signed call notifications for both explicitly selected bot audiences", async () => {
     const { verify } = await fixture();
-    const store = new TeamsCallOperations();
-    const clientContext = "55555555-5555-4555-8555-555555555555";
-    const peerContext = "66666666-6666-4666-8666-666666666666";
-    const pending = store.register("owned-call", clientContext, 10000, clientId);
-    pending.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "owned-operation", status: "running", clientContext });
-    const peer = store.register("peer-call", peerContext, 10000, peerClientId);
-    peer.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "peer-operation", status: "running", clientContext: peerContext });
-    const listener = vi.fn((body: unknown, identity: { botClientId: string }) => store.accept(body, identity));
+    const listener = vi.fn();
     const server = await startTeamsCallingCallback({ port: 0, host: "127.0.0.1", verify, onNotification: listener });
     try {
-      const post = async (aud: string, peerLeg = false) => {
-        const resource = peerLeg ? "/communications/calls/peer-call/operations/peer-operation"
-          : "/communications/calls/owned-call/operations/owned-operation";
+      const post = async (aud: string) => {
         return fetch(`http://127.0.0.1:${server.port}/api/calls`, {
           method: "POST", headers: { Authorization: `Bearer ${await token({ aud })}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ value: [{ changeType: "deleted", resourceUrl: resource, resourceData: {
-            "@odata.type": "#microsoft.graph.playPromptOperation", "@odata.id": resource, status: "completed",
-            clientContext: peerLeg ? peerContext : clientContext,
+          body: JSON.stringify({ value: [{ changeType: "updated", resourceUrl: "/communications/calls/owned-call", resourceData: {
+            "@odata.type": "#microsoft.graph.call", id: "owned-call", state: "established",
           } }] }),
         });
       };
       expect((await post(tenantId)).status).toBe(401);
       expect(listener).not.toHaveBeenCalled();
-      expect((await post(peerClientId)).status).toBe(200);
-      expect((await post(clientId, true)).status).toBe(200);
-      expect(pending.observation()).toBeUndefined();
-      expect(peer.observation()).toBeUndefined();
       expect((await post(clientId)).status).toBe(200);
-      expect(pending.observation()?.status).toBe("completed");
-      expect(peer.observation()).toBeUndefined();
-      expect((await post(peerClientId, true)).status).toBe(200);
-      expect(peer.observation()?.status).toBe("completed");
-    } finally { store.shutdown(); await server.shutdown(); }
+      expect(listener).toHaveBeenLastCalledWith(expect.anything(), { botClientId: clientId });
+      expect((await post(peerClientId)).status).toBe(200);
+      expect(listener).toHaveBeenLastCalledWith(expect.anything(), { botClientId: peerClientId });
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally { await server.shutdown(); }
   });
   it("accepts only either explicit bot's verified signed audience, never an audience array or forged peer", async () => {
     const { verify } = await fixture();

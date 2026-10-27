@@ -3,7 +3,6 @@ import { probeServices, type Probe, type Scenario, type StepName, type Synthetic
 import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
 import { IntegrationError } from "./http.js";
-import type { TeamsCallOperations } from "./teams-call-operations.js";
 
 export interface ProbeContext {
   config: {
@@ -13,9 +12,7 @@ export interface ProbeContext {
     TEAMS_CLEANUP_ENABLED?: "true" | "false";
     EXCHANGE_CLEANUP_ENABLED?: "true" | "false";
     TEAMS_CALLING_CALLBACK_URL?: string | undefined;
-    TEAMS_CALLING_PLAYBACK_ENABLED?: "true" | "false";
     TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS?: number;
-    TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS?: number;
     BOT_CLIENT_ID?: string | undefined;
     TEAMS_CALLING_PEER_CLIENT_ID?: string | undefined;
   };
@@ -24,7 +21,6 @@ export interface ProbeContext {
   teamsBot?: TeamsBotClient;
   teamsCalling?: GraphClient;
   teamsCallingPeer?: GraphClient;
-  teamsCallOperations?: TeamsCallOperations;
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -75,14 +71,14 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   }
   const failureSteps = {
     "exchange-mail-flow": "send", "exchange-draft": "update-draft",
-    "exchange-attachment-reply": "send-attachment", "exchange-distribution-list": "send-group-mail",
+    "exchange-attachment": "send-attachment", "exchange-reply": "reply-mail", "exchange-distribution-list": "send-group-mail",
     "exchange-recurring-calendar": "update-event", "exchange-meeting": "accept-meeting",
     "teams-channel-message": "post-message", "teams-call": "place-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
-    "exchange-attachment-reply": "confirm-reply-mail", "exchange-distribution-list": "confirm-group-delivery",
+    "exchange-attachment": "verify-attachment", "exchange-reply": "confirm-reply-mail", "exchange-distribution-list": "confirm-group-delivery",
     "exchange-recurring-calendar": "verify-event", "exchange-meeting": "confirm-acceptance",
     "teams-channel-message": "confirm-reply", "teams-call": "end-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",

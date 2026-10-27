@@ -13,16 +13,22 @@ Source tests do not establish successful live access or ingestion; see
 
 ## Primary setup
 
-1. Provision each approved user's OneDrive. An administrator creates the dedicated
-   `AHM-Synthetic-Tests` folder and supplies its **real drive ID and folder item ID**.
-   The probe does not discover or mutate the drive root.
-2. Select the service UAMI explicitly through `AZURE_CLIENT_ID`. Approve
-   `Files.SelectedOperations.Selected` with a **write grant on each dedicated
-   folder**, and separately `Files.ReadWrite.AppFolder` for app-folder execution.
-   The worker never grants itself access or requests broader permissions.
-3. Configure selection and account/target metadata only in the private root
-   profile. Point `configFile` at the separate live service file.
-4. Deploy the health model before the worker, set `mode: "live"` and separately
+1. Generate the private root account list from approved, licensed test accounts.
+   Provision their personal OneDrives first; missing personal sites can be queued
+   [in administrator batches](../../docs/onedrive-setup.md#provision-personal-onedrives).
+2. Deploy the health model and worker foundation, then select the service UAMI
+   explicitly through `AZURE_CLIENT_ID`. Approve `Files.SelectedOperations.Selected`
+   and, separately, `Files.ReadWrite.AppFolder` for app-folder execution.
+   Bulk setup grants **write on each dedicated folder**; the worker never grants
+   itself access or requests broader permissions.
+3. Use [`npm run onedrive:setup`](../../docs/onedrive-setup.md) with a separate,
+   approved administrator identity to plan, then apply folder creation and scoped
+   grants for **all configured accounts**. It discovers real drive/folder IDs,
+   checkpoints verified bindings into the same private root profile, and safely
+   resumes partial runs. No manual per-account IDs/grants are required.
+4. Point root `configFile` at the separate service file and
+   [size its concurrency/cycle budget and report TTL](../../docs/onedrive-setup.md#size-the-worker-for-hundreds-of-accounts).
+5. Deploy the updated worker with `mode: "live"` and separately
    `ENABLE_LIVE_M365=true`; verify real operations, cleanup and accepted reports.
 
 Root selection example; placeholders are not live resource IDs:
@@ -40,13 +46,16 @@ Root selection example; placeholders are not live resource IDs:
     "id": "onedrive-probe-001",
     "userId": "11111111-1111-4111-8111-111111111111",
     "userPrincipalName": "dedicated-onedrive@example.invalid",
-    "driveId": "<approved-drive-id>",
-    "folderId": "<dedicated-folder-item-id>",
     "folderName": "AHM-Synthetic-Tests",
     "restoreVersion": false
   }]
 }
 ```
+
+The setup command fills `driveId` and `folderId` after verifying the folder grant.
+It supports up to 1,000 selected accounts; runtime concurrency and cycle budgets
+remain bounded and must be sized deliberately. Setup credentials are not worker
+credentials. The runtime probe does not discover or mutate the drive root.
 
 Missing selected-folder IDs/grants produce actual configuration/permission failure
 evidence, never simulated Healthy results or broad discovery. App-folder execution

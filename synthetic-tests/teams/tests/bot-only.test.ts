@@ -21,7 +21,7 @@ describe("executable bot-only scope", () => {
     });
     expect(probeServices["teams-call"].steps).toEqual([
       "authenticate", "place-call", "wait-for-answer", "verify-meeting-metadata",
-      "verify-participants", "play-audio", "end-call", "cleanup",
+      "verify-participants", "end-call", "cleanup",
     ]);
   });
 
@@ -59,6 +59,7 @@ describe("executable bot-only scope", () => {
     for (const path of [
       "teams/src/audio.ts", "teams/src/card.ts", "teams/src/capabilities.ts", "teams/src/activities.ts",
       "teams/src/files.ts", "teams/src/bootstrap.ts", "utils/src/teams-user.ts", "utils/src/teams-user-auth.ts",
+      "utils/src/teams-call-media.ts",
       "sharepoint/src/worker.ts", "../health-model/infra/planned-catalog.bicep",
     ]) expect(existsSync(path)).toBe(false);
     for (const name of ["conversation", "call"]) {

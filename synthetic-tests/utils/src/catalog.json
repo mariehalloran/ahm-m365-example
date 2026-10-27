@@ -1,0 +1,347 @@
+{
+  "serviceDefinitions": [
+    {
+      "service": "exchange",
+      "displayName": "Exchange Experience",
+      "journeys": [
+        {
+          "name": "send-receive-mail",
+          "entityName": "exchange-global",
+          "displayName": "Send and receive email",
+          "group": {
+            "entityName": "exchange-mail",
+            "displayName": "Mail"
+          },
+          "steps": [
+            {
+              "name": "create-draft",
+              "displayName": "Create email"
+            },
+            {
+              "name": "send",
+              "displayName": "Send email"
+            },
+            {
+              "name": "confirm-delivery",
+              "displayName": "Confirm delivery"
+            }
+          ]
+        },
+        {
+          "name": "edit-reopen-draft",
+          "entityName": "exchange-draft",
+          "displayName": "Save, edit and reopen draft",
+          "group": {
+            "entityName": "exchange-mail",
+            "displayName": "Mail"
+          },
+          "steps": [
+            {
+              "name": "create-draft",
+              "displayName": "Create draft"
+            },
+            {
+              "name": "read-initial-draft",
+              "displayName": "Read saved draft"
+            },
+            {
+              "name": "update-draft",
+              "displayName": "Edit draft"
+            },
+            {
+              "name": "read-draft",
+              "displayName": "Reopen and verify draft"
+            },
+            {
+              "name": "delete-draft",
+              "displayName": "Delete draft"
+            }
+          ]
+        },
+        {
+          "name": "attachment-mail",
+          "entityName": "exchange-attachment",
+          "displayName": "Send and verify attachment",
+          "group": {
+            "entityName": "exchange-mail",
+            "displayName": "Mail"
+          },
+          "steps": [
+            {
+              "name": "send-attachment",
+              "displayName": "Send attachment"
+            },
+            {
+              "name": "verify-attachment",
+              "displayName": "Verify delivered attachment hash"
+            }
+          ]
+        },
+        {
+          "name": "reply-mail",
+          "entityName": "exchange-reply",
+          "displayName": "Reply to a received message and verify delivery",
+          "group": {
+            "entityName": "exchange-mail",
+            "displayName": "Mail"
+          },
+          "steps": [
+            {
+              "name": "reply-mail",
+              "displayName": "Reply to retained received message"
+            },
+            {
+              "name": "confirm-reply-mail",
+              "displayName": "Verify correlated reply at sender"
+            }
+          ]
+        },
+        {
+          "name": "distribution-list-mail",
+          "entityName": "exchange-distribution",
+          "displayName": "Deliver through distribution list",
+          "group": {
+            "entityName": "exchange-mail",
+            "displayName": "Mail"
+          },
+          "steps": [
+            {
+              "name": "send-group-mail",
+              "displayName": "Send to distribution list"
+            },
+            {
+              "name": "confirm-group-delivery",
+              "displayName": "Verify every expected recipient"
+            }
+          ]
+        },
+        {
+          "name": "recurring-calendar",
+          "entityName": "exchange-recurring",
+          "displayName": "Create, edit and remove recurring calendar event",
+          "group": {
+            "entityName": "exchange-calendar",
+            "displayName": "Calendar"
+          },
+          "steps": [
+            {
+              "name": "create-event",
+              "displayName": "Create recurring series"
+            },
+            {
+              "name": "read-occurrence",
+              "displayName": "Read occurrence"
+            },
+            {
+              "name": "update-event",
+              "displayName": "Update recurring series"
+            },
+            {
+              "name": "verify-event",
+              "displayName": "Verify series and occurrence update"
+            },
+            {
+              "name": "delete-event",
+              "displayName": "Delete recurring series"
+            }
+          ]
+        },
+        {
+          "name": "meeting-invitation",
+          "entityName": "exchange-meeting",
+          "displayName": "Invite, accept and cancel meeting",
+          "group": {
+            "entityName": "exchange-calendar",
+            "displayName": "Calendar"
+          },
+          "steps": [
+            {
+              "name": "create-meeting",
+              "displayName": "Send meeting invitation"
+            },
+            {
+              "name": "confirm-invitation",
+              "displayName": "Read attendee invitation"
+            },
+            {
+              "name": "verify-attendee-calendar",
+              "displayName": "Verify attendee calendar event"
+            },
+            {
+              "name": "accept-meeting",
+              "displayName": "Accept as attendee"
+            },
+            {
+              "name": "confirm-acceptance",
+              "displayName": "Observe acceptance as organizer"
+            },
+            {
+              "name": "cancel-meeting",
+              "displayName": "Cancel as organizer"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "service": "teams",
+      "displayName": "Teams Experience",
+      "journeys": [
+        {
+          "name": "channel-conversation",
+          "entityName": "teams-global",
+          "displayName": "Post, read back and reply in a channel as a bot",
+          "steps": [
+            {
+              "name": "post-message",
+              "displayName": "Post root as the selected bot"
+            },
+            {
+              "name": "confirm-publication",
+              "displayName": "Verify persisted root author and correlation"
+            },
+            {
+              "name": "post-reply",
+              "displayName": "Reply in the thread as the same bot"
+            },
+            {
+              "name": "confirm-reply",
+              "displayName": "Verify persisted reply author and correlation"
+            }
+          ]
+        },
+        {
+          "name": "scheduled-meeting",
+          "entityName": "teams-call",
+          "displayName": "Join a scheduled meeting, verify metadata and rosters, and leave",
+          "steps": [
+            {
+              "name": "place-call",
+              "displayName": "Join dedicated meeting as two distinct bots"
+            },
+            {
+              "name": "wait-for-answer",
+              "displayName": "Verify both owned calls established"
+            },
+            {
+              "name": "verify-meeting-metadata",
+              "displayName": "Verify dedicated meeting metadata"
+            },
+            {
+              "name": "verify-participants",
+              "displayName": "Verify both bot identities in both meeting rosters"
+            },
+            {
+              "name": "end-call",
+              "displayName": "Leave both owned calls and verify disconnected"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "service": "onedrive",
+      "displayName": "OneDrive Experience",
+      "journeys": [
+        {
+          "name": "user-drive-roundtrip",
+          "entityName": "onedrive-planned-user-drive-roundtrip",
+          "displayName": "Create, reopen, verify and delete user-drive file",
+          "steps": [
+            {
+              "name": "step-1",
+              "displayName": "Create owned folder and file in selected folder",
+              "telemetryName": "create-folder-file"
+            },
+            {
+              "name": "step-2",
+              "displayName": "Enumerate and download owned file",
+              "telemetryName": "reopen-file"
+            },
+            {
+              "name": "step-3",
+              "displayName": "Verify exact content hash",
+              "telemetryName": "verify-file-hash"
+            },
+            {
+              "name": "step-4",
+              "displayName": "Delete owned artifacts and verify removal",
+              "telemetryName": "delete-owned-artifacts"
+            }
+          ]
+        },
+        {
+          "name": "app-folder-lifecycle",
+          "entityName": "onedrive-planned-app-folder-lifecycle",
+          "displayName": "Write, read, update and delete app-folder data",
+          "steps": [
+            {
+              "name": "step-1",
+              "displayName": "Create cycle-owned folder and app data",
+              "telemetryName": "write-app-data"
+            },
+            {
+              "name": "step-2",
+              "displayName": "Read and verify data",
+              "telemetryName": "read-app-data"
+            },
+            {
+              "name": "step-3",
+              "displayName": "Update, reread and verify persisted state",
+              "telemetryName": "update-app-data"
+            },
+            {
+              "name": "step-4",
+              "displayName": "Delete cycle-owned folder and verify removal",
+              "telemetryName": "delete-app-scratch"
+            }
+          ]
+        },
+        {
+          "name": "document-versions",
+          "entityName": "onedrive-planned-document-versions",
+          "displayName": "Update document and retrieve prior version",
+          "steps": [
+            {
+              "name": "step-1",
+              "displayName": "Write and verify two document revisions",
+              "telemetryName": "update-document"
+            },
+            {
+              "name": "step-2",
+              "displayName": "Enumerate actual document version history",
+              "telemetryName": "list-versions"
+            },
+            {
+              "name": "step-3",
+              "displayName": "Download prior version and verify bytes",
+              "telemetryName": "read-prior-version"
+            },
+            {
+              "name": "step-4",
+              "displayName": "Optional: restore downloaded prior bytes and verify",
+              "telemetryName": "restore-version"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "providerActivityFunctions": {
+    "exchange": [
+      "getConnectivityMetricsForExchange",
+      "getMessageVolumeMetricsForEmailDelivery",
+      "getActiveUserMetricsForOutlookWebByReadEmail",
+      "getActiveUserMetricsForOutlookWebByAppOpening",
+      "getActiveUserMetricsForEmailByModernAuthentication"
+    ],
+    "teams": [
+      "getUsageMetricsForTeamsByMeetingsJoined",
+      "getUsageMetricsForTeamsByLaunch",
+      "getMessageVolumeMetricsForTeamsChat",
+      "getAudioStreamQoEMetricsForTeams",
+      "getAudioStreamsOverUdpMetricsForTeams"
+    ],
+    "onedrive": []
+  }
+}

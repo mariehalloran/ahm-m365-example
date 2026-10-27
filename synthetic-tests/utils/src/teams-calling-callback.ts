@@ -1,6 +1,5 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { callingAuthenticationDiagnostic, type CallingAuthenticationDiagnostic, type CallingIdentity } from "./teams-calling-auth.js";
-import { createTestTone, testTonePath } from "./teams-call-media.js";
 
 const about = "Internal monitoring lab. Dedicated test resources only. Operators configure message retention and diagnostics. Bot runtime uses managed identity and no user token cache. Not for production or customer-content use.\n";
 const maxBodyBytes = 65536;
@@ -24,7 +23,6 @@ export async function startTeamsCallingCallback(options: {
   host?: string;
   verify: (token: string) => Promise<CallingIdentity>;
   onNotification?: (notification: unknown, identity: CallingIdentity) => void;
-  onMediaServed?: () => void;
   onAccepted?: () => void;
   onRejected?: (status: number, stage: "headers" | "verification" | "body" | "timeout" | "handler",
     diagnostic?: CallingAuthenticationDiagnostic) => void;
@@ -32,14 +30,11 @@ export async function startTeamsCallingCallback(options: {
   let diagnosticWindow = Date.now();
   let rejectedDiagnostics = 0;
   let acceptedDiagnostics = 0;
-  let mediaDiagnostics = 0;
-  const tone = createTestTone();
   const refreshDiagnosticWindow = () => {
     if (Date.now() - diagnosticWindow >= 60000) {
       diagnosticWindow = Date.now();
       rejectedDiagnostics = 0;
       acceptedDiagnostics = 0;
-      mediaDiagnostics = 0;
     }
   };
   const server = createServer({ maxHeaderSize: 16384 }, (request, response) => {
@@ -62,16 +57,6 @@ export async function startTeamsCallingCallback(options: {
     }
     if (request.method === "GET" && request.url === "/healthz") {
       response.writeHead(200).end("ready\n");
-      return;
-    }
-    if (request.method === "GET" && request.url === testTonePath) {
-      response.setHeader("Content-Type", "audio/wav");
-      response.setHeader("Content-Length", tone.length);
-      response.setHeader("Cache-Control", "public, max-age=3600");
-      response.setHeader("Content-Disposition", 'inline; filename="test-tone.wav"');
-      response.writeHead(200).end(tone);
-      refreshDiagnosticWindow();
-      if (mediaDiagnostics++ < 10) options.onMediaServed?.();
       return;
     }
     if (request.method !== "POST" || request.url !== "/api/calls") { reject(404); return; }

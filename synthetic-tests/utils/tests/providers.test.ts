@@ -3,8 +3,7 @@ import { exchangeProviders } from "../../exchange/src/providers.js";
 import { teamsProviders } from "../../teams/src/providers.js";
 import { oneDriveProviders } from "../../onedrive/src/providers.js";
 import { GraphClient } from "../src/graph.js";
-import { serviceHealthReport } from "../src/health-reports.js";
-import { AuthenticatedHttp } from "../src/http.js";
+import { serviceActivityReports, serviceHealthIssuesReport, serviceHealthReport } from "../src/health-reports.js";
 import { baseResult, type ProbeHandler } from "../src/probes.js";
 import { collectProviderSources, PROVIDER_SOURCE_TIMEOUT_MS } from "../src/provider-collection.js";
 import { providerLog, type ProviderDiagnostic } from "../src/provider-diagnostics.js";
@@ -41,9 +40,9 @@ function rawConfig(type: ServiceConfig["type"] = "exchange") {
 function client(reply: (url: string, init?: RequestInit) => Response | Promise<Response>) {
   const token = vi.fn(async () => ({ token: "test-only-token", expiresOnTimestamp: Date.now() + 100000 }));
   const fetcher = vi.fn<typeof fetch>((url, init) => Promise.resolve(reply(String(url), init)));
-  const graph = new GraphClient(new AuthenticatedHttp({ getToken: token }, "https://graph.microsoft.com/.default", {
+  const graph = new GraphClient({ getToken: token }, {
     fetch: fetcher, sleep: async () => undefined,
-  }));
+  });
   vi.spyOn(auth, "createLiveGraphClient").mockReturnValue(graph);
   return { graph, fetcher, token };
 }
@@ -152,7 +151,7 @@ describe("read-only Graph provider clients", () => {
     for (const [, init] of http.fetcher.mock.calls) {
       expect(init).toMatchObject({ method: "GET", redirect: "error", headers: { Authorization: "Bearer test-only-token" } });
     }
-    expect(http.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
+    expect(http.token).toHaveBeenCalledWith(["https://graph.microsoft.com/.default"], expect.anything());
   });
   it.each(["exchange", "teams"] as const)("uses beta only for the verified %s report", async type => {
     const http = client(() => json({ value: [activity(type)] }));
@@ -354,6 +353,39 @@ describe("isolated once-per-cycle provider diagnostics", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+  it("reports Unknown without numbers when provider authentication cannot obtain a token", async () => {
+    const http = client(() => { throw new Error("No provider request expected"); });
+    http.token.mockRejectedValue(new Error("PRIVATE-AUTH-ERROR"));
+    const service = parseServiceConfig({
+      ...rawConfig(), serviceHealth: true,
+      serviceActivity: {
+        enabled: true, functions: ["getConnectivityMetricsForExchange"],
+        thresholds: { getConnectivityMetricsForExchange: { degradedBelow: 99, unhealthyBelow: 95 } },
+      },
+    });
+    const records: ProviderDiagnostic[] = [];
+    const summary = await exchangeProviders({
+      service, graph: http.graph, signal: signal(), now,
+      results: { recordDiagnostic: record => { records.push(record); } },
+    });
+    expect(summary).toEqual({ configured: 3, succeeded: 0, failed: 3, skipped: 0, records: 0 });
+    expect(http.fetcher).not.toHaveBeenCalled();
+    expect(records).toHaveLength(3);
+    expect(records.every(record => record.kind === "failure" && record.category === "authentication-failure")).toBe(true);
+    const cycle = { cycleId: "authentication-failed", providerDiagnostics: records };
+    const reports = [
+      serviceHealthReport("exchange", cycle, 15, now()),
+      serviceHealthIssuesReport("exchange", cycle, 15, now()),
+      ...serviceActivityReports(service, cycle, 15, now()),
+    ];
+    expect(reports).toHaveLength(3);
+    for (const report of reports) {
+      expect(report.body.healthState).toBe("Unknown");
+      expect(report.body).not.toHaveProperty("value");
+      expect(report.body).not.toHaveProperty("evaluationRules");
+    }
+    expect(JSON.stringify({ records, reports })).not.toMatch(/PRIVATE-AUTH-ERROR|test-only-token/);
   });
   it.each([
     [403, "permission-failure"], [429, "graph-throttling"], [500, "graph-unavailable"],

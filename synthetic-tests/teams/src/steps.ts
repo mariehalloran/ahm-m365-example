@@ -74,7 +74,7 @@ export async function findMessage(
     if (!next) return undefined;
     path = next;
   }
-  throw new IntegrationError("read-failure");
+  return undefined;
 }
 
 export interface ChannelAttempt {

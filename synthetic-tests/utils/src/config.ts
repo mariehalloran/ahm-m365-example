@@ -1,9 +1,17 @@
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import { probeSchema, probeServices, scenarios } from "./contracts.js";
+import { maxOneDriveTargets, probeSchema, probeServices, scenarios, type Probe } from "./contracts.js";
 import { validateTeamsServiceUrl } from "./teams.js";
 
 export class ConfigurationError extends Error {
   constructor(message: string) { super(message); this.name = "ConfigurationError"; }
+}
+export async function readConfigJson(file: string, kind: "project" | "service"): Promise<unknown> {
+  let text: string;
+  try { text = await readFile(file, "utf8"); }
+  catch { throw new ConfigurationError(`Cannot read the ${kind} config file`); }
+  try { return JSON.parse(text); }
+  catch { throw new ConfigurationError(`${kind === "project" ? "Project" : "Service"} config must contain a valid JSON object`); }
 }
 const number = (fallback: number, min: number, max: number, integer = false) => {
   const schema = z.coerce.number().finite().min(min).max(max);
@@ -14,10 +22,12 @@ export const teamsCallingCallbackUrlSchema = z.string().url().refine(value => {
   return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash &&
     url.pathname === "/api/calls";
 });
-const envSchema = z.object({
+const runtimeSettingsSchema = z.object({
   EXECUTION_MODE: z.enum(["simulation", "live"]).default("simulation"),
   SYNTHETIC_SCENARIO: z.enum(scenarios).default("healthy"),
   PROBE_TIMEOUT_MS: number(90000, 100, 120000, true),
+  MAX_CONCURRENT_PROBES: number(3, 1, 20, true),
+  CYCLE_TIMEOUT_MS: number(170000, 100, 86400000, true),
   POLL_INTERVAL_MS: number(2000, 10, 10000, true),
   ENABLE_LIVE_M365: z.enum(["true", "false"]).default("false"),
   TEAMS_AUTHENTICATION: z.literal("bot").default("bot"),
@@ -26,40 +36,36 @@ const envSchema = z.object({
   TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid().optional(),
   TEAMS_CALLING_CALLBACK_URL: teamsCallingCallbackUrlSchema.optional(),
   TEAMS_CALLING_PORT: number(8080, 1024, 65535, true),
-  TEAMS_CALLING_PLAYBACK_ENABLED: z.enum(["true", "false"]).default("false"),
   TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: number(20, 1, 30, true),
-  TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS: number(10, 2, 30, true),
   TEAMS_CLEANUP_ENABLED: z.enum(["true", "false"]).default("true"),
   EXCHANGE_CLEANUP_ENABLED: z.enum(["true", "false"]).default("true"),
-  PROBES_JSON: z.string().optional(),
 });
+export type Config = z.infer<typeof runtimeSettingsSchema> & { probes: Probe[] };
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
-  if (env.TEAMS_CALLING_WAIT_SECONDS !== undefined || env.TEAMS_CALLING_RING_SECONDS !== undefined) {
-    throw new ConfigurationError("Obsolete calling wait/ring settings; explicitly configure two-bot meeting audio playback");
+export function createRuntimeConfig(
+  settings: Partial<Omit<Config, "probes">> & { probes: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): Config {
+  if (env.TEAMS_CALLING_WAIT_SECONDS !== undefined || env.TEAMS_CALLING_RING_SECONDS !== undefined ||
+      env.TEAMS_CALLING_PLAYBACK_ENABLED !== undefined || env.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS !== undefined) {
+    throw new ConfigurationError("Obsolete calling wait/ring/playback settings; remove them and configure meeting establishment without audio testing");
   }
-  const parsed = envSchema.safeParse(env);
+  const parsed = runtimeSettingsSchema.safeParse({ ...env, ...settings });
   if (!parsed.success) throw new ConfigurationError(`Invalid environment settings: ${parsed.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const config = parsed.data;
   if (config.EXECUTION_MODE === "live" && config.ENABLE_LIVE_M365 !== "true") {
     throw new ConfigurationError("Live Graph mutations require ENABLE_LIVE_M365=true and approved dedicated resources");
   }
-  let rawProbes: unknown;
-  try {
-    rawProbes = config.PROBES_JSON ? JSON.parse(config.PROBES_JSON) : [{
-      id: "exchange-probe-001", type: "exchange-mail-flow", cohort: "exchange-global",
-    }];
-  } catch { throw new ConfigurationError("PROBES_JSON must contain a valid JSON array"); }
+  const rawProbes = settings.probes;
   if (Array.isArray(rawProbes) && rawProbes.some(probe => probe && typeof probe === "object" && "callUserId" in probe)) {
     throw new ConfigurationError("Obsolete callUserId: calling requires a dedicated meetingThreadId, organizerUserId metadata and peerBotClientId; human calling is unsupported");
   }
-  // Exchange supports six journeys for each of 30 explicit target sets.
-  const parsedProbes = z.array(probeSchema).min(1).max(180).safeParse(rawProbes);
+  const parsedProbes = z.array(probeSchema).min(1).max(270 + 3 * maxOneDriveTargets).safeParse(rawProbes);
   if (!parsedProbes.success) throw new ConfigurationError(`Invalid PROBES_JSON fields: ${parsedProbes.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const probes = parsedProbes.data;
   if (["exchange", "teams", "onedrive"].some(service =>
     probes.filter(probe => probeServices[probe.type].service === service).length >
-      (service === "exchange" ? 180 : service === "teams" ? 60 : 90))) {
+      (service === "exchange" ? 210 : service === "teams" ? 60 : 3 * maxOneDriveTargets))) {
     throw new ConfigurationError("Invalid PROBES_JSON: service probe inventory exceeded");
   }
   if (new Set(probes.map(probe => `${probe.type}:${probe.id}`)).size !== probes.length) {
@@ -84,9 +90,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       if (!hasDedicatedResources) {
         throw new ConfigurationError(`Missing dedicated resources for probe ${probe.id}`);
       }
-      if (probe.type === "teams-call" && config.TEAMS_CALLING_PLAYBACK_ENABLED !== "true") {
-        throw new ConfigurationError("Meeting playback requires explicit TEAMS_CALLING_PLAYBACK_ENABLED=true approval");
-      }
       if (probe.type === "teams-call" && (
           !config.BOT_CLIENT_ID || !config.TEAMS_CALLING_PEER_CLIENT_ID ||
           config.BOT_CLIENT_ID.toLowerCase() === config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
@@ -94,8 +97,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
         throw new ConfigurationError("Teams peer journeys require two distinct explicit managed identities: BOT_CLIENT_ID and TEAMS_CALLING_PEER_CLIENT_ID matching root peerBotClientId");
       }
       if (probe.type === "teams-call" && config.PROBE_TIMEOUT_MS <
-          (config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS + config.TEAMS_CALLING_PLAYBACK_TIMEOUT_SECONDS) * 1000 + 5000) {
-        throw new ConfigurationError("Calling timeout must allow answer and playback budgets plus five seconds for requests");
+          config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS * 1000 + 5000) {
+        throw new ConfigurationError("Calling timeout must allow the answer budget plus five seconds for requests");
       }
       if (service === "teams" && probe.serviceUrl) {
         try {
@@ -108,4 +111,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   return { ...config, probes };
 }
-export type Config = ReturnType<typeof loadConfig>;
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  if (env.PROBES_JSON !== undefined && typeof env.PROBES_JSON !== "string") {
+    throw new ConfigurationError("Invalid environment settings: PROBES_JSON");
+  }
+  let probes: unknown;
+  try {
+    probes = env.PROBES_JSON ? JSON.parse(env.PROBES_JSON) : [{
+      id: "exchange-probe-001", type: "exchange-mail-flow", cohort: "exchange-global",
+    }];
+  } catch { throw new ConfigurationError("PROBES_JSON must contain a valid JSON array"); }
+  return createRuntimeConfig({ probes }, env);
+}

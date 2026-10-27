@@ -14,7 +14,6 @@ const REPORT_BATCH_TIMEOUT_MS = 30000;
 
 export const teamsCallSignals = [
   "teams-call-connection-success-percentage", "teams-call-mean-connection-duration",
-  "teams-call-playback-success-percentage", "teams-call-mean-playback-duration",
   "teams-call-disconnection-success-percentage", "teams-call-mean-disconnection-duration",
 ] as const;
 export const callQualitySignals: Record<CallQualityMetric, { signalName: `teams-call-quality-${string}`; unit: string }> = {
@@ -188,8 +187,7 @@ function callMeasurementReports(cycle: CycleResults, policy: Policy): HealthRepo
   if (!calls.length) return [];
   const phases = [
     { step: "wait-for-answer", success: teamsCallSignals[0], duration: teamsCallSignals[1] },
-    { step: "play-audio", success: teamsCallSignals[2], duration: teamsCallSignals[3] },
-    { step: "end-call", success: teamsCallSignals[4], duration: teamsCallSignals[5] },
+    { step: "end-call", success: teamsCallSignals[2], duration: teamsCallSignals[3] },
   ] as const;
   return phases.flatMap(phase => {
     const samples = calls.flatMap(result => {
@@ -207,7 +205,7 @@ function callMeasurementReports(cycle: CycleResults, policy: Policy): HealthRepo
       observedAt: samples.map(sample => sample.observedAt).sort().at(-1) ?? null,
       callChainIds: calls.flatMap(result => result.call?.callChainId ? [result.call.callChainId] : []),
       resultCodes: [...new Set(calls.flatMap(result => result.call?.resultCodes ?? []))],
-      evidence: "service-confirmed-not-received-audio",
+      evidence: "graph-confirmed-meeting-connectivity",
     });
     return [
       createMeasurementReport("teams-call", {
@@ -247,19 +245,20 @@ export function callQualityMeasurements(cycle: CallQualityCycle) {
 
 export function callQualityReports(cycle: CallQualityCycle, policy: Policy): HealthReport[] {
   const observations = cycle.callQuality.flatMap(sample => sample.status === "available" ? [sample.observation] : []);
-  return callQualityMeasurements(cycle).map<HealthReport>(({ metric, value, sampleCount, complete, maximum }) => {
+  return callQualityMeasurements(cycle).flatMap<HealthReport>(({ metric, value, sampleCount, complete, maximum }) => {
+    if (value === undefined) return [];
     const signal = callQualitySignals[metric];
     const thresholds = policy.callQualityThresholds[metric];
     const rules: EvaluationRules | undefined = thresholds ? {
       degradedRule: { operator: "GreaterThan", threshold: thresholds.degradedAbove },
       unhealthyRule: { operator: "GreaterThan", threshold: thresholds.unhealthyAbove },
     } : undefined;
-    return {
+    return [{
       entityName: "teams-call",
       body: {
         signalName: signal.signalName, expiresInMinutes: policy.reportTtlMinutes,
-        healthState: value !== undefined && rules && complete ? evaluateHealthState(value, rules) : "Unknown",
-        ...(value === undefined ? {} : { value }),
+        healthState: rules && complete ? evaluateHealthState(value, rules) : "Unknown",
+        value,
         ...(rules && complete ? { evaluationRules: rules } : {}),
         additionalContext: JSON.stringify({
           cycleId: cycle.cycleId, collectedAt: cycle.collectedAt, source: "microsoft.graph.callRecords",
@@ -278,7 +277,7 @@ export function callQualityReports(cycle: CallQualityCycle, policy: Policy): Hea
           evidence: "provider-reported-not-independent-audio-analysis",
         }),
       },
-    };
+    }];
   });
 }
 
@@ -300,6 +299,8 @@ export function serviceActivityReports(
       record.kind === "activity" && record.function === functionName)
       .sort((a, b) => Date.parse(b.intervalEnd) - Date.parse(a.intervalEnd));
     const latest = rows[0];
+    const failures = records.filter((record): record is Extract<ProviderDiagnostic, { kind: "failure" }> =>
+      record.kind === "failure" && record.source === functionName);
     const failed = parsed.some((record, index) => !record.success &&
       cycle.providerDiagnostics[index]?.service === service.type &&
       cycle.providerDiagnostics[index]?.kind === "activity" &&
@@ -332,7 +333,9 @@ export function serviceActivityReports(
           interpretation: functionName === "getAudioStreamQoEMetricsForTeams" ? "telemetry-coverage-not-call-quality"
             : functionName === "getAudioStreamsOverUdpMetricsForTeams" ? "network-context-not-call-quality"
               : rules ? "customer-configured-threshold" : "diagnostic-only-no-threshold",
-          diagnosticCategories: failed ? ["collection-failure"] : !latest ? ["no-data"] : stale ? ["stale-data"] : value === undefined ? ["malformed-response"] : [],
+          diagnosticCategories: failures.length ? [...new Set(failures.map(record => record.category))]
+            : failed ? ["collection-failure"] : !latest ? ["no-data"] : stale ? ["stale-data"] : value === undefined ? ["malformed-response"] : [],
+          httpStatuses: [...new Set(failures.flatMap(record => record.httpStatus === undefined ? [] : [record.httpStatus]))].slice(0, 8),
         }),
       },
     };
@@ -447,6 +450,8 @@ export function createHealthReporter(
 ): HealthReporter {
   if (!service.enabled) return async () => undefined;
   const policy = project.healthModel;
+  const selectedQualitySignals = new Set<string>(Object.entries(callQualitySignals)
+    .filter(([metric]) => Object.hasOwn(policy.callQualityThresholds, metric)).map(([, signal]) => signal.signalName));
   const http = service.mode === "live" ? new AuthenticatedHttp(
     options.credential ?? createHealthReportCredential(env, service.healthReportAuthentication),
     "https://management.azure.com/.default", { ...options, attempts: 2, timeoutMs: REPORT_TIMEOUT_MS },
@@ -457,14 +462,14 @@ export function createHealthReporter(
   return async cycle => {
     if ("callQuality" in cycle && service.type !== "teams") throw new IntegrationError("configuration-failure");
     const reports = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
-      : "callQuality" in cycle ? callQualityReports(cycle, policy)
-      : service.mode === "live" ? [
+      : "callQuality" in cycle ? callQualityReports(cycle, policy).filter(report => selectedQualitySignals.has(report.body.signalName))
+      : project.serviceHealth.enabled && service.mode === "live" ? [
         ...(service.serviceHealth ? [
           serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
           serviceHealthIssuesReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
         ] : []),
         ...serviceActivityReports(service, cycle, policy.reportTtlMinutes),
-      ] : [];
+      ].filter(report => report.body.value !== undefined) : [];
     if (!http) {
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;

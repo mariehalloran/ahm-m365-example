@@ -266,7 +266,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     const providerLane = {
       name: "provider-context", intervalSeconds: service.providerIntervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys: [],
     };
-    if (options.providers || service.serviceHealth || service.serviceActivity.enabled) lanes.push(providerLane);
+    if (service.serviceHealth || service.serviceActivity.enabled) lanes.push(providerLane);
     await runExecutionLanes(lanes, async lane => {
       try {
         if (lane === providerLane) {

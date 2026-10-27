@@ -1,7 +1,7 @@
 {
   "type": "exchange",
   "intervalSeconds": 60,
-  "timeoutSeconds": 45,
+  "timeoutSeconds": 15,
   "mode": "live",
   "graphAuthentication": "managed-identity",
   "healthReportAuthentication": "managed-identity",

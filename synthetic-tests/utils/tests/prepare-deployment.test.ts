@@ -15,6 +15,7 @@ beforeEach(async () => {
   projectFile = join(directory, "monitoring.json");
   await mkdir(join(directory, "profiles"));
   const project = structuredClone(checkedIn);
+  project.serviceHealth.enabled = true;
   project.services.teams.scenarios["scheduled-meeting"] = false;
   project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
   for (const type of ["exchange", "teams", "onedrive"] as const) {
@@ -26,6 +27,20 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe("deployment parameter preparation", () => {
+  it.each(["omitted", "disabled"])("disables mounted provider settings and beta consent when Service Health is %s", async mode => {
+    const project = JSON.parse(await readFile(projectFile, "utf8"));
+    if (mode === "omitted") delete project.serviceHealth;
+    else project.serviceHealth = { enabled: false };
+    await writeFile(projectFile, JSON.stringify(project));
+    await writeFile(join(directory, "profiles/exchange.json"), JSON.stringify({
+      ...await readServiceConfig("exchange/config.json"), serviceHealth: true, serviceActivity: { enabled: true },
+    }));
+    const prepared = await prepareDeploymentParameters(projectFile, "image:test");
+    expect(prepared.parameters.projectConfig.value.serviceHealth.enabled).toBe(false);
+    expect(prepared.parameters.serviceConfigs.value.exchange.serviceHealth).toBe(false);
+    expect(prepared.parameters.serviceConfigs.value.exchange.serviceActivity.enabled).toBe(false);
+    expect(prepared.parameters.enableBetaServiceActivity.value).toBe(false);
+  });
   const peer = {
     botPeerClientId: checkedIn.services.teams.callTargets[0]!.peerBotClientId,
     botPeerManagedIdentityResourceId: "/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/approved/providers/Microsoft.ManagedIdentity/userAssignedIdentities/teams-peer",
@@ -36,7 +51,7 @@ describe("deployment parameter preparation", () => {
     await writeFile(projectFile, JSON.stringify(project));
     await writeFile(join(directory, "profiles/teams.json"), JSON.stringify({
       ...await readServiceConfig("teams/config.live.example.json"),
-      teamsCallingPlaybackEnabled: true, teamsCallingCallbackUrl: "https://approved.example.invalid/api/calls",
+      teamsCallingCallbackUrl: "https://approved.example.invalid/api/calls",
     }));
     return project;
   }
@@ -79,6 +94,26 @@ describe("deployment parameter preparation", () => {
     expect(prepared.parameters.projectConfig.value.services).not.toHaveProperty("sharepoint");
     expect(prepared.parameters.serviceAccess.value).toEqual({});
   });
+  it("preserves all 500 provisioned OneDrive accounts and their execution budgets in worker deployment parameters", async () => {
+    const project = await readProjectConfig(projectFile);
+    project.healthModel.reportTtlMinutes = 75;
+    project.services.onedrive.targets = Array.from({ length: 500 }, (_, index) => ({
+      id: `account-${index}`, userId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+      userPrincipalName: `account-${index}@example.invalid`, folderName: "AHM-Synthetic-Tests",
+      driveId: `drive-${index}`, folderId: `folder-${index}`,
+    }));
+    await writeFile(projectFile, JSON.stringify(project));
+    await writeFile(join(directory, "profiles/onedrive.json"), JSON.stringify({
+      ...await readServiceConfig("onedrive/config.live.example.json"),
+      maxConcurrentProbes: 20, cycleTimeoutSeconds: 3600,
+    }));
+    const prepared = await prepareDeploymentParameters(projectFile, "image:test", true);
+    expect(prepared.parameters.projectConfig.value.services.onedrive.targets).toEqual(project.services.onedrive.targets);
+    expect(prepared.parameters.serviceConfigs.value.onedrive).toMatchObject({
+      maxConcurrentProbes: 20, cycleTimeoutSeconds: 3600,
+    });
+    expect(prepared.parameters.serviceConfigs.value.onedrive).not.toHaveProperty("targets");
+  });
   it("requires migration of legacy private profiles rather than injecting an unselected service", async () => {
     const project = JSON.parse(await readFile(projectFile, "utf8"));
     delete project.services.onedrive;
@@ -107,7 +142,7 @@ describe("deployment parameter preparation", () => {
     const executionLanes = [
       { name: "mail", intervalSeconds: 60, timeoutSeconds: 45, journeys: ["send-receive-mail"] },
       { name: "extended", intervalSeconds: 300, timeoutSeconds: 120, journeys: [
-        "edit-reopen-draft", "attachment-reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation",
+        "edit-reopen-draft", "attachment-mail", "reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation",
       ] },
     ];
     await writeFile(join(directory, "profiles/exchange.json"), JSON.stringify({

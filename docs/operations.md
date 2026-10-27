@@ -2,7 +2,7 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports through **External Reports**, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Eleven journeys reuse three Container Apps; the family has four models, 68 entities, 64 relationships and 47 business-step entities.
+Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports through **External Reports**, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Twelve journeys reuse three Container Apps; the default family has four models, 67 entities, 63 relationships and 46 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
 
 Exchange, Teams, and OneDrive use separate configs/cadences and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
@@ -11,6 +11,7 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 ## Scheduling and shutdown
 
 - First run is immediate; reusable independent lanes follow fixed-rate cadence within each worker. Exchange mail defaults to 60 seconds and other Exchange journeys to 300 seconds.
+- Live Exchange attempts have a hard 15-second execution ceiling, including custom lanes. Timeouts report Unhealthy; bounded cleanup can finish afterward and elapsed durations are not clamped. Other services retain their configured deadlines.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane reports update only observed journeys, not empty/Unknown reports for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
@@ -24,7 +25,7 @@ Do not enable live mode against real-user resources.
 
 1. Obtain dedicated approved targets and an owner. Use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) for Exchange.
 2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access.
-3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Supply real drive/folder IDs for selected-folder journeys; no broad permission or root-discovery fallback exists.
+3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) to create folders/grants and save real drive/folder IDs; runtime has no broad permission or root-discovery fallback.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
 5. Set the config to `mode: live` and independently opt in through `ENABLE_LIVE_M365=true`.
 6. Use `--once` first and inspect operation and cleanup outcomes.
@@ -39,11 +40,20 @@ No runtime user MFA/cache or certificate is needed. Bot-only meeting calls requi
 two distinct explicit UAMIs with approved `Calls.JoinGroupCall.All` and root-owned
 `{ id, tenantId, meetingThreadId, organizerUserId, peerBotClientId }` targets.
 The organizer is owner metadata, never a participant/token identity. Success requires
-both established legs, both identities in both rosters, authenticated correlated
-primary tone completion and both verified departures—not received audio.
+both established legs, matching meeting metadata, both identities in both
+rosters and both verified departures. No audio upload, playback or recording is
+required, and connectivity is not audio-quality evidence.
 The existing Teams app attaches the approved peer through
 `serviceAccess.teams.{botPeerClientId,botPeerManagedIdentityResourceId}`; no runtime
-grants or extra app/host are created. Live media acceptance remains a separate gate.
+grants or extra app/host are created. See the
+[meeting/audio quality options](../synthetic-tests/teams/README.md#meeting-and-audio-quality-options)
+for delayed diagnostics and separate media-hosting requirements.
+The opt-in hosted-audio feasibility test is not a scheduled journey or an audio
+health entity. Its signed callback must reach the test process; do not run it
+beside a worker already binding the same port. After verified departure it can
+wait separately for delayed records, publishing only actual returned metrics.
+Missing quality values stay in diagnostics; configure model quality members
+only for metrics verified by that test.
 
 Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). Default bot/mail/file journeys need no user password, interactive sign-in or Blob access. Calling's tenant-wide application permission is a separate approved exception, not a scoped recipient grant. Optional provider collection requires separately approved read-only application permissions; it never grants them.
 
@@ -86,8 +96,8 @@ See the [strict schema, limits, diagnostics and first-party references](../synth
 
 ## Timing, retries, and cleanup
 
-- A cycle has a bounded execution budget; size target lists accordingly.
-- At most three probes execute concurrently **per lane** (default Exchange has two lanes). Graph requests time out at fifteen seconds, and safe operations retry within a bounded budget.
+- A cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 170); size target lists and report TTL accordingly.
+- By default three probes execute concurrently **per lane** (`maxConcurrentProbes`, configurable 1-20; default Exchange has two lanes). Runtime Graph requests time out at fifteen seconds, and safe operations retry within a bounded budget. Administrator bulk setup uses a separate bounded request/retry budget.
 - Configured probe timeouts cancel work and count as failure/0/Unhealthy. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. An internal cycle deadline yields failure results for queued attempts; external shutdown does not start queued work.
 - Draft creation/send are not retried after ambiguous responses. Reads/idempotent deletes can retry; long Retry-After requests fail explicitly rather than retry too soon.
 - `durationMs` is total attempt time **through cleanup**, distinct from confirmed delivery time.

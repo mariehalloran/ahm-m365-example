@@ -14,6 +14,13 @@ const service = parseServiceConfig({
 });
 
 describe("independent fixed-rate execution lanes", () => {
+  it("caps both default and explicitly configured Exchange lanes without extending shorter budgets", () => {
+    const defaults = executionLanes({ ...service, timeoutSeconds: 120 });
+    expect(defaults.map(lane => lane.timeoutSeconds)).toEqual([15, 15]);
+    const custom = defaults.map((lane, index) => ({ ...lane, timeoutSeconds: index === 0 ? 8 : 120 }));
+    expect(executionLanes({ ...service, executionLanes: custom }).map(lane => lane.timeoutSeconds)).toEqual([8, 15]);
+  });
+
   it("rejects overlapping assignments, unknown journeys, missing assignments and the reserved provider lane name", () => {
     const defaults = executionLanes(service);
     for (const lanes of [
@@ -100,10 +107,26 @@ describe("independent fixed-rate execution lanes", () => {
 });
 
 describe("execution deadlines", () => {
+  it.each([14999, 15000, 16000])("checks elapsed Exchange execution even before a delayed timer can run (%s ms)", async durationMs => {
+    let clock = 0;
+    const config = serviceSettings({ ...service, timeoutSeconds: 45 }, { ENABLE_LIVE_M365: "true" });
+    const cycle = await runCycle({ ...config, probes: [config.probes[0]!] }, {
+      now: () => clock, telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} },
+      handler: async probe => {
+        clock = durationMs;
+        return { ...baseResult(probe, clock), success: true };
+      },
+    });
+    expect(cycle.results[0]).toMatchObject({
+      success: durationMs < 15000, durationMs,
+      diagnosticCategory: durationMs < 15000 ? null : "delivery-timeout",
+    });
+  });
+
   it("includes queued selected attempts when the internal cycle deadline expires", async () => {
     vi.useFakeTimers();
     const configured = parseServiceConfig({
-      ...service, timeoutSeconds: 120,
+      ...service, timeoutSeconds: 120, cycleTimeoutSeconds: 20,
       targets: Array.from({ length: 7 }, (_, index) => ({ id: `target-${index}`, mailbox: "owned@example.invalid" })),
     });
     const handler = vi.fn(async (probe, context) => {
@@ -113,12 +136,38 @@ describe("execution deadlines", () => {
     const pending = runCycle(serviceSettings(configured, { ENABLE_LIVE_M365: "true" }), {
       telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} }, handler,
     });
-    await vi.advanceTimersByTimeAsync(171000);
+    await vi.advanceTimersByTimeAsync(21000);
     const cycle = await pending;
     expect(cycle.results).toHaveLength(7);
     expect(cycle.results.every(result => !result.success && result.diagnosticCategory === "delivery-timeout")).toBe(true);
     expect(handler).toHaveBeenCalledTimes(6);
   });
+
+  it.each(["exchange-mail-flow", "onedrive-roundtrip"] as const)(
+    "enforces the Exchange 15-second deadline without changing other products: %s", async type => {
+      vi.useFakeTimers();
+      const config = serviceSettings({ ...service, timeoutSeconds: 45 }, { ENABLE_LIVE_M365: "true" });
+      let aborted = false;
+      const pending = runCycle({ ...config, probes: [{ ...config.probes[0]!, type }] }, {
+        telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} },
+        handler: async (probe, context) => {
+          context.signal.addEventListener("abort", () => { aborted = true; });
+          await new Promise(resolve => setTimeout(resolve, 18000));
+          return { ...baseResult(probe, Date.now()), success: true };
+        },
+      });
+      await vi.advanceTimersByTimeAsync(14999);
+      expect(aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(aborted).toBe(type === "exchange-mail-flow");
+      await vi.advanceTimersByTimeAsync(3000);
+      const cycle = await pending;
+      expect(cycle.results[0]).toMatchObject({
+        success: type !== "exchange-mail-flow", durationMs: 18000,
+        diagnosticCategory: type === "exchange-mail-flow" ? "delivery-timeout" : null,
+      });
+    },
+  );
 
   it("cancels timed-out work, publishes zero/Unhealthy, preserves siblings and ignores late success", async () => {
     vi.useFakeTimers();

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
-import { AuthenticatedHttp, IntegrationError } from "../src/http.js";
+import { IntegrationError } from "../src/http.js";
 import {
   aggregateCallQuality, callQualityLimits, callQualityMetricNames, callQualityObservationSchema,
   callQualityRecordSchema, collectCallQuality, parseCallQuality,
@@ -23,9 +23,9 @@ function client(reply: () => Response | Promise<Response>) {
   const fetcher = vi.fn<typeof fetch>(async () => reply());
   return {
     fetcher, token,
-    graph: new GraphClient(new AuthenticatedHttp({ getToken: token }, "https://graph.microsoft.com/.default", {
+    graph: new GraphClient({ getToken: token }, {
       fetch: fetcher, attempts: 1,
-    })),
+    }),
   };
 }
 

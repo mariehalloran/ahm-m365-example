@@ -4,13 +4,15 @@ import { resultSchema, type Probe, type TestType } from "../../utils/src/contrac
 import type { GraphClient } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import {
-  exchangeAttachmentProbe, exchangeDistributionProbe, exchangeMeetingProbe, exchangeRecurringProbe,
+  exchangeAttachmentProbe, exchangeDistributionProbe, exchangeMeetingProbe, exchangeRecurringProbe, exchangeReplyProbe,
 } from "../src/extended-journeys.js";
+import { replySeedSubject } from "../src/reply-seed.js";
 
 const sender = "sender@example.invalid";
 const recipient = "recipient@example.invalid";
 const handlers = {
-  "exchange-attachment-reply": exchangeAttachmentProbe, "exchange-distribution-list": exchangeDistributionProbe,
+  "exchange-attachment": exchangeAttachmentProbe, "exchange-reply": exchangeReplyProbe,
+  "exchange-distribution-list": exchangeDistributionProbe,
   "exchange-recurring-calendar": exchangeRecurringProbe, "exchange-meeting": exchangeMeetingProbe,
 };
 
@@ -26,16 +28,20 @@ async function run(type: keyof typeof handlers, options: {
   attendeeOnSecondPage?: boolean; calendarNextLink?: string; calendarPaginationLoop?: boolean;
   recipientReadFailure?: { category: "permission-failure" | "graph-throttling" | "read-failure"; status: number };
   unrelatedMail?: boolean;
+  missingSeed?: boolean; otherReply?: boolean; invalidSeedSender?: boolean;
 } = {}) {
   const probe: Probe = {
     id: "exchange-one", cohort: "exchange-global", type, mailbox: sender,
     ...(!options.missingSetup ? {
       recipientMailbox: recipient,
+      ...(type === "exchange-reply" && !options.missingSeed ? {
+        replySeed: { messageId: "reply-seed", correlationId: "11111111-1111-4111-8111-111111111111" },
+      } : {}),
       distributionList: { address: "list@example.invalid", expectedRecipients: [sender, recipient] },
     } : {}),
   };
   let clock = Date.parse("2026-10-26T10:00:00Z");
-  let subject = "";
+  let subject = type === "exchange-reply" ? replySeedSubject("11111111-1111-4111-8111-111111111111") : "";
   let updatedSubject = "";
   let attachment = "";
   let replySubject = "";
@@ -50,6 +56,12 @@ async function run(type: keyof typeof handlers, options: {
     json: vi.fn(async <T>(path: string, schema: z.ZodType<T>, _signal: AbortSignal, method = "GET", body?: any): Promise<T> => {
       calls.push({ path, method, body });
       clock += 5;
+      if (path.includes("/messages/reply-seed?")) return schema.parse({
+        id: "reply-seed", subject, isDraft: false, conversationId: "recipient-conversation",
+        internetMessageId: "<original@example.invalid>",
+        from: { emailAddress: { address: options.invalidSeedSender ? recipient : sender } },
+        internetMessageHeaders: [{ name: "x-ahm-reply-seed-id", value: probe.replySeed!.correlationId }],
+      });
       if (method === "POST" && path.endsWith("/messages")) {
         subject = body.subject;
         attachment = body.attachments?.[0]?.contentBytes ?? "";
@@ -109,10 +121,12 @@ async function run(type: keyof typeof handlers, options: {
       if (path.includes("/messages?")) {
         const querySubject = new URLSearchParams(path.split("?")[1]).get("$filter") ?? "";
         if (!path.includes("/inbox/")) return schema.parse({
-          value: options.unrelatedMail ? [
+          value: options.unrelatedMail || options.otherReply ? [
             { id: "unrelated-mail-copy", subject: "Not owned by this attempt" },
+            { id: "reply-seed", subject, bodyPreview: "Retained synthetic reply fixture" },
+            { id: "another-attempt-reply", subject: replySubject, bodyPreview: "Correlated reply another-attempt" },
             { id: querySubject.includes("RE:") ? "reply-owned-copy" : "original-owned-copy",
-              subject: querySubject.includes("RE:") ? replySubject : subject },
+              subject: querySubject.includes("RE:") ? replySubject : subject, bodyPreview: replyBody },
           ] : [],
         });
         if (options.recipientReadFailure && path.includes(encodeURIComponent(recipient))) {
@@ -121,7 +135,11 @@ async function run(type: keyof typeof handlers, options: {
         if (options.missingRecipient && path.includes(encodeURIComponent(recipient))) return schema.parse({ value: [] });
         const reply = querySubject.includes("RE:");
         return schema.parse({
-          value: [...(options.unrelatedMail ? [{ id: "unrelated-inbox-mail", subject: "Not owned by this attempt" }] : []), {
+          value: [
+            ...(options.otherReply ? [{
+              id: "another-attempt-reply", subject: replySubject, bodyPreview: "Correlated reply another-attempt",
+            }] : []),
+            ...(options.unrelatedMail ? [{ id: "unrelated-inbox-mail", subject: "Not owned by this attempt" }] : []), {
             id: reply ? "received-reply" : "received", subject: reply ? replySubject : subject,
             conversationId: reply ? "sender-conversation" : "recipient-conversation",
             internetMessageId: reply ? "<reply@example.invalid>" : "<original@example.invalid>",
@@ -170,26 +188,51 @@ describe("Exchange consolidated attachment, distribution and calendar journeys",
     expect(result.success).toBe(true);
     expect(result.steps.every(step => step.status === "succeeded")).toBe(true);
   });
-  it("checks attachment hash and correlates B→A reply headers despite different mailbox-local conversation IDs", async () => {
-    const { result, calls } = await run("exchange-attachment-reply");
+  it("verifies attachment delivery without creating a reply", async () => {
+    const { result, calls } = await run("exchange-attachment");
     expect(result.success).toBe(true);
     const create = calls.find(call => call.method === "POST" && call.path.endsWith("/messages"));
     expect(create?.body).toMatchObject({ toRecipients: [{ emailAddress: { address: recipient } }] });
-    expect(calls.some(call => call.path.includes(`${encodeURIComponent(recipient)}/messages/received/createReply`))).toBe(true);
-    expect(calls.some(call => call.path.includes(`${encodeURIComponent(sender)}/mailFolders/inbox/messages`))).toBe(true);
+    expect(calls.some(call => call.path.endsWith("/createReply"))).toBe(false);
+    expect(result.steps.map(step => step.name)).toEqual(["authenticate", "send-attachment", "verify-attachment", "cleanup"]);
+    expect((await run("exchange-attachment", { badHash: true })).result).toMatchObject({ success: false, diagnosticCategory: "read-failure" });
+  });
+  it("replies to the retained received message without sending or waiting for a new starter mail", async () => {
+    const { result, calls } = await run("exchange-reply");
+    expect(result.success).toBe(true);
+    expect(calls.some(call => call.method === "POST" && call.path.endsWith("/messages"))).toBe(false);
+    expect(calls.some(call => call.path.includes(`${encodeURIComponent(recipient)}/mailFolders/inbox/messages`))).toBe(false);
+    expect(calls.some(call => call.path.includes(`${encodeURIComponent(recipient)}/messages/reply-seed/createReply`))).toBe(true);
     const readback = calls.find(call => call.path.includes(`${encodeURIComponent(sender)}/mailFolders/inbox/messages`))!;
     expect(new URLSearchParams(readback.path.split("?")[1]).get("$select")).toContain("internetMessageHeaders");
-    expect((await run("exchange-attachment-reply", { badHash: true })).result).toMatchObject({ success: false, diagnosticCategory: "read-failure" });
-    expect((await run("exchange-attachment-reply", { badReply: true })).result.success).toBe(false);
+    expect(new URLSearchParams(readback.path.split("?")[1]).get("$filter")).toContain("receivedDateTime ge");
+    expect(calls.some(call => call.method === "DELETE" && call.path.endsWith("/reply-seed"))).toBe(false);
   });
-  it.each(["badReply", "badReplySender", "badReplyBody", "missingReplyHeader", "duplicateReplyHeader"] as const)(
+  it.each(["badReply", "badReplySender", "missingReplyHeader", "duplicateReplyHeader"] as const)(
     "does not mask invalid received reply evidence: %s", async failure => {
-      const { result } = await run("exchange-attachment-reply", { [failure]: true });
+      const { result } = await run("exchange-reply", { [failure]: true });
       expect(result).toMatchObject({ success: false, diagnosticCategory: "read-failure" });
       expect(result.steps.find(step => step.name === "reply-mail")?.status).toBe("succeeded");
       expect(result.steps.find(step => step.name === "confirm-reply-mail")?.status).toBe("failed");
     },
   );
+  it("ignores another attempt's reply and never deletes it or the retained seed during cleanup", async () => {
+    const { result, calls } = await run("exchange-reply", { otherReply: true });
+    expect(result.success).toBe(true);
+    const deleted = calls.filter(call => call.method === "DELETE").map(call => call.path);
+    expect(deleted.some(path => path.endsWith("/reply-owned-copy"))).toBe(true);
+    expect(deleted.some(path => path.endsWith("/reply-seed") || path.endsWith("/another-attempt-reply"))).toBe(false);
+  });
+  it("does not claim an unmarked reply as this attempt's delivery", async () => {
+    const { result, calls } = await run("exchange-reply", { badReplyBody: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
+    expect(calls.some(call => call.method === "DELETE" && call.path.endsWith("/received-reply"))).toBe(false);
+  });
+  it.each(["missingSeed", "invalidSeedSender"] as const)("fails unsafe fixture setup before creating a reply: %s", async failure => {
+    const { result, calls } = await run("exchange-reply", { [failure]: true });
+    expect(result).toMatchObject({ success: false, diagnosticCategory: "configuration-failure" });
+    expect(calls.some(call => call.method === "POST")).toBe(false);
+  });
   it("sends only to the explicit group and requires every expected recipient", async () => {
     const { calls } = await run("exchange-distribution-list");
     expect(calls.find(call => call.method === "POST" && call.path.endsWith("/messages"))?.body)
@@ -211,7 +254,7 @@ describe("Exchange consolidated attachment, distribution and calendar journeys",
     expect(calls.filter(call => call.path.includes("/mailFolders/inbox/messages"))).toHaveLength(2);
     expect(calls.some(call => call.method === "DELETE" && call.path.endsWith("/received"))).toBe(true);
   });
-  it.each(["exchange-attachment-reply", "exchange-distribution-list"] as const)(
+  it.each(["exchange-attachment", "exchange-distribution-list"] as const)(
     "never claims unrelated Inbox or cleanup-discovery records for %s", async type => {
       const { result, calls } = await run(type, { unrelatedMail: true });
       expect(result.success).toBe(true);
@@ -360,7 +403,7 @@ describe("Exchange consolidated attachment, distribution and calendar journeys",
     expect(result).toMatchObject({ success: false, diagnosticCategory: "permission-failure" });
     expect(result.steps.find(step => step.name === "cancel-meeting")?.status).toBe("failed");
   });
-  it.each(["exchange-attachment-reply", "exchange-distribution-list", "exchange-meeting"] as const)(
+  it.each(["exchange-attachment", "exchange-reply", "exchange-distribution-list", "exchange-meeting"] as const)(
     "fails missing selected live setup for %s instead of inventing A→A participants", async type => {
       const { result, calls } = await run(type, { missingSetup: true });
       expect(result).toMatchObject({ success: false, diagnosticCategory: "configuration-failure" });

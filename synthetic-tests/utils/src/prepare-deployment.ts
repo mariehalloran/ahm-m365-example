@@ -44,8 +44,8 @@ async function readServiceAccess(file?: string): Promise<z.infer<typeof serviceA
 async function readDeploymentService(project: ProjectConfig, type: ServiceConfig["type"], projectFile: string) {
   const service: ServiceFileConfig = await readServiceConfig(resolve(dirname(projectFile), project.services[type].configFile));
   if (service.type !== type) throw new ConfigurationError(`Deployment requires a ${type} service config`);
-  applyProjectConfig(project, service);
-  return service;
+  const effective = applyProjectConfig(project, service);
+  return { ...service, serviceHealth: effective.serviceHealth, serviceActivity: effective.serviceActivity };
 }
 
 export async function prepareDeploymentParameters(

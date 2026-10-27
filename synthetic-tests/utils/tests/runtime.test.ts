@@ -85,7 +85,6 @@ describe("independent Graph and health-report identities", () => {
     const service = parseServiceConfig({
       ...raw, type: "teams", mode: "live",
       graphAuthentication: "certificate", teamsCallingCallbackUrl: "https://approved.example.invalid/api/calls",
-      teamsCallingPlaybackEnabled: true,
       targets: [],
       callTargets: [{
         id: "call-only", tenantId: certificate.AZURE_TENANT_ID,
@@ -102,7 +101,8 @@ describe("independent Graph and health-report identities", () => {
     const config = serviceSettings(service, env, {
       "channel-conversation": false, "scheduled-meeting": true,
     });
-    const runtime = await serviceRuntime(service, config, output, env);
+    const onTeamsCallingNotification = vi.fn();
+    const runtime = await serviceRuntime(service, config, output, env, undefined, { onTeamsCallingNotification });
     expect(runtime.graph).toBeUndefined();
     expect(runtime.teamsBot).toBeUndefined();
     expect(runtime).not.toHaveProperty("clientsForProbe");
@@ -111,12 +111,14 @@ describe("independent Graph and health-report identities", () => {
       [{ clientId: env.BOT_CLIENT_ID }], [{ clientId: env.TEAMS_CALLING_PEER_CLIENT_ID }],
     ]);
     await runtime.teamsCallingPeer!.authenticate(new AbortController().signal);
-    expect(credentials.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
+    expect(credentials.token).toHaveBeenCalledWith(["https://graph.microsoft.com/.default"], expect.anything());
     expect(credentials.token.mock.calls.map(([scope]) => scope)).toEqual([
-      "https://graph.microsoft.com/.default", "https://graph.microsoft.com/.default",
+      ["https://graph.microsoft.com/.default"], ["https://graph.microsoft.com/.default"],
     ]);
     expect(credentials.certificate).not.toHaveBeenCalled();
-    expect(calling.start).toHaveBeenCalledWith(expect.objectContaining({ port: 8080, verify: calling.verify }));
+    expect(calling.start).toHaveBeenCalledWith(expect.objectContaining({
+      port: 8080, verify: calling.verify, onNotification: onTeamsCallingNotification,
+    }));
     await runtime.shutdown!();
     expect(calling.shutdown).toHaveBeenCalledOnce();
   });
@@ -251,7 +253,7 @@ describe("independent Graph and health-report identities", () => {
     await runtime.graph!.authenticate(new AbortController().signal);
     await runtime.teamsBot!.authenticate(new AbortController().signal);
     expect(credentials.token.mock.calls.map(([scope]) => scope)).toEqual([
-      "https://graph.microsoft.com/.default", "https://api.botframework.com/.default",
+      ["https://graph.microsoft.com/.default"], "https://api.botframework.com/.default",
     ]);
     expect(credentials.certificate).not.toHaveBeenCalled();
     expect(credentials.default).not.toHaveBeenCalled();
@@ -323,7 +325,7 @@ describe("independent Graph and health-report identities", () => {
       certificate.M365_TENANT_ID, certificate.M365_CLIENT_ID, certificate.M365_CLIENT_CERTIFICATE_PATH,
     );
     expect(credentials.managed).toHaveBeenCalledExactlyOnceWith({ clientId: certificate.AZURE_CLIENT_ID });
-    expect(credentials.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", expect.anything());
+    expect(credentials.token).toHaveBeenCalledWith(["https://graph.microsoft.com/.default"], expect.anything());
     expect(credentials.token).toHaveBeenCalledWith("https://management.azure.com/.default", expect.anything());
     expect(fetcher).toHaveBeenCalledTimes(8);
     expect(credentials.default).not.toHaveBeenCalled();
@@ -486,7 +488,7 @@ describe("stateless service runtime", () => {
     expect(credentials.certificate).not.toHaveBeenCalled();
     expect(credentials.default).not.toHaveBeenCalled();
     await runtime.graph?.authenticate(new AbortController().signal);
-    expect(credentials.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", { abortSignal: expect.any(AbortSignal) });
+    expect(credentials.token).toHaveBeenCalledWith(["https://graph.microsoft.com/.default"], { abortSignal: expect.any(AbortSignal) });
   });
   it.each([undefined, "", "private-value"])("rejects absent/invalid MI client ID %s without credential fallback", value => {
     expect(() => createLiveGraphClient(value === undefined ? {} : { AZURE_CLIENT_ID: value })).toThrow("AZURE_CLIENT_ID");

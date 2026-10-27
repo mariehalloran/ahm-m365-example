@@ -45,10 +45,12 @@ const reportHealth = vi.fn<healthReports.HealthReporter>(async () => undefined);
 
 function project(): ProjectConfig {
   const configured = structuredClone(checkedIn);
+  configured.serviceHealth.enabled = true;
   configured.healthModel.subscriptionId = env.AZURE_TENANT_ID;
   configured.services.exchange.targets = [{ id: "exchange-one", mailbox: "dedicated@example.invalid" }];
   configured.services.exchange.scenarios = {
-    "send-receive-mail": true, "edit-reopen-draft": true, "attachment-reply-mail": false,
+    "send-receive-mail": true, "edit-reopen-draft": true, "attachment-mail": false,
+    "reply-mail": false,
     "distribution-list-mail": false, "recurring-calendar": false, "meeting-invitation": false,
   };
   configured.services.teams.targets = [{
@@ -96,7 +98,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("stable provider collection independent of live journey initialization", () => {
-  it.each([200, 403])("publishes OneDrive stable signals on one suppressed-context destination without changing journey success (Graph %s)", async status => {
+  it.each([200, 401, 403])("publishes OneDrive stable signals on one suppressed-context destination without changing journey success (Graph %s)", async status => {
     vi.mocked(healthReports.createHealthReporter).mockRestore();
     const configured = project();
     configured.services.onedrive.targets = [{
@@ -128,20 +130,22 @@ describe("stable provider collection independent of live journey initialization"
     expect(graphPaths.every(path => path.startsWith("https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/"))).toBe(true);
     expect(graphPaths.some(path => path.includes("/healthOverviews/"))).toBe(false);
     const provider = publications.filter(({ body }) => String(body.signalName).startsWith("microsoft-"));
-    expect(provider).toHaveLength(2);
+    expect(provider).toHaveLength(status === 200 ? 2 : 0);
     expect(provider.every(({ url }) => url.includes("/healthmodels/m365-experience-poc-onedrive/entities/onedrive-service-health/"))).toBe(true);
-    expect(provider[0]?.body.healthState).toBe(status === 200 ? "Healthy" : "Unknown");
-    if (status === 200) expect(provider[0]?.body.value).toBe(100);
-    else expect(provider[0]?.body).not.toHaveProperty("value");
-    expect(provider[1]?.body.healthState).toBe("Unknown");
-    if (status === 200) expect(provider[1]?.body.value).toBe(0);
-    else expect(provider[1]?.body).not.toHaveProperty("value");
+    if (status === 200) {
+      expect(provider[0]?.body).toMatchObject({ healthState: "Healthy", value: 100 });
+      expect(provider[1]?.body).toMatchObject({ healthState: "Unknown", value: 0 });
+    } else {
+      expect(results.recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+        kind: "failure", category: status === 401 ? "authentication-failure" : "permission-failure", httpStatus: status,
+      }));
+    }
     expect(results.record).toHaveBeenCalledTimes(3);
     expect(results.record.mock.calls.every(([result]) => result.success)).toBe(true);
     expect(JSON.stringify(publications)).not.toMatch(/PRIVATE-PROVIDER-ERROR|test-only-token|SharePoint/);
   });
 
-  it.each([200, 403])("publishes separate observed provider reports despite journey initialization failure (Graph %s)", async status => {
+  it.each([200, 401, 403])("publishes separate observed provider reports despite journey initialization failure (Graph %s)", async status => {
     vi.mocked(healthReports.createHealthReporter).mockRestore();
     const configured = project();
     configured.services.teams.targets = [{ id: "teams-one" }];
@@ -161,23 +165,20 @@ describe("stable provider collection independent of live journey initialization"
       project: configured, once: true, env, providers: teamsProviders, telemetry: output,
     })).rejects.toThrow("Missing dedicated resources");
     const provider = publications.filter(({ body }) => body.signalName === "microsoft-reported-service-status");
-    expect(provider).toHaveLength(1);
-    expect(provider[0]?.url).toContain("/healthmodels/m365-experience-poc-teams/entities/teams-service-health/");
-    expect(provider[0]?.body.healthState).toBe(status === 200 ? "Degraded" : "Unknown");
-    if (status === 200) expect(provider[0]?.body.value).toBe(50);
-    else {
-      expect(provider[0]?.body).not.toHaveProperty("value");
-      expect(JSON.parse(String(provider[0]?.body.additionalContext))).toMatchObject({
-        diagnosticCategories: ["permission-failure"], httpStatuses: [403],
-      });
-    }
+    expect(provider).toHaveLength(status === 200 ? 1 : 0);
     expect(JSON.stringify(publications)).not.toMatch(/PRIVATE-PROVIDER-ERROR|test-only-token/);
     const issues = publications.filter(({ body }) => body.signalName === "microsoft-reported-issue-count");
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.url).toBe(provider[0]?.url);
-    expect(issues[0]?.body.healthState).toBe("Unknown");
-    if (status === 200) expect(issues[0]?.body.value).toBe(0);
-    else expect(issues[0]?.body).not.toHaveProperty("value");
+    expect(issues).toHaveLength(status === 200 ? 1 : 0);
+    if (status === 200) {
+      expect(provider[0]?.url).toContain("/healthmodels/m365-experience-poc-teams/entities/teams-service-health/");
+      expect(provider[0]?.body).toMatchObject({ healthState: "Degraded", value: 50 });
+      expect(issues[0]?.url).toBe(provider[0]?.url);
+      expect(issues[0]?.body).toMatchObject({ healthState: "Unknown", value: 0 });
+    } else {
+      expect(results.recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+        kind: "failure", category: status === 401 ? "authentication-failure" : "permission-failure", httpStatus: status,
+      }));
+    }
     const synthetic = publications.filter(({ body }) => String(body.signalName).startsWith("synthetic-"));
     expect(synthetic.filter(({ body }) => body.healthState === "Unhealthy")).toHaveLength(1);
     expect(synthetic.filter(({ url }) => !url.includes("/entities/teams-global/"))

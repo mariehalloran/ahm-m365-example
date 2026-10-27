@@ -1,21 +1,7 @@
-export const activityFunctionNames = [
-  "getConnectivityMetricsForExchange",
-  "getMessageVolumeMetricsForEmailDelivery",
-  "getActiveUserMetricsForOutlookWebByReadEmail",
-  "getActiveUserMetricsForOutlookWebByAppOpening",
-  "getActiveUserMetricsForEmailByModernAuthentication",
-  "getUsageMetricsForTeamsByMeetingsJoined",
-  "getUsageMetricsForTeamsByLaunch",
-  "getMessageVolumeMetricsForTeamsChat",
-  "getAudioStreamQoEMetricsForTeams",
-  "getAudioStreamsOverUdpMetricsForTeams",
-] as const;
-export type ActivityFunction = (typeof activityFunctionNames)[number];
-export const activityFunctions = {
-  exchange: activityFunctionNames.slice(0, 5),
-  teams: activityFunctionNames.slice(5),
-  onedrive: [],
-} as const;
+import { activityCatalog, type ActivityFunction } from "./catalog.js";
+export { activityFunctionNames, activityFunctions } from "./catalog.js";
+export type { ActivityFunction } from "./catalog.js";
+
 export function isPercentageActivity(name: ActivityFunction): boolean {
-  return ["getConnectivityMetricsForExchange", "getAudioStreamQoEMetricsForTeams", "getAudioStreamsOverUdpMetricsForTeams"].includes(name);
+  return activityCatalog[name].unit === "Percent";
 }

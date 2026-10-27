@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startTeamsCallingCallback } from "../../utils/src/teams-calling-callback.js";
-import { createTestTone, testToneUri } from "../../utils/src/teams-call-media.js";
-import { TeamsCallOperations } from "../../utils/src/teams-call-operations.js";
 
 const servers: Awaited<ReturnType<typeof startTeamsCallingCallback>>[] = [];
 const identity = { botClientId: "11111111-1111-4111-8111-111111111111" };
@@ -21,37 +19,24 @@ const post = (url: string, body: string, token = "test-only") => fetch(`${url}/a
 });
 
 describe("bounded Teams-only callback listener", () => {
-  it("serves only the fixed original PCM tone with exact format and bounded headers", async () => {
-    const { url, verify } = await fixture();
-    const response = await fetch(`${url}/media/test-tone.wav`);
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("audio/wav");
-    expect(response.headers.get("content-length")).toBe("32044");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    const wav = Buffer.from(await response.arrayBuffer());
-    expect(wav).toEqual(createTestTone());
-    expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
-    expect(wav.readUInt32LE(4)).toBe(wav.length - 8);
-    expect(wav.toString("ascii", 8, 16)).toBe("WAVEfmt ");
-    expect([wav.readUInt16LE(20), wav.readUInt16LE(22), wav.readUInt32LE(24), wav.readUInt32LE(28),
-      wav.readUInt16LE(32), wav.readUInt16LE(34), wav.readUInt32LE(40)]).toEqual([1, 1, 16000, 32000, 2, 16, 32000]);
-    expect(wav.subarray(44).some(byte => byte !== 0)).toBe(true);
-    for (const path of ["/media/test-tone.wav?file=other", "/media/other.wav", "/media/test-tone.wav/extra"]) {
-      expect((await fetch(`${url}${path}`)).status).toBe(404);
-    }
-    expect((await fetch(`${url}/media/test-tone.wav`, { method: "POST" })).status).toBe(404);
-    expect(verify).not.toHaveBeenCalled();
-    expect(testToneUri("https://approved.example.invalid/api/calls")).toBe("https://approved.example.invalid/media/test-tone.wav");
-    for (const invalid of ["http://approved.example.invalid/api/calls", "https://approved.example.invalid/api/calls?media=other", "https://other.invalid/arbitrary"]) {
-      expect(() => testToneUri(invalid)).toThrow();
-    }
+  it("fails an occupied callback port rather than borrowing another worker's listener", async () => {
+    const { url } = await fixture();
+    await expect(startTeamsCallingCallback({
+      port: Number(new URL(url).port), host: "127.0.0.1", verify: async () => identity,
+    })).rejects.toMatchObject({ code: "EADDRINUSE" });
+    expect(await (await fetch(`${url}/healthz`)).text()).toBe("ready\n");
   });
-  it("allows only verified callbacks to mutate active operation correlation", async () => {
-    const store = new TeamsCallOperations();
-    const clientContext = "d45324c1-fcb5-430a-902c-f20af696537c";
-    const attempt = store.register("owned-call", clientContext, 10000, identity.botClientId);
-    attempt.bind({ "@odata.type": "#microsoft.graph.playPromptOperation", id: "owned-operation", clientContext, status: "running" });
-    const listener = vi.fn((body: unknown, verified: typeof identity) => store.accept(body, verified));
+  it.each([
+    "/media/test-tone.wav", "/media/test-tone.wav?file=other",
+    "/media/other.wav", "/media/test-tone.wav/extra",
+  ])("does not expose the retired media endpoint %s", async path => {
+    const { url, verify } = await fixture();
+    expect((await fetch(`${url}${path}`)).status).toBe(404);
+    expect((await fetch(`${url}${path}`, { method: "POST" })).status).toBe(404);
+    expect(verify).not.toHaveBeenCalled();
+  });
+  it("dispatches call notifications only after verifying their signed identity", async () => {
+    const listener = vi.fn();
     const server = await startTeamsCallingCallback({
       port: 0, host: "127.0.0.1", verify: async token => {
         if (token !== "approved") throw new Error("denied");
@@ -60,19 +45,16 @@ describe("bounded Teams-only callback listener", () => {
       onNotification: listener,
     });
     servers.push(server);
-    const resource = "/communications/calls/owned-call/operations/owned-operation";
+    const resource = "/communications/calls/owned-call";
     const body = JSON.stringify({ value: [{
-      changeType: "deleted", resourceUrl: resource,
-      resourceData: { "@odata.type": "#microsoft.graph.playPromptOperation", "@odata.id": resource, clientContext, status: "completed" },
+      changeType: "updated", resourceUrl: resource,
+      resourceData: { "@odata.type": "#microsoft.graph.call", id: "owned-call", state: "established" },
     }] });
     const url = `http://127.0.0.1:${server.port}`;
     expect((await post(url, body, "unapproved")).status).toBe(401);
     expect(listener).not.toHaveBeenCalled();
-    expect(attempt.observation()).toBeUndefined();
     expect((await post(url, body, "approved")).status).toBe(200);
     expect(listener).toHaveBeenCalledExactlyOnceWith(JSON.parse(body), identity);
-    expect(attempt.observation()?.status).toBe("completed");
-    attempt.dispose();
   });
   it("reports only bounded rejection status/stage metadata, never authentication or notification contents", async () => {
     const onRejected = vi.fn();
