@@ -19,7 +19,7 @@ import { provisionReplySeed, type ReplySeedGraph, type ReplySeedOptions } from "
 
 /** Provisions each selected target's retained reply fixture and saves its binding to the `.env` next to the config. */
 export async function provisionReplySeeds(
-  project: ProjectConfig, source: string, graph: ReplySeedGraph, options: ReplySeedOptions,
+  project: ProjectConfig, source: string, graph: ReplySeedGraph, options: ReplySeedOptions & { reprovision?: boolean },
 ): Promise<Set<string>> {
   const unavailable = new Set<string>();
   for (const target of project.services.exchange.targets) {
@@ -37,6 +37,7 @@ export async function provisionReplySeeds(
       unavailable.add(target.id);
       options.telemetry.emit("exchange-reply-seed-setup-failed", {
         targetId: target.id, category: categoryOf(error),
+        ...(error instanceof IntegrationError && error.detail ? { detail: error.detail } : {}),
         ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
       });
     }
@@ -51,6 +52,7 @@ export async function main(argv: string[]) {
       config: { type: "string" }, tenant: { type: "string" },
       apply: { type: "boolean", default: false }, samples: { type: "string", default: "3" },
       "setup-only": { type: "boolean", default: false },
+      "reprovision-seeds": { type: "boolean", default: false },
     },
   });
   const samples = z.coerce.number().int().min(1).max(10).parse(values.samples);
@@ -79,7 +81,9 @@ export async function main(argv: string[]) {
   let unavailable = new Set<string>();
   try {
     if (selected.scenarios["reply-mail"]) {
-      unavailable = await provisionReplySeeds(project, source, graph, { signal: controller.signal, telemetry });
+      unavailable = await provisionReplySeeds(project, source, graph, {
+        signal: controller.signal, telemetry, reprovision: values["reprovision-seeds"],
+      });
       failed = unavailable.size > 0;
       telemetry.emit("exchange-reply-seed-bindings-saved", { bindingsFile: bindingsFile(source), failedTargets: unavailable.size });
     }

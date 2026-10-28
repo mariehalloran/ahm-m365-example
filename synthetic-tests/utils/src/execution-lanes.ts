@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { exchangeJourneyMilliseconds, probeServices, testTypes, type Telemetry } from "./contracts.js";
+import { probeServices, testTypes, type Telemetry } from "./contracts.js";
 import type { ServiceConfig } from "./service-config.js";
 
 export interface ExecutionLane {
@@ -7,12 +7,7 @@ export interface ExecutionLane {
   intervalSeconds: number;
   timeoutSeconds: number;
   journeys: string[];
-}
-
-// A lane may run as long as the slowest journey assigned to it is allowed to.
-function laneCapSeconds(journeys: readonly string[]): number {
-  const types = testTypes.filter(type => journeys.includes(probeServices[type].journey));
-  return Math.max(...types.map(exchangeJourneyMilliseconds)) / 1000;
+  alignToMinute?: boolean;
 }
 
 export function executionLanes(service: Pick<ServiceConfig, "type" | "intervalSeconds" | "timeoutSeconds" | "executionLanes">): ExecutionLane[] {
@@ -20,11 +15,7 @@ export function executionLanes(service: Pick<ServiceConfig, "type" | "intervalSe
   if (service.type !== "exchange") {
     return service.executionLanes ?? [{ name: service.type, intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys }];
   }
-  const lanes = service.executionLanes ?? [
-    { name: "mail", intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys: ["send-receive-mail"] },
-    { name: "extended", intervalSeconds: 300, timeoutSeconds: service.timeoutSeconds, journeys: journeys.filter(name => name !== "send-receive-mail") },
-  ];
-  return lanes.map(lane => ({ ...lane, timeoutSeconds: Math.min(lane.timeoutSeconds, laneCapSeconds(lane.journeys)) }));
+  return [{ name: "exchange", intervalSeconds: 60, timeoutSeconds: 30, journeys, alignToMinute: true }];
 }
 
 export async function runExecutionLanes(
@@ -34,13 +25,28 @@ export async function runExecutionLanes(
     now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   },
 ): Promise<void> {
-  const now = options.now ?? (() => performance.now());
+  const now = options.now ?? Date.now;
   const sleep = options.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
   const origin = now();
   const outcomes = await Promise.allSettled(lanes.map(async lane => {
     const interval = lane.intervalSeconds * 1000;
+    const laneOrigin = lane.alignToMinute && !options.once ? Math.ceil(origin / interval) * interval : origin;
+    if (laneOrigin > now()) {
+      try { await sleep(laneOrigin - now(), options.signal); }
+      catch (error) { if (!options.signal.aborted) throw error; }
+    }
     let slot = 0;
+    let lastStartedSlot = -1;
     while (!options.signal.aborted) {
+      if (lane.alignToMinute && !options.once) {
+        slot = Math.max(slot, Math.floor((now() - laneOrigin) / interval));
+        if (slot <= lastStartedSlot) {
+          try { await sleep(Math.max(0, laneOrigin + (lastStartedSlot + 1) * interval - now()), options.signal); }
+          catch (error) { if (!options.signal.aborted) throw error; }
+          continue;
+        }
+      }
+      lastStartedSlot = slot;
       options.telemetry.emit("execution-lane-started", { lane: lane.name, slot });
       try { await execute(lane); }
       catch (error) {
@@ -49,12 +55,12 @@ export async function runExecutionLanes(
       }
       if (options.once || options.signal.aborted) return;
       slot++;
-      const skipped = Math.max(0, Math.ceil((now() - origin - slot * interval) / interval));
+      const skipped = Math.max(0, Math.ceil((now() - laneOrigin - slot * interval) / interval));
       if (skipped) {
         options.telemetry.emit("service-slots-skipped", { lane: lane.name, skipped, firstSlot: slot, intervalSeconds: lane.intervalSeconds });
         slot += skipped;
       }
-      try { await sleep(Math.max(0, origin + slot * interval - now()), options.signal); }
+      try { await sleep(Math.max(0, laneOrigin + slot * interval - now()), options.signal); }
       catch (error) { if (!options.signal.aborted) throw error; }
     }
   }));

@@ -28,7 +28,8 @@
       "exchange": {
         "enabled": true,
         "execution": {
-          "mode": "live", "intervalSeconds": 60, "timeoutSeconds": 15, "cohort": "exchange-global", "maxConcurrentProbes": 6,
+          "mode": "live", "intervalSeconds": 60, "timeoutSeconds": 30, "cohort": "exchange-global",
+          "maxConcurrentRequests": 32, "maxConcurrentRequestsPerMailbox": 2,
           "serviceHealth": true,
           "serviceActivity": {
             "enabled": true,
@@ -39,43 +40,25 @@
               "getActiveUserMetricsForOutlookWebByAppOpening",
               "getActiveUserMetricsForEmailByModernAuthentication"
             ]
-          },
-          "executionLanes": [
-            { "name": "mail", "intervalSeconds": 60, "timeoutSeconds": 15, "journeys": ["send-receive-mail"] },
-            { "name": "extended", "intervalSeconds": 300, "timeoutSeconds": 30, "journeys": [
-              "edit-reopen-draft", "attachment-mail", "reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation"
-            ] }
-          ]
+          }
         },
         "worker": { "appName": "m365-ctbcoa-exchange", "identity": "uami-m365-experience-consto-exchange" },
         "scenarios": {
           "send-receive-mail": true, "edit-reopen-draft": true, "attachment-mail": true,
-          "reply-mail": true, "distribution-list-mail": true, "recurring-calendar": true, "meeting-invitation": true
+          "reply-mail": true, "recurring-calendar": true
         },
         "targets": [
           {
-            "id": "exchange-probe-001", "mailbox": "test-user-1@constosuites.onmicrosoft.com",
-            "recipientMailbox": "test-user-2@constosuites.onmicrosoft.com",
-            "distributionList": {
-              "address": "ahm-synthetic-mail@constosuites.onmicrosoft.com",
-              "expectedRecipients": ["test-user-1@constosuites.onmicrosoft.com", "test-user-2@constosuites.onmicrosoft.com"]
-            }
+            "id": "exchange-probe-001", "mailbox": "test-user-1@constosuites.onmicrosoft.com"
           },
           {
-            "id": "exchange-probe-002", "mailbox": "test-user-4@constosuites.onmicrosoft.com",
-            "recipientMailbox": "test-user-5@constosuites.onmicrosoft.com",
-            "distributionList": {
-              "address": "ahm-synthetic-mail-uk@constosuites.onmicrosoft.com",
-              "expectedRecipients": ["test-user-4@constosuites.onmicrosoft.com", "test-user-5@constosuites.onmicrosoft.com"]
-            }
+            "id": "exchange-probe-002", "mailbox": "test-user-4@constosuites.onmicrosoft.com"
           },
           {
-            "id": "exchange-probe-003", "mailbox": "test-user-5@constosuites.onmicrosoft.com",
-            "recipientMailbox": "test-user-4@constosuites.onmicrosoft.com",
-            "distributionList": {
-              "address": "ahm-synthetic-mail-uk@constosuites.onmicrosoft.com",
-              "expectedRecipients": ["test-user-4@constosuites.onmicrosoft.com", "test-user-5@constosuites.onmicrosoft.com"]
-            }
+            "id": "exchange-probe-003", "mailbox": "test-user-5@constosuites.onmicrosoft.com"
+          },
+          {
+            "id": "exchange-probe-004", "mailbox": "test-user-2@constosuites.onmicrosoft.com"
           }
         ]
       },

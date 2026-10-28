@@ -23,6 +23,7 @@ export interface HttpOptions {
   maxRetryDelayMs?: number;
   retryThrottledWrites?: boolean;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  withRequestPermit?: (signal: AbortSignal, operation: () => Promise<Response>) => Promise<Response>;
 }
 
 export async function withAbort<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
@@ -54,10 +55,9 @@ export async function requestWithRetry(
   for (let attempt = 0; attempt < attempts; attempt++) {
     let response: Response;
     try {
-      response = await withAbort(bounded, () => fetcher(url, {
-        ...init,
-        signal: bounded,
-      }));
+      const send = () => fetcher(url, { ...init, signal: bounded });
+      response = await withAbort(bounded, () => options.withRequestPermit
+        ? options.withRequestPermit(bounded, send) : send());
     } catch {
       bounded.throwIfAborted();
       if (!retrySafe || attempt + 1 >= attempts) throw new IntegrationError("graph-unavailable");

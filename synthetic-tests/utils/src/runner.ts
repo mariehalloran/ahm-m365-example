@@ -3,7 +3,8 @@ import type { Config } from "./config.js";
 import { exchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
-import { categoryOf, IntegrationError } from "./http.js";
+import { categoryOf, IntegrationError, withAbort } from "./http.js";
+import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
 import type { ResultOutput } from "./results.js";
 import type { CycleResults, HealthReporter } from "./health-reports.js";
@@ -21,6 +22,8 @@ export interface RunnerDependencies {
   handler?: ProbeHandler;
   now?: () => number;
   reportHealth?: HealthReporter;
+  exchangeRequests?: GraphRequestPermits;
+  capacityGroups?: { id: string; displayName: string; targetIds: string[] }[];
 }
 
 interface CycleContext {
@@ -28,6 +31,7 @@ interface CycleContext {
   startedAt: number;
   signal: AbortSignal;
   externalSignal?: AbortSignal | undefined;
+  startedAttempts: Set<string>;
 }
 
 function createCompletionDeadline(
@@ -81,13 +85,18 @@ async function runSingleProbe(
     ? simulate
     : dependencies.handler;
   const attemptStartedAt = now();
+  let executionFinishedAt: number | undefined;
+  let cancelledDuringExecution = false;
 
   let deadline: ReturnType<typeof createCompletionDeadline> | undefined;
 
   try {
     if (!handler) throw new IntegrationError("collector-failure");
     probeSignal.throwIfAborted();
+    cycle.startedAttempts.add(`${probe.type}:${probe.id}`);
     deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt);
+    const graph = liveExchange && probe.mailbox && dependencies.exchangeRequests && dependencies.graph?.forMailbox
+      ? dependencies.graph.forMailbox(probe.mailbox, dependencies.exchangeRequests) : dependencies.graph;
 
     const rawResult = await Promise.race([
       handler(probe, {
@@ -95,20 +104,29 @@ async function runSingleProbe(
         signal: probeSignal,
         telemetry,
         now,
-        ...(dependencies.graph ? { graph: dependencies.graph } : {}),
+        executionComplete: () => {
+          cancelledDuringExecution ||= probeSignal.aborted;
+          executionFinishedAt ??= now();
+          clearTimeout(executionTimer);
+        },
+        ...(graph ? { graph } : {}),
         ...(dependencies.teamsBot ? { teamsBot: dependencies.teamsBot } : {}),
         ...(dependencies.teamsCalling ? { teamsCalling: dependencies.teamsCalling } : {}),
         ...(dependencies.teamsCallingPeer ? { teamsCallingPeer: dependencies.teamsCallingPeer } : {}),
       }),
       deadline.promise,
     ]);
-    if (liveExchange && now() - attemptStartedAt >= config.PROBE_TIMEOUT_MS) execution.abort();
-    if (probeSignal.aborted) {
+    if (liveExchange && (executionFinishedAt ?? now()) - attemptStartedAt >= config.PROBE_TIMEOUT_MS) {
+      cancelledDuringExecution = true;
+      execution.abort();
+    }
+    if (cycle.externalSignal?.aborted || (executionFinishedAt === undefined ? probeSignal.aborted : cancelledDuringExecution)) {
       // A handler may finish cleanup after cancellation, but cannot turn a deadline into success.
       const timedOut = resultSchema.safeParse(rawResult);
       if (timedOut.success) {
+        const { deliveryDurationMs: _delivery, publicationDurationMs: _publication, ...observed } = timedOut.data;
         return resultSchema.parse({
-          ...timedOut.data, success: false, diagnosticCategory: cycle.externalSignal?.aborted ? "cancelled" : "delivery-timeout",
+          ...observed, success: false, diagnosticCategory: cycle.externalSignal?.aborted ? "cancelled" : "delivery-timeout",
           durationMs: Math.max(0, now() - attemptStartedAt),
         });
       }
@@ -165,7 +183,8 @@ async function executeProbes(
       }
     }
   };
-  const concurrency = Math.min(config.MAX_CONCURRENT_PROBES, config.probes.length);
+  const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
+  const concurrency = exchange ? config.probes.length : Math.min(config.MAX_CONCURRENT_PROBES, config.probes.length);
   const executions = Array.from({ length: concurrency }, async () => {
     try { await runNextProbes(); }
     catch (error) {
@@ -189,8 +208,45 @@ async function publishCycleResults(
       cycleId: cycle.cycleId, probeCount: cycle.results.length,
     });
   }
-  if (complete) await dependencies.reportHealth?.(cycle);
+  if (complete) {
+    const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
+    const signal = AbortSignal.timeout(exchange ? 12000 : 30000);
+    await withAbort(signal, async () => dependencies.reportHealth?.({ ...cycle, signal }));
+  }
   if (telemetryErrors.length) throw telemetryErrors[0];
+}
+
+function reportExchangeCapacity(
+  config: Config, dependencies: RunnerDependencies, cycle: CycleContext, results: SyntheticResult[],
+  before: Map<string, PermitMeasurements>,
+): void {
+  const after = dependencies.exchangeRequests!.snapshot();
+  const groups = dependencies.capacityGroups ?? [{ id: "ungrouped", displayName: "Ungrouped", targetIds: config.probes.map(probe => probe.id) }];
+  for (const group of groups) {
+    const members = new Set(group.targetIds);
+    const probes = config.probes.filter(probe => members.has(probe.id));
+    if (!probes.length) continue;
+    const settled = results.filter(result => members.has(result.testId));
+    const mailboxes = new Set(probes.flatMap(probe => probe.mailbox ? [probe.mailbox.toLowerCase()] : []));
+    const permits = [...mailboxes].reduce((sum, mailbox) => {
+      const current = after.get(mailbox);
+      const prior = before.get(mailbox);
+      return {
+        requests: sum.requests + (current?.requests ?? 0) - (prior?.requests ?? 0),
+        waitedRequests: sum.waitedRequests + (current?.waitedRequests ?? 0) - (prior?.waitedRequests ?? 0),
+        waitMs: sum.waitMs + (current?.waitMs ?? 0) - (prior?.waitMs ?? 0),
+      };
+    }, { requests: 0, waitedRequests: 0, waitMs: 0 });
+    dependencies.telemetry.emit("exchange-minute-capacity", {
+      cycleId: cycle.cycleId, groupId: group.id, group: group.displayName,
+      expectedAttempts: probes.length,
+      startedAttempts: probes.filter(probe => cycle.startedAttempts.has(`${probe.type}:${probe.id}`)).length,
+      completedAttempts: settled.length,
+      timedOutAttempts: settled.filter(result => result.diagnosticCategory === "delivery-timeout").length,
+      graphRequests: permits.requests, permitWaitRequests: permits.waitedRequests, permitWaitMs: permits.waitMs,
+      interpretation: "runner-capacity-not-exchange-availability",
+    });
+  }
 }
 
 export async function runCycle(
@@ -198,6 +254,14 @@ export async function runCycle(
   dependencies: RunnerDependencies,
   externalSignal?: AbortSignal,
 ) {
+  const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
+  if (exchange) dependencies = {
+    ...dependencies,
+    exchangeRequests: dependencies.exchangeRequests ?? new GraphRequestPermits(
+      config.EXCHANGE_MAX_CONCURRENT_REQUESTS, config.EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX,
+    ),
+  };
+  const permitStart = dependencies.exchangeRequests?.snapshot();
   const { telemetry } = dependencies;
   const cycleId = randomUUID();
   const cycleStartedAt = performance.now();
@@ -222,8 +286,9 @@ export async function runCycle(
 
   try {
     cycleSignal.throwIfAborted();
-    const cycle = { cycleId, startedAt: cycleStartedAt, signal: cycleSignal, externalSignal };
+    const cycle: CycleContext = { cycleId, startedAt: cycleStartedAt, signal: cycleSignal, externalSignal, startedAttempts: new Set() };
     const { results, telemetryErrors } = await executeProbes(config, dependencies, cycle, stopOtherProbes);
+    if (exchange) reportExchangeCapacity(config, dependencies, cycle, results, permitStart!);
 
     stage = "reporting";
     await publishCycleResults(config, dependencies, { cycleId, results }, telemetryErrors);

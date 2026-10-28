@@ -21,7 +21,9 @@ function scenarioSelection<S extends ServiceConfig["type"]>(service: S) {
     .map(journey => [journey.journey, z.boolean().default(true)])) as {
       [Journey in ServiceJourney<S>]: z.ZodDefault<z.ZodBoolean>;
     };
-  return z.object(shape).strict();
+  const scenarios = z.object(shape).strict();
+  // Every scenario of a service is on unless the config turns it off, so the whole block may be omitted.
+  return scenarios.default({} as z.input<typeof scenarios>);
 }
 const selection = {
   enabled: z.boolean().default(true),
@@ -109,6 +111,9 @@ function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
 function validateServiceSelection(services: ProjectConfig["services"], tenantId: string): void {
   const teams = services.teams;
   const onedrive = services.onedrive;
+  if (new Set(services.exchange.targets.map(target => target.mailbox.toLowerCase())).size !== services.exchange.targets.length) {
+    throw new ConfigurationError("Exchange targets must identify unique independent mailboxes");
+  }
   for (const field of ["userId", "userPrincipalName", "driveId"] as const) {
     const values = onedrive.targets.flatMap(item => item[field] ? [item[field]!.toLowerCase()] : []);
     if (new Set(values).size !== values.length) throw new ConfigurationError("OneDrive accounts and drives must be unique");
@@ -153,6 +158,10 @@ export function parseProjectDocument(raw: unknown): ProjectDocument {
   }
   const parsed = projectDocumentSchema.safeParse(document);
   if (!parsed.success) {
+    if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" &&
+        issue.keys.some(key => ["recipientMailbox", "distributionList", "distribution-list-mail", "meeting-invitation"].includes(key)))) {
+      throw new ConfigurationError("Obsolete Exchange pair/distribution/meeting configuration: use one { id, mailbox } target per unique user and only the five supported single-user journeys; re-provision retained SELF-REPLY seeds");
+    }
     if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("attachment-reply-mail"))) {
       throw new ConfigurationError("Obsolete attachment-reply-mail: select attachment-mail and reply-mail separately, then provision root-owned replySeed bindings");
     }
@@ -202,19 +211,19 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
     // Allow 12 seconds for cleanup, 30 for reports, and optionally 12 for OTEL.
-    const cycleBudgetSeconds = service.cycleTimeoutSeconds + (project.otel.enabled ? 54 : 42);
+    const cycleBudgetSeconds = service.type === "exchange" ? 59 : service.cycleTimeoutSeconds + (project.otel.enabled ? 54 : 42);
     const lanes = executionLanes(service)
       .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]));
     const largeCohort = selected.targets.length > 30 ||
       (service.type === "teams" && project.services.teams.callTargets.length > 30);
-    if (service.type === "onedrive" || largeCohort) {
+    if (service.type === "onedrive" || (largeCohort && service.type !== "exchange")) {
       for (const lane of lanes) {
         const attempts = lane.journeys.filter(journey => (selected.scenarios as Record<string, boolean>)[journey])
           .reduce((sum, journey) => sum + (service.type === "teams" && journey === "scheduled-meeting"
             ? project.services.teams.callTargets.length : selected.targets.length), 0);
         const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + 12);
         if (service.cycleTimeoutSeconds < required) {
-          const label = service.type === "onedrive" ? "OneDrive" : service.type === "exchange" ? "Exchange" : "Teams";
+          const label = service.type === "onedrive" ? "OneDrive" : "Teams";
           throw new ConfigurationError(`${label} lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase the budget within the concurrency limit or reduce the cohort`);
         }
       }

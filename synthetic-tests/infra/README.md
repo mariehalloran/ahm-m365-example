@@ -189,9 +189,9 @@ secret-reading/application-modification access.
   cross-cycle journey history or durable outbox.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
-rollup, not just successful ARM provisioning. The checked-in config selects twelve
-active journeys and 46 active business steps, plus Exchange's Mail and Calendar
-parents, across four models, 67 entities and 63 relationships by default;
+rollup, not just successful ARM provisioning. The checked-in config selects ten
+active journeys and 38 business steps, plus Exchange's Mail and Calendar
+parents, across four models, 57 entities and 53 relationships by default;
 enabling Service Health adds three entities and
 relationships. There is no proposal catalog. Provider context
 is separate and impact-suppressed. Invalid schemas or unusable report credentials

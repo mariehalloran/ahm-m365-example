@@ -19,6 +19,8 @@ const serviceFields = {
   intervalSeconds: z.number().int().min(1).max(86400),
   timeoutSeconds: z.number().int().min(1).max(120),
   maxConcurrentProbes: z.number().int().min(1).max(20).default(3),
+  maxConcurrentRequests: z.number().int().min(1).max(1000).default(32),
+  maxConcurrentRequestsPerMailbox: z.number().int().min(1).max(20).default(2),
   cycleTimeoutSeconds: z.number().int().min(1).max(86400).default(170),
   mode: z.enum(["simulation", "live"]),
   scenario: z.enum(scenarios).default("healthy"),
@@ -54,9 +56,8 @@ const common = {
 const target = probeSchema.pick({ id: true, region: true, scenario: true });
 export const serviceTargetSchemas = {
   exchange: z.array(target.extend({
-    mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
+    mailbox: probeSchema.shape.mailbox.unwrap(),
     replySeed: probeSchema.shape.replySeed,
-    distributionList: probeSchema.shape.distributionList,
   }).strict()).max(maxServiceTargets),
   onedrive: z.array(target.extend({
     userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
@@ -95,6 +96,10 @@ const serviceSchema = z.discriminatedUnion("type", [
 export type ServiceConfig = z.infer<typeof serviceSchema>;
 
 function validateProviderSettings(service: ServiceExecution): void {
+  if (service.type === "exchange" && (service.intervalSeconds !== 60 ||
+      service.executionLanes && (service.executionLanes.length !== 1 || service.executionLanes[0]!.intervalSeconds !== 60))) {
+    throw new ConfigurationError("Exchange requires one aligned 60-second lane for every supported journey");
+  }
   if (service.type === "onedrive" && (service.serviceActivity.enabled ||
       service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
     throw new ConfigurationError("OneDrive has no approved beta service activity functions");
@@ -156,6 +161,9 @@ export function parseServiceConfig(raw: unknown): ServiceConfig {
   if (new Set(service.targets.map(item => item.id)).size !== service.targets.length) {
     throw new ConfigurationError("Probe IDs must be unique");
   }
+  if (service.type === "exchange" && new Set(service.targets.map(item => item.mailbox.toLowerCase())).size !== service.targets.length) {
+    throw new ConfigurationError("Exchange targets must identify unique independent mailboxes");
+  }
   return service;
 }
 
@@ -192,7 +200,9 @@ export function serviceSettings(
     PROBE_TIMEOUT_MS: service.timeoutSeconds * 1000,
     ...(service.type === "exchange" ? { POLL_INTERVAL_MS: exchangePollIntervalMilliseconds } : {}),
     MAX_CONCURRENT_PROBES: service.maxConcurrentProbes,
-    CYCLE_TIMEOUT_MS: service.cycleTimeoutSeconds * 1000,
+    EXCHANGE_MAX_CONCURRENT_REQUESTS: service.maxConcurrentRequests,
+    EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: service.maxConcurrentRequestsPerMailbox,
+    CYCLE_TIMEOUT_MS: service.type === "exchange" ? 30000 : service.cycleTimeoutSeconds * 1000,
     probes: serviceProbes(service, selectedScenarios),
   }, env);
 }

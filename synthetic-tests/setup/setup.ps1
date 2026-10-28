@@ -2,7 +2,7 @@
 #Requires -Modules ExchangeOnlineManagement
 <#
 .SYNOPSIS
-    Sets up the Microsoft 365 side of monitoring.config.json: mailbox access, distribution lists, team members,
+    Sets up the Microsoft 365 side of monitoring.config.json: mailbox access, team members,
     channels, reply-mail seeds, and the IDs that deploy needs but the config does not hold.
 
 .DESCRIPTION
@@ -16,11 +16,10 @@
     `deployment.stage: "foundation"` first.
 
       1. Exchange  extends the worker's management scope to every configured mailbox
-      2. Exchange  creates the distribution lists the mail journeys deliver to and fills them
-      3. Teams     adds each group's accounts to the team and finds or creates the channel named by `channelName`
-      4. Lookups   finds the IDs the config leaves out: the peer bot's client ID, the calling callback URL, the
+      2. Teams     adds each group's accounts to the team and finds or creates the channel named by `channelName`
+      3. Lookups   finds the IDs the config leaves out: the peer bot's client ID, the calling callback URL, the
                    meeting organizer's and each OneDrive account's user ID
-      5. Exchange  provisions the retained reply-mail message (seed) that each reply journey answers
+      4. Exchange  validates or provisions a retained received self-addressed SELF-REPLY fixture per mailbox
 
     The config names things (a resource by its name, an account by its address); every ID found or created here is
     written to the .env file next to the config, never into the config. `npm run deploy` reads both. Each line is
@@ -28,7 +27,8 @@
 #>
 param(
     [string]$Config = (Join-Path $PSScriptRoot '../../monitoring.config.json'),
-    [switch]$Plan
+    [switch]$Plan,
+    [switch]$ReprovisionReplySeeds
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,15 @@ $PSNativeCommandUseErrorActionPreference = $true
 $Config = (Resolve-Path $Config).Path
 $EnvFile = Join-Path (Split-Path $Config) '.env'
 $document = Get-Content $Config -Raw | ConvertFrom-Json -Depth 100
+foreach ($configuredTenant in $document.tenants) {
+    $configured = $configuredTenant.services.exchange
+    if ($configured.targets | Where-Object { $_.PSObject.Properties.Name -contains 'recipientMailbox' -or $_.PSObject.Properties.Name -contains 'distributionList' }) {
+        throw 'Obsolete Exchange pair/distribution targets. Configure one { id, mailbox } target per unique user before running setup.'
+    }
+    if ($configured.scenarios.PSObject.Properties.Name | Where-Object { $_ -in @('distribution-list-mail', 'meeting-invitation') }) {
+        throw 'Removed Exchange journeys are not supported. Select only the five single-user scenarios.'
+    }
+}
 
 # The signed-in administrator decides which tenant of the config is set up (run once per tenant).
 $account = az account show | ConvertFrom-Json
@@ -131,8 +140,7 @@ if ($exchange.enabled -ne $false -and $exchange.execution.mode -eq 'live') {
     try {
         # Every mailbox the journeys touch, mapped from the address in the config to its primary SMTP address.
         $primary = @{}
-        $addresses = $exchange.targets | ForEach-Object { $_.mailbox; $_.recipientMailbox; $_.distributionList.expectedRecipients } |
-            Where-Object { $_ } | Sort-Object -Unique
+        $addresses = $exchange.targets.mailbox | Where-Object { $_ } | Sort-Object -Unique
         foreach ($address in $addresses) {
             $mailbox = Get-Mailbox -Identity $address -ErrorAction SilentlyContinue
             if (-not $mailbox) { throw "$address has no Exchange mailbox. Assign the account an Exchange Online license first." }
@@ -169,22 +177,6 @@ if ($exchange.enabled -ne $false -and $exchange.execution.mode -eq 'live') {
         if ($blocked -and -not $Plan) { throw "Exchange reports these mailboxes out of scope: $($blocked -join ', ')" }
         Write-Host ($blocked ? "  not in scope yet: $($blocked -join ', ')" : '  every mailbox is in the worker''s scope')
 
-        # 2. Each distribution list holds every recipient its journeys expect.
-        foreach ($list in $exchange.targets.distributionList | Where-Object { $_ } | Group-Object address) {
-            $expected = @($list.Group.expectedRecipients | ForEach-Object { $primary[$_] } | Sort-Object -Unique)
-            $existing = Get-DistributionGroup -Identity $list.Name -ErrorAction SilentlyContinue
-            if (-not $existing -and (Confirm-Change "create distribution list $($list.Name)")) {
-                New-DistributionGroup -Name $list.Name.Split('@')[0] -PrimarySmtpAddress $list.Name -Type Distribution | Out-Null
-                Write-Host "  created $($list.Name)"
-            }
-            $members = $existing ? @((Get-DistributionGroupMember -Identity $list.Name -ResultSize Unlimited).PrimarySmtpAddress) : @()
-            foreach ($member in $expected | Where-Object { $_ -notin $members }) {
-                if (Confirm-Change "add $member to $($list.Name)") {
-                    Add-DistributionGroupMember -Identity $list.Name -Member $member
-                    Write-Host "  added $member to $($list.Name)"
-                }
-            }
-        }
     }
     finally { Disconnect-ExchangeOnline -Confirm:$false }
 }
@@ -199,7 +191,7 @@ if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
     $tenantAccounts = @($exchange.targets.mailbox) + @($tenant.services.onedrive.targets.userPrincipalName)
 
     foreach ($target in $teams.targets) {
-        # 3a. The accounts of every group that lists this target must be members of its team.
+        # The accounts of every group that lists this target must be members of its team.
         $wanted = $document.groups | Where-Object { $target.id -in $_.teams } | ForEach-Object { $_.accounts } |
             Where-Object { $_ -in $tenantAccounts } | Sort-Object -Unique
         $memberIds = @(Get-GraphList "/groups/$($target.teamId)/members?`$select=id" | ForEach-Object id)
@@ -211,7 +203,7 @@ if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
             }
         }
 
-        # 3b. The channel is found by name (created when missing); its ID goes to .env.
+        # The channel is found by name (created when missing); its ID goes to .env.
         if ($target.channelName) {
             $channel = Get-GraphList "/teams/$($target.teamId)/channels?`$select=id,displayName" | Where-Object displayName -eq $target.channelName
             if (-not $channel -and (Confirm-Change "create channel '$($target.channelName)' in team $($target.teamId)")) {
@@ -224,7 +216,7 @@ if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
         }
     }
 
-    # 4. IDs the config leaves out because they can be looked up: the peer bot's client ID (its managed identity's),
+    # IDs the config leaves out because they can be looked up: the peer bot's client ID (its managed identity's),
     # the calling callback URL (the Teams app's address in its environment) and the meeting organizer's user ID.
     if ($teams.access.peerIdentity) {
         $peer = az identity show --ids (Resolve-ResourceId $teams.access.peerIdentity 'Microsoft.ManagedIdentity' 'userAssignedIdentities') | ConvertFrom-Json
@@ -284,20 +276,24 @@ function New-ReplySeeds {
     # command is retried, every 2 minutes for up to 2.3 hours, only while every failure is of that kind. The seeds go
     # out as base64 text in a few long lines, because job logs show at most 300 lines.
     $script = @'
-echo "$CONFIG_B64" | base64 -d > /tmp/monitoring.config.json
-echo "$ENV_B64" | base64 -d > /tmp/.env
+umask 077
+mkdir -p .setup-seeds
+echo "$CONFIG_B64" | base64 -d > .setup-seeds/monitoring.config.json
+echo "$ENV_B64" | base64 -d > .setup-seeds/.env
+set -- --config .setup-seeds/monitoring.config.json --tenant "$TENANT" --apply --setup-only
+if [ "$REPROVISION_SEEDS" = true ]; then set -- "$@" --reprovision-seeds; fi
 status=1
 for attempt in $(seq 1 70); do
-  node dist/exchange/src/mail-test-command.js --config /tmp/monitoring.config.json --tenant "$TENANT" --apply --setup-only > /tmp/seed.log 2>&1
+  node dist/exchange/src/mail-test-command.js "$@" > .setup-seeds/seed.log 2>&1
   status=$?
-  cat /tmp/seed.log
+  cat .setup-seeds/seed.log
   [ $status -eq 0 ] && break
-  grep setup-failed /tmp/seed.log | grep -vq permission-failure && break
-  grep -q permission-failure /tmp/seed.log || break
+  grep setup-failed .setup-seeds/seed.log | grep -vq permission-failure && break
+  grep -q permission-failure .setup-seeds/seed.log || break
   echo "SEED_RETRY $attempt"
   sleep 120
 done
-grep '__REPLY_SEED_' /tmp/.env | base64 | tr -d '\n' | fold -w 4000 | sed 's/^/SEED_DATA /'
+grep '__REPLY_SEED_' .setup-seeds/.env | base64 | tr -d '\n' | fold -w 4000 | sed 's/^/SEED_DATA /'
 echo
 echo "SEED_DONE $status"
 sleep 120
@@ -320,6 +316,7 @@ sleep 120
                     @{ name = 'CONFIG_B64'; value = & $encode (Get-Content $Config -Raw) }
                     @{ name = 'ENV_B64'; value = & $encode ((Test-Path $EnvFile) ? (Get-Content $EnvFile -Raw) : '# none') }
                     @{ name = 'TENANT'; value = $tenant.id }
+                    @{ name = 'REPROVISION_SEEDS'; value = "$ReprovisionReplySeeds".ToLowerInvariant() }
                     @{ name = 'AZURE_CLIENT_ID'; value = $identity.clientId }
                     @{ name = 'AZURE_TENANT_ID'; value = $tenant.tenantId }
                     @{ name = 'ENABLE_LIVE_M365'; value = 'true' }
@@ -330,7 +327,8 @@ sleep 120
     }
 
     $name = "m365-setup-seeds-$(Get-Date -Format 'MMddHHmmss')"
-    $definition = New-TemporaryFile
+    $definition = Join-Path (Split-Path $Config) ".$name.json"
+    if (Test-Path $definition) { throw "Setup job definition already exists: $definition" }
     $target = @('--name', $name, '--resource-group', $resourceGroup, '--subscription', $subscription)
     try {
         $job | ConvertTo-Json -Depth 10 | Set-Content $definition
@@ -372,10 +370,9 @@ sleep 120
 }
 
 if ($exchange.enabled -ne $false -and $exchange.execution.mode -eq 'live' -and $exchange.scenarios.'reply-mail' -ne $false) {
-    $pending = @($exchange.targets | Where-Object { -not (Test-ReplySeed $_) })
+    $pending = @($exchange.targets)
     Write-Host 'Reply seeds'
-    if (-not $pending) { Write-Host '  every reply target already has one' }
-    elseif (Confirm-Change "provision reply seeds for $($pending.id -join ', ') in a temporary job") { New-ReplySeeds }
+    if (Confirm-Change "validate or provision retained received SELF-REPLY seeds for $($pending.id -join ', ') in a one-time job") { New-ReplySeeds }
 }
 
 Write-Host ($Plan ? 'Nothing was changed.' : 'Setup finished. Next: npm run deploy')

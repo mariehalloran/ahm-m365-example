@@ -21,7 +21,6 @@ export const exchangeProbe: ProbeHandler = async (probe, context) => {
   const result = baseResult(probe, startedAt);
   const attempt: MailAttempt = {
     mailbox: probe.mailbox ?? "",
-    recipientMailbox: probe.recipientMailbox,
     correlationId: result.correlationId,
     ownedMessageIds: new Set(),
     mutationAttempted: false,
@@ -96,6 +95,7 @@ export const exchangeProbe: ProbeHandler = async (probe, context) => {
   } catch (error) {
     journeyFailure(result, error, telemetry);
   } finally {
+    context.executionComplete?.();
     await cleanupStep(
       result,
       attempt.mutationAttempted,

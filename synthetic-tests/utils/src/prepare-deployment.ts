@@ -88,7 +88,7 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   serviceSettings(service, env, selected.scenarios);
   if (service.type === "exchange" && project.services.exchange.scenarios["reply-mail"] &&
       project.services.exchange.targets.some(target => !target.replySeed)) {
-    throw new ConfigurationError("Live reply-mail requires verified retained replySeed bindings for every selected initiating pair; run npm run setup (it writes them to .env)");
+    throw new ConfigurationError("Live SELF-REPLY requires retained received self-addressed replySeed bindings for every selected mailbox; run npm run setup (it writes them to .env); re-provision incompatible paired seeds before upgrading");
   }
   if (service.type === "onedrive" &&
       (project.services.onedrive.scenarios["user-drive-roundtrip"] || project.services.onedrive.scenarios["document-versions"]) &&

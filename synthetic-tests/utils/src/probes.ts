@@ -24,6 +24,7 @@ export interface ProbeContext {
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  executionComplete?: () => void;
 }
 export type ProbeHandler = (probe: Probe, context: ProbeContext) => Promise<SyntheticResult>;
 
@@ -56,7 +57,7 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   const result = baseResult(probe, now());
   const metadata = probeServices[probe.type];
   const retainArtifacts = (metadata.service === "teams" && probe.type !== "teams-call" && config.TEAMS_CLEANUP_ENABLED === "false") ||
-    (metadata.service === "exchange" && !["exchange-recurring-calendar", "exchange-meeting"].includes(probe.type) && config.EXCHANGE_CLEANUP_ENABLED === "false");
+    (metadata.service === "exchange" && probe.type !== "exchange-recurring-calendar" && config.EXCHANGE_CLEANUP_ENABLED === "false");
   const orderedSteps: readonly StepName[] = metadata.steps;
   const scenario = probe.scenario ?? config.SYNTHETIC_SCENARIO;
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
@@ -71,15 +72,15 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   }
   const failureSteps = {
     "exchange-mail-flow": "send", "exchange-draft": "update-draft",
-    "exchange-attachment": "send-attachment", "exchange-reply": "reply-mail", "exchange-distribution-list": "send-group-mail",
-    "exchange-recurring-calendar": "update-event", "exchange-meeting": "accept-meeting",
+    "exchange-attachment": "send-attachment", "exchange-reply": "reply-mail",
+    "exchange-recurring-calendar": "update-event",
     "teams-channel-message": "post-message", "teams-call": "place-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
-    "exchange-attachment": "verify-attachment", "exchange-reply": "confirm-reply-mail", "exchange-distribution-list": "confirm-group-delivery",
-    "exchange-recurring-calendar": "verify-event", "exchange-meeting": "confirm-acceptance",
+    "exchange-attachment": "verify-attachment", "exchange-reply": "confirm-reply-mail",
+    "exchange-recurring-calendar": "verify-event",
     "teams-channel-message": "confirm-reply", "teams-call": "end-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
   } as const;
@@ -88,13 +89,13 @@ export const simulate: ProbeHandler = async (probe, { config, telemetry, now = D
   const longStep = failedStep ?? completionSteps[probe.type];
   const baseline = (name: StepName) => ["authenticate", "cleanup"].includes(name) ? 100 : 200;
   const fixedDuration = orderedSteps.reduce((sum, name) =>
-    sum + (name === longStep || (["cleanup", "delete-draft"].includes(name) && retainArtifacts) ||
+    sum + (name === longStep || (name === "cleanup" && retainArtifacts) ||
       (failedStep && name !== "cleanup" && orderedSteps.indexOf(name) > orderedSteps.indexOf(failedStep)) ? 0 : baseline(name)), 0);
   let blocked = false;
   result.steps = orderedSteps.map(name => {
     const common = { name, observedAt: result.observedAt };
     if (name === "restore-version" && !probe.restoreVersion) return { ...common, status: "skipped", reason: "variant-disabled" };
-    if (["cleanup", "delete-draft"].includes(name) && retainArtifacts) return { ...common, status: "skipped", reason: "cleanup-disabled" };
+    if (name === "cleanup" && retainArtifacts) return { ...common, status: "skipped", reason: "cleanup-disabled" };
     if (blocked && name !== "cleanup") return { ...common, status: "skipped", reason: "prerequisite-failed" };
     const durationMs = name === longStep ? Math.max(0, result.durationMs - fixedDuration) : baseline(name);
     if (name === failedStep) {

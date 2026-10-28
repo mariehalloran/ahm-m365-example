@@ -19,10 +19,9 @@ export const serviceProbeLimits = Object.fromEntries(
     service, testTypes.filter(type => probeServices[type].service === service).length * maxServiceTargets,
   ]),
 ) as Record<"exchange" | "teams" | "onedrive", number>;
-// Reply and meeting wait on two or three sequential mailbox hops of 3-10 seconds each, so they get twice the
-// deadline of the single-hop journeys. Longer successes are Degraded by the latency policy, not cancelled earlier.
+// SELF-REPLY has a separate 30-second execution deadline; its latency degradation threshold remains 15 seconds.
 export function exchangeJourneyMilliseconds(testType: TestType): number {
-  return testType === "exchange-reply" || testType === "exchange-meeting" ? 30000 : 15000;
+  return testType === "exchange-reply" ? 30000 : 15000;
 }
 // Exchange journeys wait on several mailbox/calendar propagation delays inside their deadline, so they poll
 // finely; a 2-second interval alone costs about a second per wait and left calendar journeys at the cap.
@@ -87,7 +86,7 @@ export const resultSchema = z.object({
   const allowedSteps: readonly string[] = probeServices[value.testType].steps;
   if (new Set(value.steps.map(step => step.name)).size !== value.steps.length ||
       value.steps.some(step => step.status === "skipped" && step.reason === "cleanup-disabled" &&
-        (!["cleanup", "delete-draft"].includes(step.name) || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
+        (step.name !== "cleanup" || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
       value.steps.some(step => step.status === "skipped" && step.reason === "variant-disabled" &&
         (value.testType !== "onedrive-versions" || step.name !== "restore-version")) ||
       value.steps.some((step, index) => !allowedSteps.includes(step.name) ||
@@ -135,12 +134,7 @@ export const probeSchema = z.object({
   type: z.enum(testTypes),
   cohort: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,78}[a-zA-Z0-9]$/),
   mailbox: z.string().email().optional(),
-  recipientMailbox: z.string().email().optional(),
   replySeed: replySeedSchema.optional(),
-  distributionList: z.object({
-    address: z.string().email(),
-    expectedRecipients: z.array(z.string().email()).min(1).max(30),
-  }).strict().optional(),
   driveId: z.string().min(1).optional(),
   folderId: z.string().min(1).optional(),
   tenantId: z.string().uuid().optional(),

@@ -31,8 +31,8 @@ Exchange groups its existing journeys under two parents:
 
 | Parent user journey | Child journeys |
 | --- | --- |
-| Mail (`exchange-mail`) | Send/receive, draft, attachment delivery, reply delivery, distribution-list delivery |
-| Calendar (`exchange-calendar`) | Recurring event, meeting invitation |
+| Mail (`exchange-mail`) | Self-send/Inbox receipt, draft lifecycle, self-attachment delivery, explicitly labelled SELF-REPLY |
+| Calendar (`exchange-calendar`) | Private recurring-series lifecycle in the user's own calendar, no attendees |
 
 These parents roll up child health with native `WorstOf` dependencies; they do
 not receive synthetic reports or OTEL signals. A parent is omitted when none of
@@ -54,7 +54,7 @@ any tenant runs it.
 
 | Service | Root scenario → journey entity |
 | --- | --- |
-| Exchange | `send-receive-mail` → `exchange-global`; `edit-reopen-draft` → `exchange-draft`; `attachment-mail` → `exchange-attachment`; `reply-mail` → `exchange-reply`; `distribution-list-mail` → `exchange-distribution`; `recurring-calendar` → `exchange-recurring`; `meeting-invitation` → `exchange-meeting` |
+| Exchange | `send-receive-mail` → `exchange-global`; `edit-reopen-draft` → `exchange-draft`; `attachment-mail` → `exchange-attachment`; `reply-mail` → `exchange-reply`; `recurring-calendar` → `exchange-recurring` |
 | Teams | `channel-conversation` → `teams-global`; `scheduled-meeting` → `teams-call` |
 | OneDrive | `user-drive-roundtrip` → `onedrive-planned-user-drive-roundtrip`; `app-folder-lifecycle` → `onedrive-planned-app-folder-lifecycle`; `document-versions` → `onedrive-planned-document-versions` |
 
@@ -66,7 +66,7 @@ suppressed when no selected target enables `restoreVersion`.
 
 Only journeys and their Mail/Calendar parents use the native `UserFlow` icon.
 Authentication and generic cleanup are internal—not extra entities. Explicit draft/file deletion,
-calendar cancellation and call departure remain measured business steps.
+private-series deletion and call departure remain measured business steps.
 
 Journey guides define exact evidence and API boundaries:
 [Exchange](../synthetic-tests/exchange/README.md#journeys-and-scheduling),
@@ -256,6 +256,41 @@ workers send reports there. After old workers stop, explicitly retire only the
 attachment journey's old reply/confirm children and their relationships. See the
 [ordered scenario/fixture migration](../synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately).
 
+### Single-user Exchange conversion
+
+1. Stop all old Exchange worker revisions/jobs before changing the target inventory.
+   Keep one independent `{ id, mailbox }` target for every case-insensitively unique
+   former sender **and recipient**, preserving existing sender IDs and account-based
+   reporting-group membership. All five journeys share one aligned minute.
+2. Explicitly re-provision incompatible paired seeds with
+   `npm run setup -- -ReprovisionReplySeeds`. The received self-addressed fixture
+   must be in that user's own Inbox, not the old peer mailbox. The command keeps
+   old retained seeds; review those artifacts separately under retention policy.
+3. Deploy the matching catalogue/model and worker image from the same root config.
+   Retain `exchange-global`, `exchange-draft`, `exchange-attachment`,
+   `exchange-reply`, `exchange-recurring` and all their current step IDs. Mail and
+   Calendar remain native rollup parents; Calendar now means own calendar only.
+4. Compare paginated inventories with `serviceModelInventories`. Incremental
+   deployment does not delete the removed branches below. After verifying no old
+   image reports to them, review these exact owned retirement sets:
+
+   - `exchange-distribution`, `exchange-distribution-send-group-mail`,
+     `exchange-distribution-confirm-group-delivery`.
+   - `exchange-meeting`, `exchange-meeting-create-meeting`,
+     `exchange-meeting-confirm-invitation`,
+     `exchange-meeting-verify-attendee-calendar`,
+     `exchange-meeting-accept-meeting`, `exchange-meeting-confirm-acceptance`,
+     `exchange-meeting-cancel-meeting`.
+
+   Remove each journey-to-child relationship (`<parent>-to-<child>`) before its
+   child entity, and `exchange-mail-to-exchange-distribution` /
+   `exchange-calendar-to-exchange-meeting` before their journey entities.
+   Also retire any older service-root shortcut pointing at these removed journeys.
+   `deployment.retireEntities` can list the reviewed entities; deploy only with
+   explicit operator approval. Do not remove Mail, Calendar, retained journeys,
+   provider context or unrelated resources. This source conversion does not
+   deploy or delete existing resources.
+
 ### Consolidating Service Health: ordered handoff
 
 1. Deploy the matching model template first, with the same root config the
@@ -308,10 +343,10 @@ The exact per-API retirement set (relative to
 
 OneDrive has **no per-API child retirement**. Its stable collection uses the
 existing `onedrive-service-health` entity when opted in. With all scenarios and Service Health enabled the new
-desired inventory is exactly 70 entities / 66 relationships:
+desired inventory is exactly 60 entities / 56 relationships:
 root references, three service roots, three supporting entities, two Exchange
-parent journeys, 12 executable journeys and
-46 business steps. Historical active OneDrive `-planned-` IDs are retained.
+parent journeys, 10 executable journeys and
+38 business steps. Historical active OneDrive `-planned-` IDs are retained.
 
 The Teams scenario key migrates to `channel-conversation`; the old misleading
 key is rejected. Select only `channel-conversation`/`scheduled-meeting`, and only

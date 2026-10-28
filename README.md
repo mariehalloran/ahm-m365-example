@@ -17,13 +17,11 @@ ingested health reports or notification delivery. See
 
 | Service | Root scenario | Completion evidence | Default cadence |
 | --- | --- | --- | --- |
-| Exchange | `send-receive-mail` | Send A→B and verify B's Inbox delivery | 60 seconds |
-| Exchange | `edit-reopen-draft` | Create, read, edit, reopen/verify and delete a draft | 300 seconds |
-| Exchange | `attachment-mail` | Send A→B and verify the downloaded attachment hash | 300 seconds |
-| Exchange | `reply-mail` | Reply B→A to a retained received message and verify transport correlation | 300 seconds |
-| Exchange | `distribution-list-mail` | Verify every configured expected recipient | 300 seconds |
-| Exchange | `recurring-calendar` | Create a series, verify/update occurrences, delete and verify removal | 300 seconds |
-| Exchange | `meeting-invitation` | Invite, verify attendee calendar, accept, observe acceptance, cancel | 300 seconds |
+| Exchange | `send-receive-mail` | Send to self and verify own Inbox receipt | Aligned minute |
+| Exchange | `edit-reopen-draft` | Create, read, edit, reopen/verify and delete own draft | Aligned minute |
+| Exchange | `attachment-mail` | Send to self and verify downloaded attachment bytes/hash | Aligned minute |
+| Exchange | `reply-mail` | Explicit SELF-REPLY to a retained received self-addressed fixture; verify transport correlation | Aligned minute |
+| Exchange | `recurring-calendar` | Create/read/update/delete own private recurring series, without attendees | Aligned minute |
 | Teams | `channel-conversation` | One selected bot posts a root and reply; Graph verifies both authors and correlations | 120 seconds |
 | Teams | `scheduled-meeting` | Two managed-identity bots join one meeting, establish both calls, verify metadata/rosters and leave | 120 seconds |
 | OneDrive | `user-drive-roundtrip` | Create nested folder/file, enumerate/download/hash, delete and verify absence | 300 seconds |
@@ -71,7 +69,7 @@ rewritten to `2.0`.
    npm run setup            # idempotent and add-only
    ```
 
-   Setup extends the Exchange worker's mailbox scope, creates the distribution lists,
+   Setup extends the Exchange worker's mailbox scope,
    adds each group's accounts to its Teams team and channel, looks up the IDs the config
    leaves out, and provisions the Exchange reply seeds. It does not cover OneDrive's
    drives and folders (`npm run onedrive:setup`), the one-time Exchange RBAC approval or
@@ -107,8 +105,8 @@ Live execution stays off until you opt in:
   `enableLiveProbes` is true, and that setting also sets `ENABLE_LIVE_M365=true` on
   hosted workers. The runtime refuses live mode without that variable, so a local
   live run must set it.
-- Reply tests answer a retained received message per Exchange target (in its recipient
-  mailbox), which `npm run setup` provisions into `.env` before the hosted worker runs
+- SELF-REPLY tests answer a retained received self-addressed message in that target's
+  same mailbox, which `npm run setup` provisions into `.env` before the hosted worker runs
   ([reply seeds](./synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately)).
   OneDrive journeys need `npm run onedrive:setup` first
   ([OneDrive setup](./docs/onedrive-setup.md)).
@@ -164,7 +162,9 @@ flowchart TB
 1. **Execute:** the root config selects journeys and targets and sets each
    service's lane cadences and deadlines. Lanes run concurrently without overlapping
    themselves or replaying missed slots. Each synthetic lane finishes its attempts
-   before reporting that cycle.
+   before reporting that cycle. Exchange runs all selected journeys for every unique
+   mailbox on one wall-clock minute boundary (100 mailboxes = 500 attempts/minute),
+   with global/per-mailbox actual Graph-request permits including retries and cleanup.
 2. **Publish:** the in-process [reporter](./synthetic-tests/utils/src/health-reports.ts)
    aggregates journey and executed-step results, then sends HTTPS `POST`
    `ingestHealthReport` requests to existing entities in
@@ -186,8 +186,7 @@ tenant) runs stateless cycles and publishes aggregated
 journey/action health reports directly. Each attempt contributes success
 **1 or 0** and a measured duration; executed actions are measured separately.
 A timeout is a failed attempt reported Unhealthy: Exchange attempts are cancelled
-at 15 seconds, or 30 for `reply-mail` and `meeting-invitation` (two or three
-sequential mailbox hops). A mean duration above 15 seconds is Degraded, so a
+at 15 seconds, or 30 for SELF-REPLY (`reply-mail`). A mean duration above 15 seconds is Degraded, so a
 15-30 second success reports Degraded.
 Skipped actions are not failed requests. Authentication and compensating cleanup
 remain internal, while deliberate deletion/cancellation/departure are business steps.

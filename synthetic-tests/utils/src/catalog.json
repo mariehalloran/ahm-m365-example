@@ -7,7 +7,7 @@
         {
           "name": "send-receive-mail",
           "entityName": "exchange-global",
-          "displayName": "Send and receive email",
+          "displayName": "Send email to self and verify Inbox receipt",
           "group": {
             "entityName": "exchange-mail",
             "displayName": "Mail"
@@ -23,7 +23,7 @@
             },
             {
               "name": "confirm-delivery",
-              "displayName": "Confirm delivery"
+              "displayName": "Confirm receipt in own Inbox"
             }
           ]
         },
@@ -61,7 +61,7 @@
         {
           "name": "attachment-mail",
           "entityName": "exchange-attachment",
-          "displayName": "Send and verify attachment",
+          "displayName": "Send attachment to self and verify downloaded bytes",
           "group": {
             "entityName": "exchange-mail",
             "displayName": "Mail"
@@ -80,7 +80,7 @@
         {
           "name": "reply-mail",
           "entityName": "exchange-reply",
-          "displayName": "Reply to a received message and verify delivery",
+          "displayName": "SELF-REPLY to retained received fixture",
           "group": {
             "entityName": "exchange-mail",
             "displayName": "Mail"
@@ -88,37 +88,18 @@
           "steps": [
             {
               "name": "reply-mail",
-              "displayName": "Reply to retained received message"
+              "displayName": "SELF-REPLY to own retained received message"
             },
             {
               "name": "confirm-reply-mail",
-              "displayName": "Verify correlated reply at sender"
-            }
-          ]
-        },
-        {
-          "name": "distribution-list-mail",
-          "entityName": "exchange-distribution",
-          "displayName": "Deliver through distribution list",
-          "group": {
-            "entityName": "exchange-mail",
-            "displayName": "Mail"
-          },
-          "steps": [
-            {
-              "name": "send-group-mail",
-              "displayName": "Send to distribution list"
-            },
-            {
-              "name": "confirm-group-delivery",
-              "displayName": "Verify every expected recipient"
+              "displayName": "Verify correlated SELF-REPLY in own Inbox"
             }
           ]
         },
         {
           "name": "recurring-calendar",
           "entityName": "exchange-recurring",
-          "displayName": "Create, edit and remove recurring calendar event",
+          "displayName": "Create, read, update and delete private recurring series (no attendees)",
           "group": {
             "entityName": "exchange-calendar",
             "displayName": "Calendar"
@@ -143,41 +124,6 @@
             {
               "name": "delete-event",
               "displayName": "Delete recurring series"
-            }
-          ]
-        },
-        {
-          "name": "meeting-invitation",
-          "entityName": "exchange-meeting",
-          "displayName": "Invite, accept and cancel meeting",
-          "group": {
-            "entityName": "exchange-calendar",
-            "displayName": "Calendar"
-          },
-          "steps": [
-            {
-              "name": "create-meeting",
-              "displayName": "Send meeting invitation"
-            },
-            {
-              "name": "confirm-invitation",
-              "displayName": "Read attendee invitation"
-            },
-            {
-              "name": "verify-attendee-calendar",
-              "displayName": "Verify attendee calendar event"
-            },
-            {
-              "name": "accept-meeting",
-              "displayName": "Accept as attendee"
-            },
-            {
-              "name": "confirm-acceptance",
-              "displayName": "Observe acceptance as organizer"
-            },
-            {
-              "name": "cancel-meeting",
-              "displayName": "Cancel as organizer"
             }
           ]
         }

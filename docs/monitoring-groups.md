@@ -21,8 +21,8 @@ models and the overall signals do not change.
 - `id` is a unique lowercase slug with single hyphens, up to 40 characters;
   `displayName` is up to 260; `description` is optional.
 - `accounts` are UPNs matched case-insensitively to each Exchange target's `mailbox`
-  and OneDrive target's `userPrincipalName`. Only the initiating mailbox counts: an
-  A→B mail attempt belongs to A's group.
+  and OneDrive target's `userPrincipalName`. Each Exchange target is one independent
+  mailbox; all five selected single-user journeys belong to that user's group.
 - `teams` are ids of Teams channel `targets[]` and meeting `callTargets[]` (bots,
   not user accounts). `npm run setup` also adds the group's `accounts` to the team of
   each Teams channel target it lists, so the group's users are members of the team its

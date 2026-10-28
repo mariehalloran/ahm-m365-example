@@ -3,14 +3,12 @@ import { dispatchProbeHandlers } from "../../utils/src/probes.js";
 import { exchangeDraftProbe } from "./draft-journey.js";
 import { exchangeProbe } from "./journey.js";
 import { exchangeProviders } from "./providers.js";
-import { exchangeAttachmentProbe, exchangeDistributionProbe, exchangeMeetingProbe, exchangeRecurringProbe, exchangeReplyProbe } from "./extended-journeys.js";
+import { exchangeAttachmentProbe, exchangeRecurringProbe, exchangeReplyProbe } from "./extended-journeys.js";
 
 await runServiceCommand("exchange", dispatchProbeHandlers({
   "exchange-mail-flow": exchangeProbe,
   "exchange-draft": exchangeDraftProbe,
   "exchange-attachment": exchangeAttachmentProbe,
   "exchange-reply": exchangeReplyProbe,
-  "exchange-distribution-list": exchangeDistributionProbe,
   "exchange-recurring-calendar": exchangeRecurringProbe,
-  "exchange-meeting": exchangeMeetingProbe,
 }), process.argv.slice(2), exchangeProviders);

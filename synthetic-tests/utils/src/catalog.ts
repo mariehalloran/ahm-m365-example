@@ -10,11 +10,11 @@ const exchangeCalendarGroup = { entityName: "exchange-calendar", displayName: "C
 export const journeyCatalog = {
   "exchange-mail-flow": {
     service: "exchange", journey: "send-receive-mail", entityName: "exchange-global",
-    displayName: "Send and receive email", group: exchangeMailGroup,
+    displayName: "Send email to self and verify Inbox receipt", group: exchangeMailGroup,
     steps: {
       "create-draft": { displayName: "Create email" },
       send: { displayName: "Send email" },
-      "confirm-delivery": { displayName: "Confirm delivery" },
+      "confirm-delivery": { displayName: "Confirm receipt in own Inbox" },
     },
   },
   "exchange-draft": {
@@ -30,7 +30,7 @@ export const journeyCatalog = {
   },
   "exchange-attachment": {
     service: "exchange", journey: "attachment-mail", entityName: "exchange-attachment",
-    displayName: "Send and verify attachment", group: exchangeMailGroup,
+    displayName: "Send attachment to self and verify downloaded bytes", group: exchangeMailGroup,
     steps: {
       "send-attachment": { displayName: "Send attachment" },
       "verify-attachment": { displayName: "Verify delivered attachment hash" },
@@ -38,41 +38,21 @@ export const journeyCatalog = {
   },
   "exchange-reply": {
     service: "exchange", journey: "reply-mail", entityName: "exchange-reply",
-    displayName: "Reply to a received message and verify delivery", group: exchangeMailGroup,
+    displayName: "SELF-REPLY to retained received fixture", group: exchangeMailGroup,
     steps: {
-      "reply-mail": { displayName: "Reply to retained received message" },
-      "confirm-reply-mail": { displayName: "Verify correlated reply at sender" },
-    },
-  },
-  "exchange-distribution-list": {
-    service: "exchange", journey: "distribution-list-mail", entityName: "exchange-distribution",
-    displayName: "Deliver through distribution list", group: exchangeMailGroup,
-    steps: {
-      "send-group-mail": { displayName: "Send to distribution list" },
-      "confirm-group-delivery": { displayName: "Verify every expected recipient" },
+      "reply-mail": { displayName: "SELF-REPLY to own retained received message" },
+      "confirm-reply-mail": { displayName: "Verify correlated SELF-REPLY in own Inbox" },
     },
   },
   "exchange-recurring-calendar": {
     service: "exchange", journey: "recurring-calendar", entityName: "exchange-recurring",
-    displayName: "Create, edit and remove recurring calendar event", group: exchangeCalendarGroup,
+    displayName: "Create, read, update and delete private recurring series (no attendees)", group: exchangeCalendarGroup,
     steps: {
       "create-event": { displayName: "Create recurring series" },
       "read-occurrence": { displayName: "Read occurrence" },
       "update-event": { displayName: "Update recurring series" },
       "verify-event": { displayName: "Verify series and occurrence update" },
       "delete-event": { displayName: "Delete recurring series" },
-    },
-  },
-  "exchange-meeting": {
-    service: "exchange", journey: "meeting-invitation", entityName: "exchange-meeting",
-    displayName: "Invite, accept and cancel meeting", group: exchangeCalendarGroup,
-    steps: {
-      "create-meeting": { displayName: "Send meeting invitation" },
-      "confirm-invitation": { displayName: "Read attendee invitation" },
-      "verify-attendee-calendar": { displayName: "Verify attendee calendar event" },
-      "accept-meeting": { displayName: "Accept as attendee" },
-      "confirm-acceptance": { displayName: "Observe acceptance as organizer" },
-      "cancel-meeting": { displayName: "Cancel as organizer" },
     },
   },
   "teams-channel-message": {

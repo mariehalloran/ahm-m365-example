@@ -66,10 +66,13 @@ resource newRegistry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (c
     roleAssignmentMode: 'LegacyRegistryPermissions'
   }
 }
-resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
+resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = if (!createFoundation) {
   scope: resourceGroup(split(registryId, '/')[2], split(registryId, '/')[4])
   name: last(split(registryId, '/'))
 }
+// A template that creates a registry must not also declare it as an existing one: ARM rejects the duplicate name.
+var registryName = createFoundation ? settings.foundation.registryName : last(split(registryId, '/'))
+var registryServer = createFoundation ? newRegistry!.properties.loginServer : registry!.properties.loginServer
 resource newEnvironment 'Microsoft.App/managedEnvironments@2026-07-01' = if (createFoundation) {
   name: settings.foundation.environmentName
   location: location
@@ -127,7 +130,7 @@ module imagePullAssignments './registry-pull.bicep' = {
   name: 'registry-pull'
   scope: resourceGroup(split(registryId, '/')[2], split(registryId, '/')[4])
   params: {
-    registryName: registry.name
+    registryName: registryName
     assignments: [for (id, index) in identityIds: {
       identityId: id
       principalId: identities[index].properties.principalId
@@ -143,7 +146,7 @@ module workerApps './worker.bicep' = [
       location: location
       tags: tags
       environmentId: environmentId
-      registryServer: registry.properties.loginServer
+      registryServer: registryServer
       identityResourceId: worker.identityId
       identityClientId: identities[indexOf(identityIds, worker.identityId)].properties.clientId
       tenantId: subscription().tenantId
@@ -157,12 +160,12 @@ module workerApps './worker.bicep' = [
       enableBetaServiceActivity: settings.enableBetaServiceActivity
       applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
-    dependsOn: [newEnvironment, newRegistry, newIdentities, reportAssignments, imagePullAssignments]
+    dependsOn: [newEnvironment, newIdentities, reportAssignments, imagePullAssignments]
   }
 ]
 
-output registryName string = registry.name
-output registryServer string = registry.properties.loginServer
+output registryName string = registryName
+output registryServer string = registryServer
 output environmentId string = environmentId
 output appNames array = map(workers, worker => worker.selection.worker.appName)
 output identityIds array = identityIds

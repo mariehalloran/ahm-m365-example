@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { GraphClient } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
-import type { MailAttempt } from "./steps.js";
+import { mailMarker, type MailAttempt } from "./steps.js";
 
 const savedDraftSchema = z.object({
   id: z.string().min(1),
@@ -34,7 +34,7 @@ export async function readDraft(
   const query = new URLSearchParams({ "$select": "id,subject,bodyPreview,isDraft" });
   const draft = await graph.json(`${draftPath(attempt, draftId)}?${query}`, savedDraftSchema, signal);
   if (draft.id !== draftId || draft.subject !== `AHM synthetic ${attempt.correlationId}` ||
-      !draft.isDraft || draft.bodyPreview !== (edited ? editedDraftContent(attempt) : "Dedicated synthetic probe. Safe to delete.")) {
+      !draft.isDraft || draft.bodyPreview !== (edited ? editedDraftContent(attempt) : `${mailMarker(attempt)}. Safe to delete.`)) {
     throw new IntegrationError("read-failure");
   }
 }

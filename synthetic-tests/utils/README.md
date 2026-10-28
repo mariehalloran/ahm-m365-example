@@ -39,9 +39,10 @@ nothing. Each `tenants[].services.<service>.execution` block is then validated w
 | `execution` field | Contract |
 | --- | --- |
 | `mode` / `scenario` | `simulation` or explicitly gated `live`; optional deterministic simulation scenario |
-| `intervalSeconds` / `timeoutSeconds` | 1–86,400 second cadence; 1–120 second execution budget |
-| `maxConcurrentProbes` | 1-20 concurrent attempts **per lane**, default 3 |
-| `cycleTimeoutSeconds` | 1-86,400 second total lane execution budget, default 170; queued attempts share it |
+| `intervalSeconds` / `timeoutSeconds` | Other services: 1–86,400 second cadence and 1–120 second execution budget. Exchange: one 60-second lane, fixed per-journey 15-second execution deadline (30 for SELF-REPLY) |
+| `maxConcurrentProbes` | Other products: 1-20 concurrent attempts per lane, default 3; not an Exchange journey cap |
+| `maxConcurrentRequests` / `maxConcurrentRequestsPerMailbox` | Exchange actual Graph-request permits, defaults 32 global / 2 per mailbox, covering retries, polls and cleanup; queued waits share the journey deadline |
+| `cycleTimeoutSeconds` | Other products: 1-86,400 second execution budget, default 170. Exchange bounds execution/settlement, reports and flush inside its aligned minute |
 | `executionLanes` | Optional complete array of unique `{ name, intervalSeconds, timeoutSeconds, journeys }` assignments; scenario switches still own selection |
 | `cohort` | Opaque result grouping label, not health policy |
 | `graphAuthentication` | Explicit UAMI by default; `certificate` uses separate `M365_*` credentials |
@@ -49,7 +50,7 @@ nothing. Each `tenants[].services.<service>.execution` block is then validated w
 | `teamsAuthentication` / `botAuthentication` | Only `bot` / `managed-identity`; obsolete user/certificate participant modes are rejected |
 | `teamsReadbackClientId` | Teams Graph readback application using worker-UAMI federation; requires managed-identity Graph |
 | `providerClientId` | Optional per-service override of the tenant's `providerClientId`, the independently federated provider application that every service with `serviceHealth` or `serviceActivity` inherits; not a synthetic identity override |
-| `exchangeCleanupEnabled` | Default true; false retains mail/drafts, but calendar cancellation/deletion remain mandatory |
+| `exchangeCleanupEnabled` | Default true; false retains mail artifacts for diagnostics; deliberate draft and private-series deletion remain mandatory |
 | `teamsCleanupEnabled` | Default true; false retains owned channel posts/replies, never calls |
 | `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`, written to `.env` by `npm run setup`; default port 8080 |
 | `teamsCallingAnswerTimeoutSeconds` | Default 20, bounded 1–30; execution budget must allow this plus five seconds |
@@ -75,8 +76,10 @@ provider catalogue. Runtime contracts derive from it; Bicep reads its generated
 `npm run catalog:generate` from `synthetic-tests/`. Typechecking, builds and
 `npm run deploy` reject stale projections.
 
-Default lanes are Exchange mail/extended, one Teams lane for both journeys, and three
-OneDrive lanes. Each starts immediately and never overlaps itself; independent
+Default lanes are one aligned-minute Exchange lane for all five single-user journeys,
+one Teams lane for both journeys, and three OneDrive lanes. Other products and
+providers start immediately; Exchange continuous execution starts at the next
+wall-clock minute boundary (`--once` is immediate). A lane never overlaps itself; independent
 lanes run concurrently. Missed slots are logged/skipped without catch-up bursts.
 Configuration changes require restart. SIGINT/SIGTERM stop scheduling, cancel
 work and permit bounded cleanup/publication. One authoritative instance per
@@ -114,9 +117,13 @@ business actions. Timed-out attempts fail rather than becoming Unknown.
 
 `measureStep` records a bounded observation and rethrows the failure.
 Dependent actions are skipped; owned cleanup gets an independent ten-second
-signal. Runner settlement grace is twelve seconds. Defaults are a 170-second cycle
-budget and at most three concurrent attempts per lane; the `execution` block can
-increase both. Live OneDrive configurations must budget for all selected accounts,
+signal. Runner settlement grace is twelve seconds. Other products default to a
+170-second cycle and three concurrent attempts per lane. Exchange starts all
+selected mailbox/journey attempts concurrently and limits actual requests instead;
+at most 42 seconds of execution/settlement, 12 seconds of reports and 5 seconds
+of flush fit inside a minute. Per-reporting-group `exchange-minute-capacity`
+diagnostics expose expected/started/completed/timed-out attempts and request-permit
+waiting separately from Exchange availability. Live OneDrive configurations must budget for all selected accounts,
 and report TTL must cover the configured cycle plus cadence/publication.
 See [bulk setup and sizing](../../docs/onedrive-setup.md).
 Exchange send/confirmed-delivery and Teams send/confirmed-publication durations
@@ -133,8 +140,8 @@ per-target signal inventories. Skipped actions receive Unknown without a value.
 Valid-but-incomplete live setup produces unsuccessful/unexecutable journey
 evidence when reporting credentials are usable. Unsafe schemas/reporting
 credentials can prevent publication and require independent freshness checks.
-Publication uses bounded retries, a five-second request budget and 30-second
-batch budget. A 204 is ingestion acceptance, not evaluated rollup or notification.
+Publication uses bounded retries and a five-second request budget; the synthetic
+Exchange batch has 12 seconds, other batches 30. A 204 is ingestion acceptance, not evaluated rollup or notification.
 TTL expiry removes signals; it is not a guaranteed Unhealthy alert.
 
 ## Optional provider collectors

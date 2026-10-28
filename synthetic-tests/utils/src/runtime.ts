@@ -6,6 +6,7 @@ import { createFederatedGraphClient, createLiveGraphClient, createLiveTeamsBot, 
 import { createTeamsCallingVerifier, type CallingIdentity } from "./teams-calling-auth.js";
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
 import { GraphClient } from "./graph.js";
+import { GraphRequestPermits } from "./graph-request-permits.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
 import type { ProjectConfig } from "./project-config.js";
 import { dirname, resolve } from "node:path";
@@ -78,6 +79,13 @@ export async function serviceRuntime(
 ): Promise<RunnerDependencies> {
   if (!service.enabled) throw new ConfigurationError("Service runtime requires an enabled probe type");
   const live = config.EXECUTION_MODE === "live";
+  if (service.type === "exchange" && config.probes.some(probe =>
+    probeServices[probe.type].service !== "exchange" || !service.targets.some(target =>
+      target.id === probe.id && target.mailbox.toLowerCase() === probe.mailbox?.toLowerCase() &&
+      target.replySeed?.messageId === probe.replySeed?.messageId &&
+      target.replySeed?.correlationId === probe.replySeed?.correlationId))) {
+    throw new ConfigurationError("Exchange journeys may access only their selected root-configured mailbox and retained self-reply fixture");
+  }
   if (service.type === "onedrive" && config.probes.some(probe =>
     probeServices[probe.type].service !== "onedrive" || !service.targets.some(target => target.id === probe.id &&
       target.userId === probe.userId && target.userPrincipalName?.toLowerCase() === probe.userPrincipalName?.toLowerCase() &&
@@ -102,6 +110,9 @@ export async function serviceRuntime(
   const messages = config.probes.some(probe => probe.type === "teams-channel-message");
   const dependencies: RunnerDependencies = {
     telemetry, results: suppliedResults ?? createResultOutput(telemetry),
+    ...(service.type === "exchange" ? {
+      exchangeRequests: new GraphRequestPermits(service.maxConcurrentRequests, service.maxConcurrentRequestsPerMailbox),
+    } : {}),
     ...(live && (service.type !== "teams" || messages) ? {
       graph: service.type === "teams" && service.teamsReadbackClientId
         ? createTeamsReadbackGraph(env, service.teamsReadbackClientId)

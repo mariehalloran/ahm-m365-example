@@ -117,16 +117,13 @@ export function reportingGroups(document: ProjectDocument) {
   });
 }
 
-// The accounts a result exercised: the Exchange initiating mailbox and its recipient, or the OneDrive owner.
+// The account a result exercised: the independent Exchange mailbox or the OneDrive owner.
 // Teams participants are bots, not users.
 function resultAccounts(services: ProjectConfig["services"], result: SyntheticResult): Pick<ResultContext, "user" | "peer"> {
   switch (probeServices[result.testType].service) {
     case "exchange": {
       const target = services.exchange.targets.find(target => target.id === result.testId);
-      return {
-        ...(target?.mailbox ? { user: target.mailbox } : {}),
-        ...(target?.recipientMailbox ? { peer: target.recipientMailbox } : {}),
-      };
+      return target ? { user: target.mailbox } : {};
     }
     case "onedrive": {
       const user = services.onedrive.targets.find(target => target.id === result.testId)?.userPrincipalName;

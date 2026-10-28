@@ -60,7 +60,7 @@ It names things and holds only the few IDs you must supply, never secrets
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins; see the [`deployment` section](../docs/deployment.md#the-deployment-section) |
 | `otel`, `serviceHealth` | Optional console/Azure Monitor export and Service Health context; both disabled by default |
 | `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId` and the three services below |
-| `tenants[].services.<service>.enabled`, `scenarios` | Service selection and its journey switches: the documented Exchange mail/draft/attachment/reply/list/calendar/invitation switches, only `channel-conversation` and `scheduled-meeting` for Teams, only `user-drive-roundtrip`, `app-folder-lifecycle` and `document-versions` for OneDrive |
+| `tenants[].services.<service>.enabled`, `scenarios` | Five single-user Exchange switches (self-mail, draft, self-attachment, SELF-REPLY, private recurrence), only `channel-conversation` and `scheduled-meeting` for Teams, only `user-drive-roundtrip`, `app-folder-lifecycle` and `document-versions` for OneDrive |
 | `….targets` | Approved mailbox/channel/account metadata, never credentials; generated IDs stay out of it (below) |
 | `….callTargets` | Teams only: the dedicated meeting and its `organizer`, not human call targets |
 | `….execution` | Mode, cadence/deadlines, `executionLanes`, authentication, cleanup and optional provider settings |
@@ -85,7 +85,8 @@ and never overlap themselves. Missed slots are skipped, not replayed.
 
 Default lanes:
 
-- Exchange: mail every 60 seconds; all other journeys every 300 seconds.
+- Exchange: all five journeys for every unique mailbox on one aligned wall-clock minute;
+  concurrent independent attempts, sequential dependent steps and global/per-mailbox Graph-request permits.
 - Teams: one lane containing channel conversation and scheduled meeting, every 120 seconds.
 - OneDrive: three independent lanes, each every 300 seconds.
 - Each service's optional providers: a separate lane, default `providerIntervalSeconds: 300`.
@@ -104,8 +105,12 @@ approved procedure (`deployment.retireEntities`, [model migrations](../health-mo
 - Keep exactly the supported scenarios, each assigned to one lane. Do not
   rename deployed `onedrive-planned-*` roots or their `step-1`…`step-4` IDs.
 - Attachment and reply are separate scenarios; reply needs a retained `replySeed`
-  per target, which `npm run setup` provisions into `.env` ([reply
+  in that same mailbox, which `npm run setup` provisions into `.env` ([reply
   seeds](./exchange/README.md#provision-and-test-attachment-and-reply-separately)).
+- Replace old Exchange sender/recipient target pairs with one `{ id, mailbox }`
+  target for every unique former participant. Removed journeys/fields are rejected.
+  Re-provision incompatible paired fixtures explicitly with
+  `npm run setup -- -ReprovisionReplySeeds`; see the Exchange migration guide.
 - Teams accepts only bot participants with explicitly selected managed identities;
   there is no bootstrap command or user-token compatibility path.
 - Optional OneDrive stable collection accepts `serviceHealth: true` and inherits the
@@ -127,7 +132,7 @@ approved procedure (`deployment.retireEntities`, [model migrations](../health-mo
    folders, grants scoped write access and writes real bindings to `.env` for every
    approved account.
 4. Run `npm run setup` ([what it does and does not cover](../docs/deployment.md#set-up-microsoft-365-with-one-script)):
-   it keeps the Exchange scope, distribution lists, Teams membership and channels, and
+   it keeps the Exchange scope, Teams membership and channels, and
    reply seeds current, and looks up the IDs the config leaves out.
 5. Set `execution.mode: "live"` on the service and `deployment.enableLiveProbes: true`.
    Hosted workers then receive `ENABLE_LIVE_M365=true`; a local live run must export

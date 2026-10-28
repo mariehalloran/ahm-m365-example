@@ -34,8 +34,8 @@ export interface HealthReport {
     evaluationRules?: EvaluationRules;
   };
 }
-export interface CycleResults { cycleId: string; results: SyntheticResult[] }
-export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[] }
+export interface CycleResults { cycleId: string; results: SyntheticResult[]; signal?: AbortSignal }
+export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[]; signal?: AbortSignal }
 export type HealthReporter = (cycle: CycleResults | ProviderCycle) => Promise<void>;
 
 interface MeasurementSample {
@@ -59,6 +59,7 @@ interface PublicationContext {
   modelPath: string;
   cycleId: string;
   telemetry: Telemetry;
+  signal?: AbortSignal | undefined;
 }
 
 function evaluateHealthState(value: number, rules: EvaluationRules): HealthState {
@@ -366,7 +367,7 @@ async function sendHealthReport(context: PublicationContext, report: HealthRepor
 }
 
 async function publishHealthReports(reports: HealthReport[], context: PublicationContext): Promise<void> {
-  const signal = AbortSignal.timeout(REPORT_BATCH_TIMEOUT_MS);
+  const signal = context.signal ?? AbortSignal.timeout(REPORT_BATCH_TIMEOUT_MS);
   let nextReport = 0;
   let failures = 0;
   const sendNext = async () => {
@@ -425,6 +426,6 @@ export function createHealthReporter(
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;
     }
-    await publishHealthReports(reports, { http, modelPath, telemetry, cycleId: cycle.cycleId });
+    await publishHealthReports(reports, { http, modelPath, telemetry, cycleId: cycle.cycleId, signal: cycle.signal });
   };
 }

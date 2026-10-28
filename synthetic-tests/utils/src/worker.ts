@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { ConfigurationError, type Config } from "./config.js";
 import { consoleTelemetry, probeServices, resultSchema, type Probe, type Telemetry } from "./contracts.js";
-import { categoryOf, IntegrationError } from "./http.js";
+import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { baseResult, type ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
 import { providerGraphClient, serviceRuntime, validateProjectTenantBinding, validateRuntimeConsent } from "./runtime.js";
@@ -71,13 +71,18 @@ async function initializeService(
     config,
     dependencies: {
       ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
+      ...(service.type === "exchange" && options.project ? {
+        capacityGroups: options.project.groups.map(group => ({
+          id: group.id, displayName: group.displayName, targetIds: group.targetIds.exchange,
+        })),
+      } : {}),
     },
   };
 }
 
 async function reportInitializationFailure(
   service: ServiceConfig, probes: Probe[], reportHealth: HealthReporter | undefined, telemetry: Telemetry, error: unknown, startedAt: number,
-  output: ResultOutput,
+  output: ResultOutput, signal: AbortSignal, capacityGroups?: RunnerDependencies["capacityGroups"],
 ): Promise<void> {
   const observedAt = Date.now();
   const category = error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error);
@@ -93,6 +98,17 @@ async function reportInitializationFailure(
     diagnosticCategory: category,
     diagnosticContext: { testStage: "initialization" },
   }));
+  if (service.type === "exchange") {
+    for (const group of capacityGroups ?? [{ id: "ungrouped", displayName: "Ungrouped", targetIds: probes.map(probe => probe.id) }]) {
+      const count = probes.filter(probe => group.targetIds.includes(probe.id)).length;
+      if (count) telemetry.emit("exchange-minute-capacity", {
+        cycleId, groupId: group.id, group: group.displayName, expectedAttempts: count,
+        startedAttempts: 0, completedAttempts: count, timedOutAttempts: 0,
+        graphRequests: 0, permitWaitRequests: 0, permitWaitMs: 0,
+        interpretation: "runner-capacity-not-exchange-availability",
+      });
+    }
+  }
   const outputErrors: unknown[] = [];
   for (const result of results) {
     try { output.record(result, service.mode); }
@@ -101,7 +117,8 @@ async function reportInitializationFailure(
       telemetry.emit("result-output-failed", { cycleId, category: categoryOf(outputError) });
     }
   }
-  try { await reportHealth?.({ cycleId, results }); }
+  const publicationSignal = AbortSignal.any([signal, AbortSignal.timeout(service.type === "exchange" ? 12000 : 30000)]);
+  try { await withAbort(publicationSignal, async () => reportHealth?.({ cycleId, results, signal: publicationSignal })); }
   catch (error) { outputErrors.push(error); }
   throwFailures(outputErrors);
 }
@@ -242,7 +259,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     },
   };
   let initialized: InitializedService | undefined;
-  const now = options.now ?? (() => performance.now());
+  const now = options.now ?? (service.type === "exchange" ? Date.now : () => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const workerErrors: unknown[] = [];
   try {
@@ -274,11 +291,16 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
           return;
         }
         const startedAt = Date.now();
+        const minuteBudgetMs = service.type === "exchange"
+          ? options.once ? 59000 : Math.max(1, 59000 - startedAt % 60000) : undefined;
+        const minuteDeadline = minuteBudgetMs === undefined ? undefined : AbortSignal.timeout(minuteBudgetMs);
+        const laneSignal = minuteDeadline ? AbortSignal.any([signal, minuteDeadline]) : signal;
         const laneProbes = configuredProbes.filter(probe => lane.journeys.includes(probeServices[probe.type].journey));
         const initializationFailed = async (error: unknown) => {
           if (!signal.aborted) {
             await reportInitializationFailure(
-              service, laneProbes, reportHealth, telemetry, error, startedAt, results,
+              service, laneProbes, reportHealth, telemetry, error, startedAt, results, laneSignal,
+              options.project?.groups.map(group => ({ id: group.id, displayName: group.displayName, targetIds: group.targetIds[service.type] })),
             );
           }
         };
@@ -291,15 +313,22 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
             throw error;
           });
         const laneInitialization = initialization.then(value => ({
-          ...value, config: { ...value.config, probes: laneProbes, PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000 },
+          ...value, config: {
+            ...value.config, probes: laneProbes, PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000,
+            ...(minuteBudgetMs === undefined ? {} : { CYCLE_TIMEOUT_MS: Math.max(1, Math.min(30000, minuteBudgetMs - 29000)) }),
+          },
         }));
         const publicationErrors: unknown[] = [];
         try {
-          await executeServiceCycle(
-            laneInitialization, options, signal, telemetry, initializationFailed,
-          );
+          const execute = () => executeServiceCycle(laneInitialization, options, laneSignal, telemetry, initializationFailed);
+          if (minuteDeadline) await withAbort(minuteDeadline, execute);
+          else await execute();
         } catch (error) { publicationErrors.push(error); }
-        try { await otel?.forceFlush(); }
+        try {
+          if (service.type === "exchange") {
+            await withAbort(AbortSignal.any([minuteDeadline!, AbortSignal.timeout(5000)]), async () => otel?.forceFlush());
+          } else await otel?.forceFlush();
+        }
         catch (error) { publicationErrors.push(error); }
         publicationErrors.push(...otelDiagnosticErrors.splice(0));
         if (otelInitializationError) publicationErrors.push(otelInitializationError);

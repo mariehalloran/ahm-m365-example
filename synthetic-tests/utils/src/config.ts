@@ -27,6 +27,8 @@ const runtimeSettingsSchema = z.object({
   SYNTHETIC_SCENARIO: z.enum(scenarios).default("healthy"),
   PROBE_TIMEOUT_MS: number(90000, 100, 120000, true),
   MAX_CONCURRENT_PROBES: number(3, 1, 20, true),
+  EXCHANGE_MAX_CONCURRENT_REQUESTS: number(32, 1, 1000, true),
+  EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: number(2, 1, 20, true),
   CYCLE_TIMEOUT_MS: number(170000, 100, 86400000, true),
   POLL_INTERVAL_MS: number(2000, 10, 10000, true),
   ENABLE_LIVE_M365: z.enum(["true", "false"]).default("false"),

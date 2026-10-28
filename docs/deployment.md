@@ -103,26 +103,27 @@ and:
    scope. That check bypasses Exchange's permission cache, which holds an active app's
    permissions for 30 minutes to 2 hours, so the running worker can keep getting HTTP 403 for a
    newly added mailbox for that long.
-2. **Distribution lists:** creates each distribution list named in the targets and adds its
-   expected recipients.
-3. **Teams:** adds every account of each group that lists a Teams target to that target's
+2. **Teams:** adds every account of each group that lists a Teams target to that target's
    team (Graph `groups/{id}/members/$ref`), then finds or creates the standard channel named
    by the target's optional `channelName` (Graph `teams/{id}/channels`) and writes its ID to
    `.env`.
-4. **Lookups:** finds the IDs the config leaves out and writes them to `.env`: each
+3. **Lookups:** finds the IDs the config leaves out and writes them to `.env`: each
    OneDrive account's user ID (Graph `users/{userPrincipalName}`); the peer bot's client ID
    (`az identity show` on `access.peerIdentity`); and, when `scheduled-meeting` is selected,
    each call target's organizer user ID (Graph `users/{organizer}`) and the Teams calling
    callback URL (`https://<Teams worker appName>.<environment default domain>/api/calls`,
    the domain from `az containerapp env show`).
-5. **Reply seeds:** for each Exchange target without one (when `reply-mail` is selected),
+4. **SELF-REPLY seeds:** validates or provisions a retained received self-addressed
+   message in each independent Exchange mailbox (when `reply-mail` is selected),
    builds the worker image from the current checkout in ACR, runs the worker's own
    `mail-test-command --apply --setup-only` once in a temporary Container Apps job under the
    worker's managed identity (only that identity can create the retained message), copies the
    seeds from the job output to `.env` and deletes the job. A permission failure (HTTP 403)
    right after step 1 is the cache above catching up, so only that is retried, every 2
    minutes for up to about 2.3 hours; any other failure stops at once. Press Ctrl+C to stop
-   waiting and re-run setup later.
+   waiting and re-run setup later. Old paired fixtures fail explicit ownership/scope
+   validation; use `npm run setup -- -ReprovisionReplySeeds` to replace incompatible
+   bindings without deleting retained old seeds. No distribution groups are provisioned.
 
 **Not covered:** the one-time Exchange RBAC approval that gives the worker identity its
 roles and initial scope, which setup only extends
@@ -241,6 +242,12 @@ Beta provider collection also needs `deployment.enableBetaServiceActivity: true`
 which sets `ENABLE_BETA_SERVICE_ACTIVITY=true`.
 
 ## Deployment status and order
+
+**Single-user Exchange conversion:** the five-journey, aligned-minute source
+change is not deployed or live-accepted by this implementation task. Historical
+tenant evidence below predates that conversion and does not establish self-reply
+fixture validity, current cohort capacity or current health ingestion. Re-provision
+fixtures and perform the approved live acceptance separately.
 
 First deployment with the single command, 2026-10-28: `npm run deploy` against the Consto
 test tenant (existing foundation and worker apps, a private copy of the config passed with

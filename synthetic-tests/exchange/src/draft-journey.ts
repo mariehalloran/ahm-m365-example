@@ -65,26 +65,19 @@ export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
       () => readDraft(graph, attempt, draftId, signal),
       now,
     );
-    if (context.config.EXCHANGE_CLEANUP_ENABLED === "false") {
-      result.steps.push({
-        name: "delete-draft",
-        status: "skipped",
-        observedAt: new Date(now()).toISOString(),
-        reason: "cleanup-disabled",
-      });
-    } else
-      await measureStep(
+    await measureStep(
         result,
         "delete-draft",
         () => deleteDraft(graph, attempt, draftId, signal),
         now,
         () => "cleanup-failure",
-      );
+    );
     result.success = true;
     result.diagnosticContext.testStage = "complete";
   } catch (error) {
     journeyFailure(result, error, telemetry);
   } finally {
+    context.executionComplete?.();
     await cleanupStep(
       result,
       attempt.mutationAttempted,

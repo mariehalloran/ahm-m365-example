@@ -2,7 +2,7 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports directly, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Twelve journeys reuse three Container Apps (one per enabled tenant and service); the default family has four models, 67 entities, 63 relationships and 46 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
+Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports directly, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Ten journeys reuse three Container Apps (one per enabled tenant and service); the default family has four models, 57 entities, 53 relationships and 38 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
 
 Exchange, Teams, and OneDrive use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
@@ -10,8 +10,9 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 ## Scheduling and shutdown
 
-- First run is immediate; reusable independent lanes follow fixed-rate cadence within each worker. Exchange mail defaults to 60 seconds and other Exchange journeys to 300 seconds.
-- Live Exchange attempts are cancelled at a per-journey deadline, including in custom lanes: 30 seconds for `reply-mail` and `meeting-invitation` (two or three sequential mailbox hops), 15 seconds for every other Exchange journey. A lane's `timeoutSeconds` can only shorten it (the Exchange [lane example](../synthetic-tests/exchange/README.md#journeys-and-scheduling) sets 15 on `mail` and 30 on `extended`). A timeout is a failure reported Unhealthy; bounded cleanup can finish afterward and elapsed durations are not clamped. Latency thresholds are unchanged (a mean duration above 15000 ms is Degraded), so a 15-30 second success reports Degraded. Other services retain their configured deadlines.
+- Exchange continuous execution waits for an aligned wall-clock minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts/minute. `--once` is an immediate single-cycle diagnostic. Other products/provider lanes retain their independent cadences and immediate first run.
+- Live Exchange execution deadlines are 30 seconds for explicit SELF-REPLY (`reply-mail`), 15 seconds for the other four journeys. Timeouts contribute success 0/Unhealthy; bounded cleanup can finish afterward. Latency degradation remains 15000 ms, so slower successful replies report Degraded. Actual Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
+- The Exchange minute bounds execution/settlement to 42 seconds, reporting to 12 and telemetry flush to 5; late starts reduce the remaining budget. `exchange-minute-capacity` emits expected/started/completed/timed-out attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane reports update only observed journeys, not empty/Unknown reports for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
@@ -66,7 +67,7 @@ Report success is `100 * successful executed samples / executed samples`; mean d
 
 With more than one tenant in the config, each tenant's worker publishes every overall signal as `tenant-<tenant id>--<signal>` (one tenant keeps the plain names; group signals are `group-<id>--tenant-<tenant id>--<signal>`), so tenants share a service model without overwriting each other. Adding a second tenant renames every overall signal at once: deploy models and workers together with `npm run deploy`, point freshness and report checks at the new names, and expect reports under the old names to expire after the report TTL.
 
-The reporter uses the service identity and ARM audience, with bounded requests/retries and a 30-second batch budget. It never substitutes provider health for synthetic reports. Publication failures are explicit; startup configuration/credential validation can still prevent execution. Check `health-report-failed` and `service-cycle-failed`; one-shot reporting errors return nonzero. A 204 acknowledges ingestion, not model propagation or notification delivery.
+The reporter uses the service identity and ARM audience, with bounded requests/retries: 12 seconds for an Exchange synthetic batch, 30 seconds for other batches. It never substitutes provider health for synthetic reports. Publication failures are explicit; startup configuration/credential validation can still prevent execution. Check `health-report-failed` and `service-cycle-failed`; one-shot reporting errors return nonzero. A 204 acknowledges ingestion, not model propagation or notification delivery.
 
 Valid-but-incomplete live runtime setup is an observed monitoring failure, not a reason to manufacture simulated health. With usable report credentials, initialization exceptions publish an unsuccessful/unexecutable journey and keep unexecuted action signals Unknown; workers retry on their service cadence. Inspect `service-initialization-failed`, its bounded diagnostic category, and the actual stage before attributing the failure to Microsoft 365. One-shot commands still fail. Unsafe schemas and unusable report credentials can stop publication and need independent platform/freshness detection.
 
@@ -95,8 +96,8 @@ A record without a reporting group shows `(no group)` and one without a user `(n
 | Attribute | Meaning |
 | --- | --- |
 | `monitoring.tenant` | The tenant alias in the config |
-| `monitoring.user` | The Exchange initiating mailbox or the OneDrive `userPrincipalName`; never set for Teams, whose participants are bots |
-| `monitoring.peer` | The Exchange recipient mailbox |
+| `monitoring.user` | The sole configured Exchange mailbox or the OneDrive `userPrincipalName`; never set for Teams, whose participants are bots |
+| `monitoring.peer` | Not populated by single-user Exchange journeys |
 | `monitoring.group`, `monitoring.group_name` | The reporting group's id and display name |
 | `monitoring.group_duplicate` | `"true"` on every record after the first when one target belongs to several groups. The overall model signals skip these so each attempt counts once; the per-group searches keep them |
 | `probe.service`, `probe.journey`, `probe.step`, `probe.step_status`, `probe.diagnostic_category` | What ran, and how the step ended |

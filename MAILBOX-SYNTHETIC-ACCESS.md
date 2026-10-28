@@ -10,14 +10,19 @@ The [shared Container Apps setup](./synthetic-tests/infra/README.md) separates i
 
 | Request | Why |
 | --- | --- |
-| Dedicated A/B shared/test mailboxes and an explicit synthetic distribution list with expected recipients | Complete cross-mailbox attachment/reply, list delivery and meeting journeys; keep business mailboxes outside the test |
+| Dedicated independent shared/test mailboxes, one user per target | Complete five single-user mail/draft/attachment/SELF-REPLY/private-calendar journeys; keep business mailboxes outside the test |
 | The Microsoft 365 tenant ID, primary SMTP address, mailbox object ID, and owner | Confirm the correct tenant/target and define a narrow scope |
 | Approval for the Exchange worker's managed identity | Azure creates its service principal; Exchange must separately authorize it |
 | Exchange RBAC application roles scoped only to approved participants | Permit draft/send/read/cleanup and the selected calendar actions |
 | An approved out-of-scope control mailbox | Verify that unrelated mailbox access is denied, without sending/deleting there |
 | Approved cadence, retention, mail-flow restrictions, and an escalation owner | Control volume, cleanup, and security impact |
 
-The one-minute mail journey produces up to **1,440 messages/day or 43,200 per thirty-day month per target**, plus sent/received copies. The other five journey families run every five minutes and add mail/calendar operations. Agree on total volume before enabling live execution.
+All five journeys run for every mailbox on one aligned wall-clock minute.
+Self-mail, self-attachment and SELF-REPLY together submit up to **4,320 messages/day
+or 129,600 per thirty-day month per mailbox**, plus sent/received copies, one draft
+lifecycle and one private recurring-series lifecycle each minute, and one retained
+setup fixture. A hundred mailboxes select 500 attempts/minute; this is requested
+load, not established live capacity. Agree on volume before enabling execution.
 
 An eligible Exchange Online subscription must exist. A shared mailbox up to 50 GB generally needs no separate mailbox license; archive, hold, capacity, and advanced compliance/security features can change that. Human delegates need their own eligible licensing. Ask the tenant owner to confirm it.
 
@@ -41,9 +46,17 @@ Use **Exchange Online RBAC for Applications only**, scoped to the dedicated part
 | --- | --- |
 | `Application Mail.ReadWrite` | Create draft, look for Inbox delivery, find/delete this run's copies |
 | `Application Mail.Send` | Submit the test draft as that mailbox |
-| `Application Calendars.ReadWrite` | Create/read/update/delete recurring events, invite/accept/observe/cancel meetings; needed only for selected calendar journeys |
+| `Application Calendars.ReadWrite` | Create/read/update/delete a private recurring series in the user's own calendar, with no attendees; needed only for `recurring-calendar` |
 
-The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles only to approved A/B participants. Configure root `mailbox`, `recipientMailbox`, and `distributionList: { address, expectedRecipients }`; the worker neither discovers members nor adds grants. After this one-time approval, `npm run setup` extends the same scope to every configured mailbox (add-only) and creates the distribution list with its expected recipients ([setup](./docs/deployment.md#set-up-microsoft-365-with-one-script)). Verify actual Graph access as well as RBAC diagnostics after propagation, including denial of an unrelated control account. See [seven journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
+The administrator registers the existing managed identity's service-principal
+reference in Exchange, creates a resource scope and assigns those roles only to
+approved independent mailboxes. Configure root targets as `{ id, mailbox }`;
+there are no sender/recipient pairs or distribution groups. After one-time approval,
+`npm run setup` extends the same scope to every configured mailbox (add-only) and
+validates/provisions a retained received self-addressed SELF-REPLY fixture
+([setup](./docs/deployment.md#set-up-microsoft-365-with-one-script)). Verify actual
+Graph access and RBAC diagnostics after propagation, including denial of an unrelated
+control account. See [five journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
 
 **Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite`, `Mail.Send`, or `Calendars.ReadWrite` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
 
@@ -97,7 +110,6 @@ $expectedTenantId = "<tenantId from the identity output>"
 $clientId = "<managed identity clientId>"
 $principalId = "<managed identity principalId>"
 $mailbox = "ahm-synthetic@<accepted-domain>"
-$recipientMailbox = "ahm-synthetic-recipient@<accepted-domain>"
 $controlMailbox = "<approved-existing-out-of-scope-mailbox>"
 $scopeName = "AHM-Exchange-Synthetic-Mailbox"
 
@@ -113,7 +125,7 @@ New-ServicePrincipal -AppId $clientId -ObjectId $principalId `
     -DisplayName "AHM Exchange synthetic identity"
 
 New-ManagementScope -Name $scopeName `
-    -RecipientRestrictionFilter "(PrimarySmtpAddress -eq '$mailbox') -or (PrimarySmtpAddress -eq '$recipientMailbox')"
+    -RecipientRestrictionFilter "(PrimarySmtpAddress -eq '$mailbox')"
 
 New-ManagementRoleAssignment -Name "AHM-Synthetic-MailReadWrite" `
     -App $principalId -Role "Application Mail.ReadWrite" `
@@ -128,11 +140,10 @@ New-ManagementRoleAssignment -Name "AHM-Synthetic-CalendarsReadWrite" `
     -CustomResourceScope $scopeName
 
 Test-ServicePrincipalAuthorization -Identity $principalId -Resource $mailbox
-Test-ServicePrincipalAuthorization -Identity $principalId -Resource $recipientMailbox
 Test-ServicePrincipalAuthorization -Identity $principalId -Resource $controlMailbox
 ```
 
-Each allowed participant must show the selected roles in scope, and the control mailbox must be out of scope. This example covers an approved A/B pair; include every other explicitly selected expected recipient in the reviewed scope (after this approval, `npm run setup` adds the configured mailboxes). Omit `Application Calendars.ReadWrite` when both calendar journeys are disabled. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
+Each approved mailbox must show the selected roles in scope, and the control mailbox must be out of scope. This example covers one independent mailbox; include every other configured mailbox as a reviewed `PrimarySmtpAddress` clause (after approval, setup adds configured mailboxes). Omit `Application Calendars.ReadWrite` when `recurring-calendar` is disabled. Preview membership and audit other grants; a scope name does not make access narrow.
 
 New test tenants may require the one-time, tenant-wide `Enable-OrganizationCustomization` prerequisite. Check `Get-OrganizationConfig`'s `IsDehydrated` property, obtain tenant-owner approval, and run the command only when it is `True`. Wait for completion before retrying the scoped setup; do not replace scoped grants with broader permissions.
 
@@ -170,9 +181,21 @@ Same-tenant hosted Exchange remains keyless by default. The shared hosting templ
 
 The [Exchange service](./synthetic-tests/exchange/) owns its worker, journeys, action functions and tests; its settings live in the root [monitoring.config.json](./monitoring.config.json). Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
 
-The seven journeys are send/verify, draft lifecycle, attachment delivery, reply delivery, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. The reply journey retains a dedicated received starter message per approved pair, provisioned outside timed attempts (by `npm run setup`, into `.env`) with separately visible setup evidence. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
+The five journeys are send-to-self/Inbox verification, own-draft lifecycle,
+self-attachment delivery/download verification, explicitly labelled SELF-REPLY,
+and private recurring-calendar lifecycle with no attendees. A retained received
+self-addressed reply fixture is provisioned in that same mailbox outside timed
+attempts (`npm run setup`, generated IDs in `.env`) with separate setup evidence.
+Fixtures and created replies reject non-self recipients, including `replyTo`.
+Each executed action contributes 1/0 success and duration. Blocked actions are
+skipped, not fabricated failed requests.
 
-The root health model references an independent Exchange model. Its seven journey entities receive whole-journey reports and 25 business-step children receive action reports. Token acquisition and compensating cleanup remain internal; deliberate draft deletion and calendar deletion/cancellation are business steps. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. API-backed dedicated participants do not establish Outlook UI or tenant-wide availability.
+The root health model references an independent Exchange model. Its five journey
+entities and 17 business-step children receive aggregated reports. Token acquisition
+and compensating cleanup stay internal; deliberate draft and private-series deletion
+are business steps. No per-mailbox model entities or cross-cycle history are created.
+Reports replace current-cycle aggregates; TTL expiry removes signals, not a guaranteed
+Unhealthy alert. Source checks establish neither Outlook UI coverage nor live capacity.
 
 ## 7. Not required by this Exchange test
 
@@ -193,13 +216,13 @@ Cross-tenant managed identity and federation are not implemented. Different-tena
 
 > **Subject: Dedicated Exchange test participants and scoped managed-identity authorization**
 >
-> Please approve dedicated A/B synthetic mailboxes and a synthetic distribution list with explicit expected recipients, and confirm the same Entra tenant as our Azure Container App identity.
+> Please approve dedicated independent synthetic mailboxes, one configured user per Exchange target, and confirm the same Entra tenant as our Azure Container App identity.
 >
 > We will supply the user-assigned managed identity's client ID and enterprise service-principal object ID from the Azure setup. Please register its reference in Exchange and assign `Application Mail.ReadWrite`, `Application Mail.Send`, and selected calendar journeys' `Application Calendars.ReadWrite`, using Exchange RBAC for Applications scoped only to approved participants.
 >
 > Please do not add equivalent unscoped Entra Graph mail grants. We need allowed/denied authorization checks, a review of effective grants, and one live Graph validation before scheduling.
 >
-> The seven selected journeys cover A→B mail, drafts, separate attachment/reply delivery, list fanout, recurrence, and meeting acceptance/cancellation. Please approve the retained received reply fixture per pair, one-minute mail cadence and five-minute other journeys, mailbox licensing, recipient restrictions, owned-artifact cleanup/retention, an out-of-scope control mailbox, and named ownership/escalation.
+> The five selected journeys cover self-addressed mail/Inbox receipt, draft lifecycle, self-addressed attachment download/hash verification, explicitly labelled SELF-REPLY, and private recurring-calendar lifecycle without attendees. Please approve a retained received self-addressed reply fixture per mailbox and one aligned minute for all five journeys (up to 4,320 sent messages/day/mailbox), mailbox licensing, self-recipient restrictions, owned-artifact cleanup/retention, an out-of-scope control mailbox and named ownership/escalation. We do not request distribution groups, attendee processing or calendar-sharing/privacy changes.
 >
 > We do not need a mailbox password, application secret/certificate for hosted Exchange authentication, or administrator privileges for the running worker. Please return approved tenant/mailbox IDs, identity/scope/assignment details, test results, and operating constraints.
 

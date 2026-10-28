@@ -3,6 +3,7 @@ import { AuthenticationHandler, Client, ResponseType, type GraphRequest, type Mi
 import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js";
 import { z } from "zod";
 import { IntegrationError, requestWithRetry, withAbort, type HttpOptions } from "./http.js";
+import type { GraphRequestPermits } from "./graph-request-permits.js";
 
 const graphOrigin = "https://graph.microsoft.com";
 const graphScope = `${graphOrigin}/.default`;
@@ -17,6 +18,8 @@ function schemaDetail(error: z.ZodError): string {
 
 export interface GraphOptions extends HttpOptions {
   downloadFetch?: typeof fetch;
+  mailbox?: string;
+  requestPermits?: GraphRequestPermits;
 }
 
 function requestUrl(path: string, version: GraphApiVersion): URL {
@@ -89,6 +92,13 @@ export class GraphClient {
     this.downloadFetch = options.downloadFetch ?? fetch;
   }
 
+  forMailbox(mailbox: string, requestPermits: GraphRequestPermits): GraphClient {
+    if (this.options.mailbox && this.options.mailbox.toLowerCase() !== mailbox.toLowerCase()) {
+      throw new IntegrationError("configuration-failure");
+    }
+    return new GraphClient(this.credential, { ...this.options, mailbox, requestPermits });
+  }
+
   private deadline(signal: AbortSignal): AbortSignal {
     return AbortSignal.any([signal, AbortSignal.timeout(this.options.timeoutMs ?? 15000)]);
   }
@@ -109,7 +119,11 @@ export class GraphClient {
   }
 
   async request(path: string, signal: AbortSignal, method = "GET", body?: unknown, retrySafe = true, version: GraphApiVersion = "v1.0"): Promise<Response> {
-    return this.execute(path, this.deadline(signal), method, body, retrySafe, version, "error");
+    const bounded = this.deadline(signal);
+    const response = await this.execute(path, bounded, method, body, retrySafe, version, "error");
+    // Scoped Exchange mutation callers need only status; release their permit after the response body is cancelled.
+    if (this.options.requestPermits) await withAbort(bounded, async () => response.body?.cancel());
+    return response;
   }
 
   private async execute(
@@ -117,6 +131,11 @@ export class GraphClient {
     version: GraphApiVersion, redirect: "error" | "manual",
   ): Promise<Response> {
     const url = requestUrl(path, version);
+    const mailbox = this.options.mailbox;
+    if (mailbox && (path.split("/")[1] !== "users" ||
+        decodeURIComponent(path.split("/")[2] ?? "").toLowerCase() !== mailbox.toLowerCase())) {
+      throw new IntegrationError("configuration-failure", undefined, "single-mailbox-boundary");
+    }
     signal.throwIfAborted();
     let content: string | undefined;
     try { content = body === undefined ? undefined : JSON.stringify(body); }
@@ -127,7 +146,13 @@ export class GraphClient {
         try {
           const target = new URL(typeof context.request === "string" ? context.request : context.request.url);
           if (target.origin !== url.origin || target.pathname !== url.pathname) throw new IntegrationError("collector-failure");
-          context.response = await requestWithRetry(context.request, { ...context.options, redirect }, signal, retrySafe, this.options);
+          const permits = this.options.requestPermits;
+          context.response = await requestWithRetry(context.request, { ...context.options, redirect }, signal, retrySafe, {
+            ...this.options,
+            ...(permits && mailbox ? {
+              withRequestPermit: (signal, send) => permits.request(mailbox, signal, send),
+            } : {}),
+          });
         } catch (error) {
           transportFailure = error instanceof IntegrationError ? error : new IntegrationError("collector-failure");
           throw error;
