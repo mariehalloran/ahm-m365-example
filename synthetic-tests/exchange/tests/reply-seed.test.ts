@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { IntegrationError } from "../../utils/src/http.js";
 import { provisionReplySeed, type ReplySeedGraph } from "../src/reply-seed.js";
+import { replySeedOutputDocument } from "../src/mail-test-command.js";
+import { parseProjectDocument, selectTenant } from "../../utils/src/project-config.js";
+import { multiTenantFixture } from "../../utils/tests/fixtures.js";
 
 const target = { id: "pair-one", mailbox: "sender@example.invalid", recipientMailbox: "recipient@example.invalid" };
 const priorBinding = { messageId: "old-seed", correlationId: "11111111-1111-4111-8111-111111111111" };
@@ -58,6 +61,22 @@ function fixture(options: { existingStatus?: number; wrongSender?: boolean; neve
 }
 
 describe("retained received reply fixtures", () => {
+  it("writes a reply binding into the selected tenant's inventory without rewriting anything else", () => {
+    const raw = multiTenantFixture();
+    const selected = selectTenant(parseProjectDocument(raw), "contoso");
+    selected.services.exchange.targets[0]!.replySeed = priorBinding;
+    const written = replySeedOutputDocument(raw, "contoso", [selected.services.exchange.targets[0]!]);
+    expect(written.tenants[0]!.services.exchange.targets[0]!.replySeed).toEqual(priorBinding);
+    expect(raw.tenants[0]!.services.exchange.targets[0]!.replySeed).toBeUndefined();
+    expect(written.tenants[0]!.services.exchange.targets[1]).toEqual(raw.tenants[0]!.services.exchange.targets[1]);
+    expect(written.tenants[0]!.services.onedrive).toEqual(raw.tenants[0]!.services.onedrive);
+    expect(written.tenants[1]).toEqual(raw.tenants[1]);
+    expect(written.groups).toEqual(raw.groups);
+    expect(() => replySeedOutputDocument(raw, "contoso", [{ ...target, replySeed: priorBinding }]))
+      .toThrow("no longer in the tenant inventory");
+    expect(() => replySeedOutputDocument(raw, "missing", [])).toThrow("Unknown --tenant");
+  });
+
   it("provisions real A-to-B mail and records the received immutable ID and visible setup time", async () => {
     const { graph, calls, context, telemetry } = fixture();
     const binding = await provisionReplySeed(graph, target, context);

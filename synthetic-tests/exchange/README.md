@@ -8,11 +8,11 @@ for observed tenant execution and ingestion.
 
 ## Primary setup
 
-1. Select journeys and approved participants **only in the root project config**. The checked-in root selects all seven; its `.invalid` addresses are simulation placeholders, not live resources.
+1. Select journeys and approved participants **only in `monitoring.config.json`** (`tenants[].services.exchange`). The checked-in config selects all seven; its `.invalid` addresses are simulation placeholders, not live resources.
 2. Approve dedicated, licensed mailboxes and scope `Application Mail.Send`, `Application Mail.ReadWrite`, and (for calendar journeys) `Application Calendars.ReadWrite` through Exchange RBAC for Applications to just those participants. Verify both allowed participants and a denied control mailbox. Do not add tenant-wide Entra mail/calendar grants.
-3. Set service `mode: "live"`, explicitly selected managed identity, live consent `ENABLE_LIVE_M365=true`, approved model destination, and deploy models before workers. See [access request](../../MAILBOX-SYNTHETIC-ACCESS.md), [identity details](../../docs/cross-tenant-access.md), and [deployment](../../docs/deployment.md).
-4. Provision the retained reply fixture using the diagnostic command below; review its output root configuration before worker deployment.
-5. Run `npm run exchange -- --once --project-config /absolute/path/monitoring.private.json` from `synthetic-tests/`; verify actual journey execution **and accepted health ingestion**.
+3. Set `execution.mode: "live"`, an explicitly selected managed identity (`worker.identityResourceId`), `deployment.enableLiveProbes: true` (hosted workers then receive `ENABLE_LIVE_M365=true`) and the approved model destination; `npm run deploy` deploys models before workers. See [access request](../../MAILBOX-SYNTHETIC-ACCESS.md), [identity details](../../docs/cross-tenant-access.md), and [deployment](../../docs/deployment.md).
+4. Provision the retained reply fixture using the diagnostic command below; it saves the bindings into `monitoring.config.json`, so review that change before deployment.
+5. Run `npm run exchange -- --once` from `synthetic-tests/` with the live config and `ENABLE_LIVE_M365=true`; verify actual journey execution **and accepted health ingestion**.
 
 Root Exchange target shape (repeat the object for additional independent target sets):
 
@@ -30,39 +30,39 @@ Root Exchange target shape (repeat the object for additional independent target 
 
 `mailbox` is A; `recipientMailbox` is B. Attachment, reply and meeting journeys require distinct explicit A/B participants. Distribution-list delivery verifies **every** listed expected recipient; it does not discover members or infer tenant accounts. Recurring events and drafts use A. Each selected journey runs for every configured target; do not duplicate a group/participant set unless duplicate traffic is intended.
 
-All seven supported scenario keys default to enabled; explicitly select each in private profiles. Selected live journeys with missing prerequisites report observed `configuration-failure`/Unhealthy, never simulation or an invented A→A flow. The original mail journey alone retains its single-mailbox self-delivery fallback when B is omitted.
+All seven supported scenario keys default to enabled; explicitly select each in the config. Selected live journeys with missing prerequisites report observed `configuration-failure`/Unhealthy, never simulation or an invented A→A flow. The original mail journey alone retains its single-mailbox self-delivery fallback when B is omitted.
 
 ## Provision and test attachment and reply separately
 
 Run in the approved managed-identity host, or explicitly select certificate
-authentication for local development. No developer-login fallback is used:
+authentication for local development. No developer-login fallback is used. Without
+`--apply` the command prints a plan and changes nothing:
 
 ```sh
-ENABLE_LIVE_M365=true npm run exchange:mail-test -- \
-  --project-config /absolute/path/monitoring.private.json \
-  --output-config /absolute/path/monitoring.with-reply-seeds.json \
-  --samples 3
+ENABLE_LIVE_M365=true npm run exchange:mail-test -- --apply --samples 3
 ```
 
-The command uses the selected root participants and service authentication. It
+The command uses the config's participants and the service's `execution`
+authentication; add `--tenant <id>` when the config has several tenants. It
 provisions one real received message in B for each selected reply target, then
-persists `replySeed: { "messageId": "...", "correlationId": "..." }` in a new,
-private root file. An existing valid binding is reused; an observed 404 is
-explicitly reprovisioned. Permission or ownership failures are not bypassed.
-The original root file is never overwritten, existing output files are rejected,
-and concurrent input changes stop publication. Service config paths in the output
-are resolved against the original root. `--config` can explicitly select the
-Exchange service file; `--setup-only` provisions without measured attempts.
+saves `replySeed: { "messageId": "...", "correlationId": "..." }` on that target in
+`monitoring.config.json`, one atomic checkpoint per target. An existing valid
+binding is reused; an observed 404 is explicitly reprovisioned. Permission or
+ownership failures are not bypassed. An adjacent `.monitoring-setup.lock` file
+rejects a second apply, and a concurrent edit of the config stops the checkpoint
+rather than being overwritten. `--setup-only` provisions without measured attempts;
+`--samples` (1–10, default 3) sets how many attachment and reply attempts follow.
 
 Setup timings/failures are logged separately with a 120-second per-target bound.
 Missing or failed setup is never counted as a successful reply. The command then
 runs attachment and reply attempts independently, including per-attempt
 authentication and seed validation. It emits actual durations/timeouts, exits
-nonzero on failure, and **publishes no health reports** or production configuration
-changes. A 15-second ceiling is a failure boundary, not a guarantee of delivery.
+nonzero on failure, and **publishes no health reports**; the only configuration
+change is the saved `replySeed` bindings. A 15-second ceiling is a failure
+boundary, not a guarantee of delivery.
 
-For private-profile migration, replace `attachment-reply-mail` with the independent
-`attachment-mail` and `reply-mail` switches and update explicit lane assignments.
+The obsolete `attachment-reply-mail` scenario is rejected: select the independent
+`attachment-mail` and `reply-mail` switches and assign both to execution lanes.
 Keep `exchange-attachment` and its send/verify step IDs. Before upgrading workers,
 deploy `exchange-reply` and its `reply-mail`/`confirm-reply-mail` children under Mail.
 After old workers stop reporting, delete only the obsolete
@@ -91,7 +91,7 @@ deletion may be disabled explicitly for trial retention as described below.
 Mailbox search, external delivery and browser/client workflows are not implemented
 or selectable.
 
-Service-owned optional settings:
+Optional `execution` settings (`tenants[].services.exchange.execution`):
 
 ```json
 "executionLanes": [
@@ -101,7 +101,7 @@ Service-owned optional settings:
 ]
 ```
 
-Explicit lane settings must assign every supported service journey exactly once, even when disabled at the root. Without them, `mail` inherits service `intervalSeconds`/`timeoutSeconds` (checked-in 60/15); `extended` uses 300 seconds and the service timeout. All live Exchange attempts, including explicit lanes, are capped at 15 seconds; shorter configured timeouts remain shorter. Other products' deadlines are unchanged. Both lanes start immediately. Slow extended execution/reporting cannot block mail. A lane never overlaps itself; missed slots emit `service-slots-skipped` with lane, first slot, and count, without catch-up bursts. `--once` settles both selected lanes before exiting.
+Explicit lane settings must assign every supported service journey exactly once, even when the scenario is disabled. Without them, `mail` inherits `execution` `intervalSeconds`/`timeoutSeconds` (checked-in 60/15); `extended` uses 300 seconds and the `execution` timeout. All live Exchange attempts, including explicit lanes, are capped at 15 seconds; shorter configured timeouts remain shorter. Other products' deadlines are unchanged. Both lanes start immediately. Slow extended execution/reporting cannot block mail. A lane never overlaps itself; missed slots emit `service-slots-skipped` with lane, first slot, and count, without catch-up bursts. `--once` settles both selected lanes before exiting.
 
 Execution deadlines cancel work; cleanup gets ten seconds (runner settlement grace twelve seconds). Completed/deadline results aggregate and publish only their observed journeys, never empty reports for another lane. A timeout is success **0**, counted in the denominator and reported Unhealthy; dependent unexecuted steps remain skipped, not failed requests. Internal cycle deadline is 170 seconds; queued attempts cancelled by that deadline still produce failed journey results. External shutdown does not start queued attempts. Reports contain no per-target signal inventories or persisted cycle history.
 

@@ -10,6 +10,8 @@ COPY utils/src ./utils/src
 RUN npm run build
 
 FROM node:22-bookworm-slim
+ARG SOURCE_FINGERPRINT
+LABEL monitoring.source.sha256=$SOURCE_FINGERPRINT
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./

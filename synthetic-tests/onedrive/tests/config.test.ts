@@ -2,15 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/src/config.js";
 import { aggregateHealthReports } from "../../utils/src/health-reports.js";
 import { baseResult, simulate } from "../../utils/src/probes.js";
-import { applyProjectConfig, parseProjectConfig, readProjectConfig, readProjectService } from "../../utils/src/project-config.js";
+import { applyProjectConfig, selectTenant, serviceExecution } from "../../utils/src/project-config.js";
+import { documentFixture, projectFixture, executionFixture, parseTestProjectConfig as parseProjectConfig } from "../../utils/tests/fixtures.js";
 import { serviceRuntime } from "../../utils/src/runtime.js";
-import { parseServiceConfig, parseServiceFileConfig, readServiceConfig, serviceProbes, serviceSettings } from "../../utils/src/service-config.js";
+import { parseServiceConfig, parseServiceExecution, serviceProbes, serviceSettings } from "../../utils/src/service-config.js";
 import { runCycle } from "../../utils/src/runner.js";
 import { runServiceWorker } from "../../utils/src/worker.js";
 import { resultSchema, testTypes } from "../../utils/src/contracts.js";
 
-const checkedIn = await readProjectConfig("../monitoring.config.json");
-const file = await readServiceConfig("onedrive/config.json");
+const checkedIn = projectFixture();
+const file = executionFixture("onedrive");
 const configured = applyProjectConfig(checkedIn, file);
 const telemetry = { emit: vi.fn() };
 
@@ -44,7 +45,7 @@ describe("OneDrive root selection and independent execution", () => {
       id: `account-${index}`, userId: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
       userPrincipalName: `account-${index}@example.invalid`, folderName: "AHM-Synthetic-Tests",
     }));
-    const live = parseServiceFileConfig({ ...file, mode: "live", maxConcurrentProbes: 20 });
+    const live = parseServiceExecution({ ...file, mode: "live", maxConcurrentProbes: 20 });
     expect(() => applyProjectConfig(project, live)).toThrow("cycleTimeoutSeconds >= 3300");
     const scaled = { ...live, cycleTimeoutSeconds: 3600 };
     expect(() => applyProjectConfig(project, scaled)).toThrow("TTL");
@@ -76,14 +77,14 @@ describe("OneDrive root selection and independent execution", () => {
     await expect(serviceRuntime(configured, settings, telemetry, {})).rejects.toThrow("selected root-configured");
   });
   it("allows separately approved stable Service Health through the selected provider application", () => {
-    const service = parseServiceFileConfig({
+    const service = parseServiceExecution({
       ...file, serviceHealth: true, providerClientId: "11111111-1111-4111-8111-111111111111",
     });
     expect(service).toMatchObject({
       serviceHealth: true, providerIntervalSeconds: 300, serviceActivity: { enabled: false },
       graphAuthentication: "managed-identity", providerClientId: "11111111-1111-4111-8111-111111111111",
     });
-    expect(() => parseServiceFileConfig({ ...service, graphAuthentication: "certificate" }))
+    expect(() => parseServiceExecution({ ...service, graphAuthentication: "certificate" }))
       .toThrow("providerClientId requires managed-identity");
   });
   it.each([
@@ -91,7 +92,7 @@ describe("OneDrive root selection and independent execution", () => {
     { functions: ["getConnectivityMetricsForExchange"] },
     { thresholds: { getConnectivityMetricsForExchange: { degradedBelow: 99, unhealthyBelow: 95 } } },
   ])("rejects unapproved OneDrive beta activity settings %j", serviceActivity => {
-    expect(() => parseServiceFileConfig({ ...file, serviceActivity })).toThrow("no approved beta");
+    expect(() => parseServiceExecution({ ...file, serviceActivity })).toThrow("no approved beta");
   });
   it("reports all six settled attempts into stable journey roots and step IDs, not per-target inventories", async () => {
     const output = { emit: vi.fn() };
@@ -149,7 +150,7 @@ describe("OneDrive root selection and independent execution", () => {
     expect(result).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
     expect(aggregateHealthReports("onedrive", { cycleId: "timeout", results: [result] }, checkedIn.healthModel)[0]?.body.healthState).toBe("Unhealthy");
   });
-  it("reads the service-specific independent config through the root", async () => {
-    expect((await readProjectService("onedrive", "../monitoring.config.json")).service.executionLanes).toEqual(file.executionLanes);
+  it("reads inline service-specific execution through the root document", async () => {
+    expect(serviceExecution(selectTenant(documentFixture()), "onedrive").executionLanes).toEqual(file.executionLanes);
   });
 });

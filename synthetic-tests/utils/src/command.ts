@@ -6,17 +6,19 @@ import type { ServiceConfig } from "./service-config.js";
 import { parseWorkerArguments, runServiceWorker } from "./worker.js";
 import type { ProviderCollector } from "./provider-collection.js";
 import { readProjectService } from "./project-config.js";
+import { serviceEnvironment } from "./runtime.js";
 
 async function main(type: ServiceConfig["type"], handler: ProbeHandler, argv: readonly string[], providers?: ProviderCollector) {
-  const args = parseWorkerArguments(argv, "");
-  const { project, service } = await readProjectService(type, args.projectConfig ?? "../monitoring.config.json", args.config || undefined);
+  const args = parseWorkerArguments(argv);
+  const { project, service } = await readProjectService(type, args.config, args.tenant);
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
     await runServiceWorker(service, {
-      once: args.once, signal: controller.signal, expectedService: type, handler, project, ...(providers ? { providers } : {}),
+      once: args.once, signal: controller.signal, expectedService: type, handler, project,
+      env: serviceEnvironment(project, service, process.env, args.config), ...(providers ? { providers } : {}),
     });
   } finally {
     process.removeListener("SIGINT", stop);

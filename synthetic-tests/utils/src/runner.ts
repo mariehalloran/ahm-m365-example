@@ -21,7 +21,6 @@ export interface RunnerDependencies {
   handler?: ProbeHandler;
   now?: () => number;
   reportHealth?: HealthReporter;
-  reportCallQuality?: (cycle: CycleResults, signal: AbortSignal) => Promise<void>;
 }
 
 interface CycleContext {
@@ -228,10 +227,6 @@ export async function runCycle(
 
     stage = "reporting";
     await publishCycleResults(config, dependencies, { cycleId, results }, telemetryErrors);
-    if (config.EXECUTION_MODE === "live" && results.length === config.probes.length) {
-      stage = "call-quality";
-      await dependencies.reportCallQuality?.({ cycleId, results }, cycleSignal);
-    }
     telemetry.emit("service-execution-completed", {
       cycleId,
       probeCount: results.length,

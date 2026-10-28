@@ -7,6 +7,51 @@ import { createTeamsCallingVerifier, type CallingIdentity } from "./teams-callin
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
 import { GraphClient } from "./graph.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
+import type { ProjectConfig } from "./project-config.js";
+import { dirname, resolve } from "node:path";
+import { canonicalProjectFile } from "./paths.js";
+
+export function serviceEnvironment(
+  project: ProjectConfig, service: ServiceConfig, env: NodeJS.ProcessEnv, file = canonicalProjectFile,
+): NodeJS.ProcessEnv {
+  const selected = project.services[service.type];
+  const access = selected.access;
+  const bind = (name: string, value: string | undefined) => {
+    if (value !== undefined && env[name] !== undefined && env[name]?.toLowerCase() !== value.toLowerCase()) {
+      throw new ConfigurationError(`Configured ${name} conflicts with the selected execution environment`);
+    }
+    return value ?? env[name];
+  };
+  const azureTenant = env.AZURE_TENANT_ID ?? project.deployment?.azureTenantId;
+  const azureClient = bind("AZURE_CLIENT_ID", selected.worker?.identityClientId);
+  return {
+    ...env, AZURE_TENANT_ID: azureTenant, AZURE_CLIENT_ID: azureClient,
+    ...(access.m365TenantId ? { M365_TENANT_ID: bind("M365_TENANT_ID", access.m365TenantId) } : {}),
+    ...(access.m365ClientId ? { M365_CLIENT_ID: bind("M365_CLIENT_ID", access.m365ClientId) } : {}),
+    ...(access.m365CertificatePath ? { M365_CLIENT_CERTIFICATE_PATH: resolve(dirname(file), access.m365CertificatePath) } : {}),
+    ...(service.type === "teams" ? {
+      BOT_TENANT_ID: env.BOT_TENANT_ID ?? azureTenant,
+      BOT_CLIENT_ID: env.BOT_CLIENT_ID ?? azureClient,
+      TEAMS_CALLING_PEER_CLIENT_ID: bind("TEAMS_CALLING_PEER_CLIENT_ID", access.botPeerClientId),
+    } : {}),
+  };
+}
+
+export function validateProjectTenantBinding(tenant: Pick<ProjectConfig["tenant"], "tenantId"> | undefined, service: ServiceConfig, env: NodeJS.ProcessEnv): void {
+  if (!tenant || !service.enabled || service.mode !== "live") return;
+  const expected = tenant.tenantId.toLowerCase();
+  const matches = (name: string) => env[name]?.toLowerCase() === expected;
+  if (service.graphAuthentication === "certificate" ? !matches("M365_TENANT_ID") : !matches("AZURE_TENANT_ID")) {
+    throw new ConfigurationError("Selected tenant requires its own explicit Graph credential binding; direct managed identity/federation must use the actual Azure identity tenant");
+  }
+  if (service.providerClientId && (service.serviceHealth || service.serviceActivity.enabled) && !matches("AZURE_TENANT_ID")) {
+    throw new ConfigurationError("The selected tenant's providerClientId must use its actual Azure identity tenant; certificate Graph access does not rebind federated provider credentials");
+  }
+  if (service.type === "teams" && (!matches("AZURE_TENANT_ID") || !matches("BOT_TENANT_ID") ||
+      (env.M365_TENANT_ID !== undefined && !matches("M365_TENANT_ID")))) {
+    throw new ConfigurationError("This runner's Teams managed-identity guards require the selected tenant, Azure identity tenant, bot tenant and Graph observer tenant to match; use an approved tenant-local binding");
+  }
+}
 
 export function validateRuntimeConsent(service: ServiceConfig, env: NodeJS.ProcessEnv): void {
   if (service.serviceActivity.enabled && env.ENABLE_BETA_SERVICE_ACTIVITY !== "true") {

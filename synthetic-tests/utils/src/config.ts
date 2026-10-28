@@ -1,17 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import { maxOneDriveTargets, probeSchema, probeServices, scenarios, type Probe } from "./contracts.js";
+import { probeSchema, probeServices, scenarios, serviceProbeLimits, type Probe } from "./contracts.js";
 import { validateTeamsServiceUrl } from "./teams.js";
 
 export class ConfigurationError extends Error {
   constructor(message: string) { super(message); this.name = "ConfigurationError"; }
 }
-export async function readConfigJson(file: string, kind: "project" | "service"): Promise<unknown> {
+export async function readConfigJson(file: string): Promise<unknown> {
   let text: string;
   try { text = await readFile(file, "utf8"); }
-  catch { throw new ConfigurationError(`Cannot read the ${kind} config file`); }
+  catch { throw new ConfigurationError("Cannot read the project config file"); }
   try { return JSON.parse(text); }
-  catch { throw new ConfigurationError(`${kind === "project" ? "Project" : "Service"} config must contain a valid JSON object`); }
+  catch { throw new ConfigurationError("Project config must contain a valid JSON object"); }
 }
 const number = (fallback: number, min: number, max: number, integer = false) => {
   const schema = z.coerce.number().finite().min(min).max(max);
@@ -60,12 +60,12 @@ export function createRuntimeConfig(
   if (Array.isArray(rawProbes) && rawProbes.some(probe => probe && typeof probe === "object" && "callUserId" in probe)) {
     throw new ConfigurationError("Obsolete callUserId: calling requires a dedicated meetingThreadId, organizerUserId metadata and peerBotClientId; human calling is unsupported");
   }
-  const parsedProbes = z.array(probeSchema).min(1).max(270 + 3 * maxOneDriveTargets).safeParse(rawProbes);
+  const parsedProbes = z.array(probeSchema).min(1).max(Object.values(serviceProbeLimits).reduce((sum, limit) => sum + limit, 0)).safeParse(rawProbes);
   if (!parsedProbes.success) throw new ConfigurationError(`Invalid PROBES_JSON fields: ${parsedProbes.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const probes = parsedProbes.data;
   if (["exchange", "teams", "onedrive"].some(service =>
     probes.filter(probe => probeServices[probe.type].service === service).length >
-      (service === "exchange" ? 210 : service === "teams" ? 60 : 3 * maxOneDriveTargets))) {
+      serviceProbeLimits[service as keyof typeof serviceProbeLimits])) {
     throw new ConfigurationError("Invalid PROBES_JSON: service probe inventory exceeded");
   }
   if (new Set(probes.map(probe => `${probe.type}:${probe.id}`)).size !== probes.length) {

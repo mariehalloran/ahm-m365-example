@@ -1,19 +1,20 @@
 # Deploy the service workers
 
-Deploy the [health models](../../health-model/README.md#apply-and-migrate) first.
-This template hosts selected Exchange, Teams and OneDrive services in **separate Azure Container
-Apps**, using one private image, independent service configurations and separate
-user-assigned managed identities (UAMIs). Only selected live Teams calling enables
-public HTTPS ingress; Exchange, OneDrive and messaging-only Teams stay private.
-The checked-in root selects all three supported services.
-OneDrive reuses the environment/registry and receives its own
-`uami-<healthModel.name>-onedrive`, worker and ingest-only service-model assignment.
+`npm run deploy` deploys the [health models](../../health-model/README.md#apply-and-migrate)
+first, then this template, which hosts each enabled tenant and service in a
+**separate Azure Container App**, using one private image, the same root config and
+separate user-assigned managed identities (UAMIs). Only selected live Teams calling
+enables public HTTPS ingress; Exchange, OneDrive and messaging-only Teams stay private.
+The checked-in config selects all three supported services.
+OneDrive reuses the environment/registry and receives its own UAMI
+(`worker.identityName`, `uami-<healthModel.name>-onedrive` in the checked-in config),
+worker and ingest-only service-model assignment.
 It adds no bot, user sign-in, storage account or M365 grants. Its optional stable
 provider uses the distinct Microsoft OneDrive service entry, not SharePoint.
 See the [OneDrive setup and exact permission boundary](../onedrive/README.md).
-After foundation deployment creates its identity, run
-[bulk OneDrive setup](../../docs/onedrive-setup.md) before generating live worker
-parameters. For hundreds of accounts, size the service concurrency/cycle budget
+After the foundation creates its identity, run
+[bulk OneDrive setup](../../docs/onedrive-setup.md) before enabling live OneDrive
+workers. For hundreds of accounts, size the service concurrency/cycle budget
 and root report TTL; neither additional replicas nor the default deadline solve
 queued-account capacity.
 
@@ -25,92 +26,73 @@ For dated live acceptance, see [deployment status](../../docs/deployment.md#depl
 
 ## Configuration and safety
 
-Keep a private copy of [the root config](../../monitoring.config.json) with the
-approved model destination, service/scenario selection and targets. Each root
-`configFile` selects the service-owned cadence, authentication and execution
-settings. Commands below run from the repository root.
+Everything comes from the single root [monitoring.config.json](../../monitoring.config.json):
+the [`deployment` section](../../docs/deployment.md#the-deployment-section) and each
+service's `worker` and `access` blocks under `tenants[]`. There is no parameters file
+to prepare; `npm run deploy` hands the whole normalized config to this template as
+`projectConfig`. It holds IDs and references, never private keys or user tokens.
 
-```sh
-npm --prefix synthetic-tests run deployment:prepare -- \
-  /absolute/path/monitoring.private.json /absolute/path/foundation.parameters.json
-```
+| `worker` field | Meaning |
+| --- | --- |
+| `appName` | Container App name, unique across all workers |
+| `identityName` or `identityResourceId` | Exactly one: a UAMI the foundation creates, or an existing approved one, which a live worker requires |
+| `identityClientId` | Optional; must match the existing `identityResourceId` |
+| `cpu`, `memory` | Default 0.25 and `0.5Gi`; memory in Gi must equal twice the CPU |
 
-The preparer reads the selected files; do not maintain a second copy of their
-settings in Bicep. Generated parameters contain target/access metadata, never
-private keys or user tokens. Keep private configurations and parameters out of Git.
-Foundation preparation leaves `deployWorkers: false`. Deploying live worker
-profiles additionally requires `--enable-live`; `mode: live` alone is insufficient.
+For selected live Teams meeting calling, the Teams service `access` block must provide
+`botPeerClientId` and `botPeerManagedIdentityResourceId` for the **existing approved**
+peer UAMI, plus `botResourceId` and `botPeerResourceId` for the two existing bot
+registrations, which deployment checks before changing anything. All
+`callTargets[].peerBotClientId` values must match the peer. The worker template
+attaches that identity alongside the unchanged primary reporting/image-pull UAMI and
+supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams, simulation and calling-disabled
+workers receive neither. It creates no peer, Azure Bot or Graph grants. Both bots
+require separately approved `Calls.JoinGroupCall.All` and the same `/api/calls`
+callback, on existing port 8080 with one replica. See
+[meeting setup](../teams/README.md#two-bot-meeting-setup).
 
-For selected live Teams meeting calling, `--access-config` must provide
-`teams.botPeerClientId` and `teams.botPeerManagedIdentityResourceId` for the
-**existing approved** peer UAMI. All root meeting `peerBotClientId` values must
-match. The worker template attaches that identity alongside the unchanged primary
-reporting/image-pull UAMI and supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams,
-simulation and calling-disabled workers receive neither. It creates no peer,
-Azure Bot or Graph grants. Both bots require separately approved
-`Calls.JoinGroupCall.All` and the same `/api/calls` callback, on existing port 8080
-with one replica. See [meeting setup](../teams/README.md#two-bot-meeting-audio-setup).
-
-Checked-in profiles remain safe simulations. An approved live profile attempts
-real authentication/operations: incomplete setup produces observed Unhealthy
-journeys, not simulated success. Actions that never ran remain Unknown.
+The checked-in config remains a safe simulation. A live config attempts real
+authentication/operations: incomplete setup produces observed Unhealthy
+journeys, not simulated success. Actions that never ran remain Unknown. Live
+execution needs `execution.mode: "live"` and `deployment.enableLiveProbes: true`;
+see the [live gates](../../docs/deployment.md#live-execution-gates).
 
 ## Provision and publish
 
-Use the approved subscription explicitly. Review each preview before applying:
+From `synthetic-tests/`, preview and then deploy:
 
 ```sh
-SUBSCRIPTION_ID='<approved-subscription>'
-RESOURCE_GROUP='<approved-resource-group>'
-PARAMETERS='/absolute/path/foundation.parameters.json'
-
-az deployment group what-if --subscription "$SUBSCRIPTION_ID" \
-  --resource-group "$RESOURCE_GROUP" --template-file synthetic-tests/infra/main.bicep \
-  --parameters @"$PARAMETERS"
-
-az deployment group create --subscription "$SUBSCRIPTION_ID" \
-  --resource-group "$RESOURCE_GROUP" --name synthetic-worker-foundation \
-  --template-file synthetic-tests/infra/main.bicep --parameters @"$PARAMETERS"
+npm ci
+npm run deploy -- --plan
+az login
+npm run deploy
 ```
 
-Read the `registryName` and `registryServer` outputs. The registry disables admin
-credentials and anonymous pull. Each UAMI receives AcrPull on that registry and
+The command applies this template twice with the same config: first the foundation
+(`deployWorkers: false`, no image), then the workers with the pinned image digest. It
+runs `what-if` for each before applying; see its
+[phases](../../docs/deployment.md#deploy-with-one-command). The registry disables
+admin credentials and anonymous pull. Each UAMI receives AcrPull on that registry and
 ingest-only permission on its own service model, not model administration.
 
-Build from the self-contained Node project:
+To reuse an approved environment and registry, set `deployment.foundation` to
+`{ "mode": "existing", "environmentResourceId": "...", "registryResourceId": "..." }`.
+This leaves their configuration untouched while workers and the scoped identity and
+report assignments update; `{ "mode": "create", ... }` creates them.
 
-```sh
-docker build --platform linux/amd64 --pull -t m365-synthetic:<unique-version> synthetic-tests
-```
-
-Before publishing, smoke-test all selected entries with `--once`, mounted simulation
-root/service files and networking disabled. This verifies packaging, not live
-access. The non-root runtime image contains production dependencies and compiled
-code, not private configurations or credentials.
-
-```sh
-az acr login --subscription "$SUBSCRIPTION_ID" --name '<registryName>'
-docker tag m365-synthetic:<unique-version> '<registryServer>/m365-synthetic:<unique-version>'
-docker push '<registryServer>/m365-synthetic:<unique-version>'
-
-npm --prefix synthetic-tests run deployment:prepare -- \
-  /absolute/path/monitoring.private.json /absolute/path/workers.parameters.json \
-  '<registryServer>/m365-synthetic@sha256:<digest>' --enable-live
-```
-
-Preview and apply the same shared template with `workers.parameters.json`.
-For an existing approved foundation, pass `--parameters @workers.parameters.json
-reuseExistingFoundation=true` to both preview and apply. This leaves the existing
-registry/environment configuration untouched while updating workers and scoped
-identity/report assignments; first deployment keeps the default `false`.
-Regenerate parameters from the active root profile for every rollout; use an
-immutable digest and verify the actual ready revision, image and configuration.
-Do not silently substitute another deployment profile.
+`deployment.image` builds this project directory with `az acr build`, using its
+`Dockerfile`, and tags `<tag>-<run ID>`; workers run the resulting immutable digest.
+`{ "mode": "existing", "reference": "<registry>/<repository>@sha256:<digest>" }`
+skips the build and requires that digest in the configured registry. The non-root
+runtime image contains only production dependencies and compiled code, not the config
+or credentials. Each worker mounts the whole root config read-only at
+`/etc/probe/monitoring.config.json`; verify the actual ready revision, image and
+config after every rollout.
 
 ### Excluding a previously deployed service
 
-An incremental deployment does not delete or stop an app omitted by the root
-selection. After an approved service removal, explicitly deactivate that owned
+An incremental deployment does not delete or stop an app for a service the config
+no longer enables. After an approved service removal, explicitly deactivate that owned
 app's active revisions with `az containerapp revision deactivate`, then verify
 there are no active revisions or running replicas. Do not delete unrelated apps
 or use complete deployment mode on the shared resource group. The model deploy
@@ -119,9 +101,9 @@ excluded-service entities cannot affect root rollup.
 
 ## Separate M365 and Azure credentials
 
-`graphAuthentication` and `healthReportAuthentication` independently default to
-`managed-identity`. Hosted reporting uses the selected Azure UAMI and ARM audience,
-even when Graph uses another application identity.
+`execution.graphAuthentication` and `execution.healthReportAuthentication`
+independently default to `managed-identity`. Hosted reporting uses the selected Azure
+UAMI and ARM audience, even when Graph uses another application identity.
 
 Teams defaults to `teamsAuthentication: bot` and
 `botAuthentication: managed-identity`. `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the
@@ -134,21 +116,23 @@ No runtime user MFA, public-client cache or certificate is needed for this flow.
 ### Explicit certificate access
 
 For approved cross-tenant Graph or certificate-backed alternatives, select
-`graphAuthentication: certificate`, keep hosted reporting on managed identity,
-and supply nonsecret access metadata:
+`execution.graphAuthentication: "certificate"`, keep hosted reporting on managed
+identity, and add nonsecret references to that service's `access` block:
 
-```sh
-npm --prefix synthetic-tests run deployment:prepare -- \
-  /absolute/path/monitoring.private.json /absolute/path/workers.parameters.json \
-  '<registryServer>/m365-synthetic@sha256:<digest>' \
-  --enable-live --access-config /absolute/path/service-access.private.json
+```json
+"access": {
+  "m365TenantId": "<m365-tenant-id>",
+  "m365ClientId": "<application-client-id>",
+  "m365CertificateSource": "key-vault",
+  "m365CertificateSecretUri": "https://<vault>.vault.azure.net/secrets/<name>/<version>"
+}
 ```
 
-Copy only required entries from [service-access.example.json](./service-access.example.json).
 The worker mounts the raw UTF-8 PEM at `/etc/credentials/m365.pem`. Bot participants
 remain managed-identity-only; no bot certificate path exists. It keeps `M365_*`,
 `BOT_*` and Azure reporting's `AZURE_*` separate. There is no credential
-fallback. Preparation rejects incomplete/mixed metadata and inconsistent tenants.
+fallback. Deployment preparation, including `--plan`, rejects incomplete or mixed
+references and inconsistent tenants.
 
 Each UAMI needs separately approved secret-read access and network reachability
 to its hosting-tenant Key Vault secrets. The template does not create the vault,
@@ -159,35 +143,32 @@ certificate option; generic cross-tenant managed-identity federation is not impl
 
 ### Approved temporary alternative: native Container Apps certificate secret
 
-Only with explicit organizational approval, set `m365CertificateSource: container-app`
-and `m365CertificateRevision` to the public certificate's SHA-256 fingerprint
-(64 hex characters). Keep its tenant/client IDs and omit `m365CertificateSecretUri`.
-Mixed sources are rejected; there is no Key Vault fallback.
+Only with explicit organizational approval, set `m365CertificateSource` to
+`"container-app"` in that `access` block. Keep its tenant/client IDs, omit
+`m365CertificateSecretUri`, name an environment variable in
+`m365CertificateEnvironmentVariable` and set `m365CertificateRevision` to the
+SHA-256 hex digest of the exact PEM text in that variable. Mixed sources are
+rejected; there is no Key Vault fallback.
 
-Supply the raw PEM through the separate secure-object parameter `serviceCertificates`,
-keyed by service. An approved process may create a mode-0600 temporary parameter file
-outside Git and pass only its path:
-
-```sh
-az deployment group create --subscription '<approved-subscription>' \
-  --resource-group '<approved-resource-group>' --template-file synthetic-tests/infra/main.bicep \
-  --parameters @/absolute/path/workers.parameters.json \
-    serviceCertificates=@/secure/temporary/service-certificates.json
-```
-
-Never print/paste the private PEM or put it in ordinary parameters. Delete the
-temporary file after success or failure. Supply the secure parameter on every
-subsequent deployment in this mode. Native encrypted secrets still require
-credential rotation and restricted secret-reading/application-modification access.
+Export the raw PEM (certificate and private key) into that variable only for the
+deployment process, then run `npm run deploy`. It rejects a missing, malformed or
+mismatched value, passes the PEM to the template as the secure `serviceCertificates`
+parameter through a mode-0600 temporary file in its protected run directory, and
+deletes that file when the run ends. Never put the PEM in the config, print it or
+paste it anywhere. Export the variable on every deployment in this mode. Native
+encrypted secrets still require credential rotation and restricted
+secret-reading/application-modification access.
 
 ## Runtime behavior and verification
 
-- One authoritative replica per service/target set, single-revision mode and
+- One authoritative replica per tenant/service target set, single-revision mode and
   independent cadence; rollouts may briefly overlap, so probes are not exactly once.
 - Default sizing is 0.25 CPU/0.5 GiB per app, not a performance/reliability guarantee.
   Always-running replicas and the registry incur charges.
-- Root/service configs are mounted read-only. Config hashes trigger revisions;
-  secret-only rotations may require an explicit restart.
+- Each worker runs `node dist/<service>/src/worker.js` with
+  `--config /etc/probe/monitoring.config.json --tenant <tenant id>` against the
+  read-only mounted root config. Config changes create a new revision; secret-only
+  rotations may require an explicit restart.
 - Selected live calls expose only the Teams HTTPS callback on `/api/calls`.
   `/healthz` is static readiness, not proof of journey progress.
 - Direct reports and console diagnostics are always active. Platform log forwarding
@@ -196,7 +177,7 @@ credential rotation and restricted secret-reading/application-modification acces
   cross-cycle journey history or durable outbox.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
-rollup, not just successful ARM provisioning. The checked-in root selects twelve
+rollup, not just successful ARM provisioning. The checked-in config selects twelve
 active journeys and 46 active business steps, plus Exchange's Mail and Calendar
 parents, across four models, 67 entities and 63 relationships by default;
 enabling Service Health adds three entities and
@@ -207,9 +188,9 @@ can prevent publication and require independent detection.
 Each service's optional stable collector also runs an independent provider lane
 (`providerIntervalSeconds`, default 300), with no second worker/container.
 Exchange/Teams additionally support five approved beta activity functions each.
-Explicit beta preparation uses
-`--enable-beta-service-activity` to mount `ENABLE_BETA_SERVICE_ACTIVITY=true`;
-service config still owns beta enablement/functions/thresholds. See the
+Beta collection needs `deployment.enableBetaServiceActivity: true`, which mounts
+`ENABLE_BETA_SERVICE_ACTIVITY=true`; the service's `execution.serviceActivity` still
+owns beta enablement, functions and thresholds. See the
 [direct provider report setup](../../docs/provider-monitoring.md).
 OneDrive rejects beta activity settings; its stable collector requires the approved
 provider application's consent and federation trust for the OneDrive worker UAMI.
@@ -224,11 +205,11 @@ Root `otel` is disabled by default. Disabled/console-only modes add no Applicati
 Insights settings or platform log forwarding. Azure Monitor export runs in the
 same workers, not a separate telemetry service.
 
-For `destination: azure-monitor`, deploy the [model/telemetry resources](../../health-model/README.md#optional-otel-signals)
-first. The worker template reads `appi-<healthModel.name>` (or matching
-`applicationInsightsName`) and passes its connection string as a secret reference,
-not a normal parameter. Verify live ingestion/query evaluation, report independence,
-retention and cost; offline tests do not prove cloud export.
+For `destination: azure-monitor`, the [model/telemetry resources](../../health-model/README.md#optional-otel-signals)
+deploy before the workers. The worker template reads `appi-<healthModel.name>` (or the
+matching `deployment.applicationInsightsName`) and passes its connection string as a
+secret reference, not a normal parameter. Verify live ingestion/query evaluation,
+report independence, retention and cost; offline tests do not prove cloud export.
 
 When disabling OTEL, incremental deployment does not remove old query bindings,
 permissions, app settings or telemetry resources. Follow the [model migration

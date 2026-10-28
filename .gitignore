@@ -2,9 +2,12 @@ node_modules/
 dist/
 coverage/
 .azure/
+.monitoring-deployment/
 local.settings.json
 .env
 *.zip
 **/bin/
 **/obj/
 .DS_Store
+__pycache__/
+*.pyc

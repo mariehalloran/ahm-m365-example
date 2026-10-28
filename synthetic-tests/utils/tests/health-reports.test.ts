@@ -1,17 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { aggregateHealthReports, callQualityReports, createHealthReporter, serviceActivityReports, serviceHealthReport, serviceHealthIssuesReport, type HealthReporter, type CycleResults, type CallQualityCycle } from "../src/health-reports.js";
-import { readProjectConfig } from "../src/project-config.js";
+import { aggregateHealthReports, createHealthReporter, groupHealthReports, serviceActivityReports, serviceHealthReport, serviceHealthIssuesReport, teamsCallSignals, type HealthReport, type HealthReporter, type CycleResults } from "../src/health-reports.js";
+import { groupSignalName, reportingGroups, tenantSignalName } from "../src/groups.js";
+import { parseProjectDocument, selectTenant, serviceExecution, type ProjectConfig, type ProjectDocument } from "../src/project-config.js";
+import { documentFixture, multiTenantFixture, projectFixture } from "./fixtures.js";
 import { baseResult } from "../src/probes.js";
 import { runCycle } from "../src/runner.js";
-import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
+import { parseServiceConfig, serviceSettings, type ServiceConfig } from "../src/service-config.js";
+import { runServiceWorker } from "../src/worker.js";
 import { probeServices, testTypes, type SyntheticResult, type TestType } from "../src/contracts.js";
 import { modelCatalog } from "../src/catalog.js";
 import type { ProviderDiagnostic } from "../src/provider-diagnostics.js";
 import { activityFunctions, isPercentageActivity } from "../src/provider-catalog.js";
 import { serviceHealthNames } from "../src/service-health.js";
 
-const project = await readProjectConfig("../monitoring.config.json");
+const project = projectFixture();
 const providerProject = { ...project, serviceHealth: { enabled: true } };
 const service = parseServiceConfig({
   type: "exchange", enabled: true, intervalSeconds: 60, timeoutSeconds: 45, mode: "simulation",
@@ -182,100 +185,6 @@ describe("single-cycle journey/action health aggregation", () => {
 });
 
 describe("direct health reports", () => {
-  it("returns quality values on the same entity without inventing thresholds or overriding journey signals", () => {
-    const quality: CallQualityCycle = {
-      cycleId: "quality-cycle", collectedAt: "2026-10-26T16:01:00.000Z",
-      callQuality: [{
-        status: "available",
-        observation: {
-          callChainId: "11111111-1111-4111-8111-111111111111", version: 1,
-          startDateTime: "2026-10-26T16:00:00.000Z", endDateTime: "2026-10-26T16:00:10.000Z",
-          audioStreamCount: 2, codecs: ["opus"], streamDirections: ["callerToCallee"],
-          metrics: {
-            jitterMs: { value: 15, sampleCount: 2 },
-            packetLossPercent: { value: 0, sampleCount: 1 },
-          },
-        },
-      }],
-    };
-    const reports = callQualityReports(quality, project.healthModel);
-    expect(reports).toHaveLength(2);
-    expect(reports.every(report => report.entityName === "teams-call" && report.body.healthState === "Unknown")).toBe(true);
-    const jitter = reports.find(report => report.body.signalName === "teams-call-quality-jitter")!;
-    expect(jitter.body.value).toBe(15);
-    expect(jitter.body).not.toHaveProperty("evaluationRules");
-    expect(JSON.parse(jitter.body.additionalContext)).toMatchObject({
-      sampleCount: 2, complete: true, unit: "Milliseconds", availableCalls: 1,
-      observedThrough: "2026-10-26T16:00:10.000Z",
-    });
-    expect(reports.find(report => report.body.signalName === "teams-call-quality-packet-loss")?.body.value).toBe(0);
-    expect(reports.find(report => report.body.signalName === "teams-call-quality-round-trip-time")).toBeUndefined();
-    const policy = {
-      ...project.healthModel,
-      callQualityThresholds: {
-        jitterMs: { degradedAbove: 10, unhealthyAbove: 20 },
-        packetLossPercent: { degradedAbove: 1, unhealthyAbove: 5 },
-      },
-    };
-    const evaluated = callQualityReports(quality, policy);
-    expect(evaluated.find(report => report.body.signalName === jitter.body.signalName)?.body.healthState).toBe("Degraded");
-    expect(evaluated.find(report => report.body.signalName === "teams-call-quality-packet-loss")?.body.healthState).toBe("Unknown");
-    const pending = callQualityReports({
-      ...quality, callQuality: [...quality.callQuality, { status: "pending" }],
-    }, policy);
-    expect(pending.every(report => report.body.healthState === "Unknown")).toBe(true);
-    expect(pending.some(report => report.body.signalName === "synthetic-success-percentage")).toBe(false);
-  });
-  it("publishes quality-only reports to the existing Teams entity through the ARM ingestion API", async () => {
-    const requests: { url: string; body: Record<string, unknown> }[] = [];
-    const teams = parseServiceConfig({ ...service, type: "teams", cohort: "teams-global", mode: "live" });
-    const selectedProject = {
-      ...project, healthModel: { ...project.healthModel, callQualityThresholds: { jitterMs: { degradedAbove: 10, unhealthyAbove: 20 } } },
-    };
-    const credential = { getToken: vi.fn(async () => ({ token: "mock-token", expiresOnTimestamp: Date.now() + 60000 })) };
-    const reporter = createHealthReporter(selectedProject, teams, { emit: vi.fn() }, {}, {
-      credential,
-      fetch: async (input, init) => {
-        requests.push({ url: String(input), body: JSON.parse(String(init?.body)) });
-        return new Response(null, { status: 204 });
-      },
-    });
-    await reporter({
-      cycleId: "quality-cycle", collectedAt: new Date().toISOString(),
-      callQuality: [{ status: "pending", callChainId: "11111111-1111-4111-8111-111111111111" }],
-    });
-    expect(requests).toHaveLength(0);
-    expect(credential.getToken).not.toHaveBeenCalled();
-    const observed: CallQualityCycle = {
-      cycleId: "quality-cycle", collectedAt: new Date().toISOString(),
-      callQuality: [{ status: "available", observation: {
-        callChainId: "11111111-1111-4111-8111-111111111111", version: 1,
-        startDateTime: "2026-10-26T16:00:00.000Z", endDateTime: "2026-10-26T16:00:10.000Z",
-        audioStreamCount: 1, codecs: ["opus"], streamDirections: ["callerToCallee"],
-        metrics: { jitterMs: { value: 0, sampleCount: 1 }, packetLossPercent: { value: 0, sampleCount: 1 } },
-      } }],
-    };
-    await reporter(observed);
-    expect(requests).toHaveLength(1);
-    expect(new Set(requests.map(request => request.url)).size).toBe(1);
-    expect(requests[0]?.url).toContain("/healthmodels/m365-experience-poc-teams/entities/teams-call/ingestHealthReport?");
-    expect(requests.every(request => String(request.body.signalName).startsWith("teams-call-quality-"))).toBe(true);
-    expect(requests[0]?.body).toMatchObject({ signalName: "teams-call-quality-jitter", healthState: "Healthy", value: 0 });
-  });
-  it("omits unavailable, failed, pending and no-stream quality reports instead of creating placeholders", () => {
-    const quality: CallQualityCycle = {
-      cycleId: "empty-quality", collectedAt: new Date().toISOString(), callQuality: [
-        { status: "pending" }, { status: "unavailable" },
-        { status: "failed", callChainId: "11111111-1111-4111-8111-111111111111", category: "permission-failure", httpStatus: 403 },
-        { status: "available", observation: {
-          callChainId: "22222222-2222-4222-8222-222222222222", version: 1,
-          startDateTime: "2026-10-26T16:00:00.000Z", endDateTime: "2026-10-26T16:00:10.000Z",
-          audioStreamCount: 0, codecs: [], streamDirections: [], metrics: {},
-        } },
-      ],
-    };
-    expect(callQualityReports(quality, project.healthModel)).toEqual([]);
-  });
   it("uses no credentials/network in simulation and clearly previews rather than publishes", async () => {
     const output = { emit: vi.fn() };
     const credential = { getToken: vi.fn() };
@@ -710,6 +619,356 @@ describe("independent reporting failure paths", () => {
       expect(JSON.parse(observed[0]!.body.additionalContext)).toMatchObject({
         diagnosticCategories: ["permission-failure"], httpStatuses: [403],
       });
+    });
+  });
+});
+
+describe("user group reports", () => {
+  const document = multiTenantFixture();
+  const contoso = selectTenant(document, "contoso");
+  const fabrikam = selectTenant(document, "fabrikam");
+  const observed = (id: string, type: TestType, success = true): SyntheticResult => ({
+    ...baseResult({ id, type, cohort: "group-test" }, Date.now()),
+    success, durationMs: success ? 100 : 1000, diagnosticCategory: success ? null : "send-failure",
+  });
+  const withSteps = (result: SyntheticResult): SyntheticResult => ({
+    ...result, steps: probeServices[result.testType].steps.map(name => ({
+      name, status: "succeeded" as const, observedAt: new Date().toISOString(), durationMs: 5,
+    })),
+  });
+  const summary = (reports: HealthReport[]) => reports.map(report => [report.entityName, report.body.signalName, report.body.healthState]);
+  const successState = (reports: HealthReport[], group: string) => reports.find(report =>
+    report.body.signalName === `group-${group}--tenant-contoso--synthetic-success-percentage`)?.body.healthState;
+
+  it("re-aggregates each group's own results on journey entities as group-<id>--tenant-<alias>--<signal>", () => {
+    const reports = groupHealthReports(contoso, "exchange", cycle([
+      observed("pair-a", "exchange-mail-flow"), observed("pair-a", "exchange-draft"),
+      observed("pair-b", "exchange-mail-flow", false),
+    ]));
+    expect(summary(reports)).toEqual([
+      ["exchange-global", "group-priority--tenant-contoso--synthetic-success-percentage", "Healthy"],
+      ["exchange-global", "group-priority--tenant-contoso--synthetic-mean-duration", "Healthy"],
+      ["exchange-draft", "group-priority--tenant-contoso--synthetic-success-percentage", "Healthy"],
+      ["exchange-draft", "group-priority--tenant-contoso--synthetic-mean-duration", "Healthy"],
+      ["exchange-global", "group-field--tenant-contoso--synthetic-success-percentage", "Unhealthy"],
+      ["exchange-global", "group-field--tenant-contoso--synthetic-mean-duration", "Healthy"],
+    ]);
+    expect(reports[0]!.body).toMatchObject({ value: 100, expiresInMinutes: contoso.healthModel.reportTtlMinutes });
+    expect(JSON.parse(reports[0]!.body.additionalContext)).toMatchObject({ attempted: 1, succeeded: 1, cycleId: "cycle-001" });
+  });
+
+  it("reports only journey entities, never steps or provider entities", () => {
+    const results = ["exchange-mail-flow", "exchange-draft", "exchange-attachment"].map(type =>
+      withSteps(observed("pair-a", type as TestType)));
+    const entities = new Set(groupHealthReports(contoso, "exchange", cycle(results)).map(report => report.entityName));
+    expect(entities).toEqual(new Set(["exchange-global", "exchange-draft", "exchange-attachment"]));
+    const overall = new Set(aggregateHealthReports("exchange", cycle(results), contoso.healthModel).map(report => report.entityName));
+    expect(overall.size).toBeGreaterThan(entities.size);
+    expect([...entities].every(entity => overall.has(entity))).toBe(true);
+  });
+
+  it("keeps one group's failure from changing another group's state", () => {
+    const states = (pairB: boolean) => {
+      const reports = groupHealthReports(contoso, "exchange", cycle([
+        observed("pair-a", "exchange-mail-flow"), observed("pair-b", "exchange-mail-flow", pairB),
+      ]));
+      return [successState(reports, "priority"), successState(reports, "field")];
+    };
+    expect(states(true)).toEqual(["Healthy", "Healthy"]);
+    expect(states(false)).toEqual(["Healthy", "Unhealthy"]);
+  });
+
+  it("counts targets outside every group in the overall signals and in no group", () => {
+    const results = cycle([observed("pair-a", "exchange-mail-flow"), observed("pair-b", "exchange-mail-flow", false)]);
+    const overall = aggregateHealthReports("exchange", results, fabrikam.healthModel)[0]!;
+    expect(overall.body).toMatchObject({ signalName: "synthetic-success-percentage", value: 50, healthState: "Unhealthy" });
+    const grouped = groupHealthReports(fabrikam, "exchange", results);
+    expect(grouped.map(report => report.body.signalName)).toEqual([
+      "group-priority--tenant-fabrikam--synthetic-success-percentage", "group-priority--tenant-fabrikam--synthetic-mean-duration",
+    ]);
+    expect(grouped[0]!.body).toMatchObject({ value: 100, healthState: "Healthy" });
+    expect(JSON.parse(overall.body.additionalContext).attempted).toBe(2);
+    expect(JSON.parse(grouped[0]!.body.additionalContext).attempted).toBe(1);
+  });
+
+  it("publishes nothing for groups without results and never a placeholder", () => {
+    expect(groupHealthReports(contoso, "exchange", cycle([]))).toEqual([]);
+    const onlyPairA = groupHealthReports(contoso, "exchange", cycle([observed("pair-a", "exchange-mail-flow")]));
+    expect(onlyPairA.some(report => report.body.signalName.startsWith("group-field--"))).toBe(false);
+    expect(onlyPairA.every(report => report.body.healthState !== "Unknown" && report.body.value !== undefined)).toBe(true);
+    expect(groupHealthReports(fabrikam, "exchange", cycle([observed("pair-b", "exchange-mail-flow")]))).toEqual([]);
+    const now = new Date().toISOString();
+    const failedCall: SyntheticResult = {
+      ...observed("fabrikam-meeting", "teams-call", false),
+      steps: [
+        { name: "place-call", status: "failed", observedAt: now, durationMs: 10, diagnosticCategory: "send-failure" },
+        ...(["wait-for-answer", "verify-meeting-metadata", "verify-participants", "end-call"] as const).map(name =>
+          ({ name, status: "skipped" as const, reason: "prerequisite-failed" as const, observedAt: now })),
+      ],
+    };
+    expect(aggregateHealthReports("teams", cycle([failedCall]), fabrikam.healthModel)
+      .filter(report => report.body.healthState === "Unknown" && report.body.signalName.startsWith("teams-call-")))
+      .toHaveLength(4);
+    expect(groupHealthReports(fabrikam, "teams", cycle([failedCall])).map(report => [report.body.signalName, report.body.healthState]))
+      .toEqual([
+        ["group-priority--tenant-fabrikam--synthetic-success-percentage", "Unhealthy"],
+        ["group-priority--tenant-fabrikam--synthetic-mean-duration", "Healthy"],
+      ]);
+  });
+
+  it("reports channel and meeting journeys from their own members, adding the call phases for meetings", () => {
+    const channelAndMeeting = (tenant: string) => cycle([
+      observed(`${tenant}-channel`, "teams-channel-message"), withSteps(observed(`${tenant}-meeting`, "teams-call")),
+    ]);
+    expect(summary(groupHealthReports(fabrikam, "teams", channelAndMeeting("fabrikam"))).map(([entity, signal]) => `${entity}:${signal}`)).toEqual([
+      "teams-call:group-priority--tenant-fabrikam--synthetic-success-percentage",
+      "teams-call:group-priority--tenant-fabrikam--synthetic-mean-duration",
+      ...teamsCallSignals.map(signal => `teams-call:group-priority--tenant-fabrikam--${signal}`),
+      "teams-global:group-bridge--tenant-fabrikam--synthetic-success-percentage",
+      "teams-global:group-bridge--tenant-fabrikam--synthetic-mean-duration",
+    ]);
+    expect(groupHealthReports(contoso, "teams", channelAndMeeting("contoso")).map(report => report.entityName))
+      .toEqual(["teams-global", "teams-global"]);
+  });
+
+  it("publishes group reports beside the overall reports on the same service model, for result cycles only", async () => {
+    const project = selectTenant(multiTenantFixture(), "fabrikam");
+    project.serviceHealth.enabled = true;
+    const requests: [string, HealthReport["body"]][] = [];
+    const fetcher: typeof fetch = async (url, init) => {
+      requests.push([String(url), JSON.parse(String(init?.body))]);
+      return new Response(null, { status: 204 });
+    };
+    const credential = { getToken: async () => ({ token: "mock", expiresOnTimestamp: Date.now() + 60000 }) };
+    const reporter = (type: "exchange" | "teams") => createHealthReporter(
+      project, { ...serviceExecution(project, type), mode: "live" as const, serviceHealth: true }, { emit: vi.fn() }, {},
+      { credential, fetch: fetcher },
+    );
+    await reporter("exchange")(cycle([observed("pair-a", "exchange-mail-flow")]));
+    const exchangeModel = "healthmodels/m365-experience-poc-exchange/entities/";
+    expect(requests.every(([url]) => url.includes(exchangeModel))).toBe(true);
+    const published = requests.map(([url, body]) => `${url.split(exchangeModel)[1]!.split("/")[0]}:${body.signalName}`);
+    expect(published.sort()).toEqual([
+      ...["exchange-global", "exchange-global-create-draft", "exchange-global-send", "exchange-global-confirm-delivery"]
+        .flatMap(entity => ["synthetic-success-percentage", "synthetic-mean-duration"]
+          .map(signal => `${entity}:${tenantSignalName("fabrikam", signal)}`)),
+      "exchange-global:group-priority--tenant-fabrikam--synthetic-success-percentage",
+      "exchange-global:group-priority--tenant-fabrikam--synthetic-mean-duration",
+    ].sort());
+    requests.length = 0;
+    const now = new Date().toISOString();
+    await reporter("teams")({
+      cycleId: "provider", providerDiagnostics: [{
+        kind: "overview", service: "teams", collectedAt: now, serviceId: "Teams", serviceName: "Microsoft Teams", status: "serviceOperational",
+      }],
+    });
+    expect(requests.map(([, body]) => body.signalName)).toEqual(["tenant-fabrikam--microsoft-reported-service-status"]);
+  });
+
+  it("leaves ungrouped projects exactly as before", async () => {
+    const output = { emit: vi.fn() };
+    const ungrouped = projectFixture();
+    await createHealthReporter(ungrouped, service, output, {})(cycle());
+    const previews = output.emit.mock.calls.filter(([event]) => event === "health-report-preview");
+    expect(previews).toHaveLength(aggregateHealthReports("exchange", cycle(), ungrouped.healthModel).length);
+    expect(previews.some(([, preview]) => preview.body.signalName.startsWith("group-"))).toBe(false);
+  });
+
+  describe("contract between the reportingGroups plan and the signals workers publish", () => {
+    const bicepSignals = (entity: string) => [
+      "synthetic-success-percentage", "synthetic-mean-duration", ...(entity === "teams-call" ? teamsCallSignals : []),
+    ];
+    const entityOf = (service: string, journey: string) => probeServices[testTypes.find(type =>
+      probeServices[type].service === service && probeServices[type].journey === journey)!].entityName;
+    const journeyEntities = testTypes.map(type => probeServices[type].entityName);
+
+    // Runs every tenant's three workers once in simulation, collecting the previewed signal names by entity.
+    async function simulate(source: ProjectDocument) {
+      const group = new Map<string, string[]>();
+      const overall = new Map<string, Map<string, string[]>>();
+      for (const tenant of source.tenants) {
+        overall.set(tenant.id, new Map());
+        for (const type of ["exchange", "teams", "onedrive"] as const) {
+          const project = selectTenant(source, tenant.id);
+          const telemetry = { emit: vi.fn() };
+          await runServiceWorker(serviceExecution(project, type), { project, once: true, env: {}, telemetry });
+          for (const [event, preview] of telemetry.emit.mock.calls) {
+            if (event !== "health-report-preview") continue;
+            const names = preview.body.signalName.startsWith("group-") ? group : overall.get(tenant.id)!;
+            names.set(preview.entityName, [...(names.get(preview.entityName) ?? []), preview.body.signalName]);
+          }
+        }
+      }
+      return { group, overall };
+    }
+
+    it.each([
+      ["one tenant", documentFixture],
+      ["two tenants with a group spanning both", multiTenantFixture],
+    ])("publishes exactly the group signals the plan lists as aggregation members, for every journey entity: %s", async (_label, makeDocument) => {
+      const source = makeDocument();
+      const expected = new Map<string, string[]>();
+      for (const group of reportingGroups(source)) {
+        for (const scope of group.scopes) {
+          for (const journey of scope.journeys) {
+            const entity = entityOf(scope.service, journey);
+            expected.set(entity, [...(expected.get(entity) ?? []),
+              ...bicepSignals(entity).map(signal => groupSignalName(group.id, scope.tenant, signal))]);
+          }
+        }
+      }
+      const { group: published } = await simulate(source);
+      expect([...expected.keys()].sort()).toEqual([...journeyEntities].sort());
+      expect([...published.keys()].sort()).toEqual([...journeyEntities].sort());
+      for (const entity of journeyEntities) {
+        expect([...published.get(entity)!].sort(), entity).toEqual([...expected.get(entity)!].sort());
+      }
+      if (source.tenants.length > 1) {
+        const tenantsOf = (entity: string) => new Set(published.get(entity)!.filter(name => name.startsWith("group-priority--"))
+          .map(name => name.split("--")[1]));
+        expect(tenantsOf("exchange-global")).toEqual(new Set(["tenant-contoso", "tenant-fabrikam"]));
+      }
+    });
+
+    it("tenant-qualifies the overall signals exactly when the document has several tenants, without collisions", async () => {
+      const plain = new Set<string>(["synthetic-success-percentage", "synthetic-mean-duration", ...teamsCallSignals]);
+      for (const source of [documentFixture(), multiTenantFixture()]) {
+        const { overall } = await simulate(source);
+        const several = source.tenants.length > 1;
+        const publishers = new Map<string, string[]>();
+        for (const [alias, entities] of overall) {
+          const prefix = `tenant-${alias}--`;
+          // All tenants run the same services, so unqualified names would collide on every entity.
+          expect([...entities.keys()].sort(), alias).toEqual([...overall.values().next().value!.keys()].sort());
+          for (const [entity, names] of entities) {
+            for (const name of new Set(names)) {
+              expect(several ? name.startsWith(prefix) && plain.has(name.slice(prefix.length)) : plain.has(name), `${alias}: ${name}`).toBe(true);
+              publishers.set(`${entity}:${name}`, [...(publishers.get(`${entity}:${name}`) ?? []), alias]);
+            }
+          }
+        }
+        expect(overall.size).toBe(source.tenants.length);
+        expect([...publishers.values()].every(aliases => aliases.length === 1)).toBe(true);
+      }
+    });
+  });
+
+  describe("tenant-qualified overall signals", () => {
+    type AnyCycle = Parameters<HealthReporter>[0];
+    // The tenant's project from the two-tenant document, or the same tenant alone in a one-tenant document without groups.
+    const projectFor = (alias: string, alone = false): ProjectConfig => {
+      const source = multiTenantFixture();
+      if (alone) {
+        source.tenants = source.tenants.filter(tenant => tenant.id === alias);
+        source.groups = [];
+      }
+      const project = selectTenant(parseProjectDocument(source), alias);
+      project.serviceHealth.enabled = true;
+      return project;
+    };
+    // Publishes one cycle through the live reporter and returns "entity:signalName" for every ingested report.
+    const published = async (project: ProjectConfig, type: ServiceConfig["type"], reported: AnyCycle) => {
+      const names: string[] = [];
+      const base = serviceExecution(project, type);
+      const live = { ...base, mode: "live" as const, serviceHealth: true, serviceActivity: { ...base.serviceActivity, enabled: type !== "onedrive" } };
+      await createHealthReporter(project, live, { emit: vi.fn() }, {}, {
+        credential: { getToken: async () => ({ token: "unit-test-token", expiresOnTimestamp: Date.now() + 60000 }) },
+        fetch: async (url, init) => {
+          names.push(`${String(url).split("/entities/")[1]!.split("/")[0]}:${JSON.parse(String(init?.body)).signalName}`);
+          return new Response(null, { status: 204 });
+        },
+      })(reported);
+      return names;
+    };
+    const providerCycle = (type: "exchange" | "teams"): AnyCycle => {
+      const at = Date.now();
+      const collectedAt = new Date(at - 1000).toISOString();
+      const intervalEnd = at - 60000;
+      return {
+        cycleId: "provider", providerDiagnostics: [
+          { kind: "overview", service: type, collectedAt, serviceId: "reported-service", serviceName: serviceHealthNames[type], status: "serviceOperational" },
+          { kind: "issue-summary", service: type, collectedAt, count: 0 },
+          ...activityFunctions[type].map(functionName => ({
+            kind: "activity" as const, service: type, collectedAt, function: functionName,
+            intervalStart: new Date(intervalEnd - 15 * 60000).toISOString(), intervalEnd: new Date(intervalEnd).toISOString(),
+            aggregationIntervalMinutes: 15 as const, ...(isPercentageActivity(functionName) ? { percentage: 99 } : { value: 10 }),
+          })),
+        ],
+      };
+    };
+    // Every publishing path: journey/step/call-phase results, Service Health and activity.
+    const everything = async (project: ProjectConfig) => {
+      const [pairA, pairB] = project.services.exchange.targets.map(target => target.id);
+      const channel = project.services.teams.targets[0]!.id;
+      const meeting = project.services.teams.callTargets[0]!.id;
+      return [
+        ...await published(project, "exchange", cycle([withSteps(observed(pairA!, "exchange-mail-flow")), withSteps(observed(pairB!, "exchange-mail-flow"))])),
+        ...await published(project, "teams", cycle([withSteps(observed(channel, "teams-channel-message")), withSteps(observed(meeting, "teams-call"))])),
+        ...await published(project, "exchange", providerCycle("exchange")),
+        ...await published(project, "teams", providerCycle("teams")),
+      ];
+    };
+    const signalOf = (name: string) => name.slice(name.indexOf(":") + 1);
+    const isGroup = (name: string) => signalOf(name).startsWith("group-");
+    const byEntity = (names: string[]) => {
+      const entities = new Map<string, string[]>();
+      for (const name of names) entities.set(name.split(":")[0]!, [...(entities.get(name.split(":")[0]!) ?? []), signalOf(name)]);
+      return entities;
+    };
+
+    it("qualifies journey, step, call-phase and Service Health/activity signals alike when the document has several tenants", async () => {
+      const names = await everything(projectFor("fabrikam"));
+      for (const expected of [
+        "exchange-global:tenant-fabrikam--synthetic-success-percentage",
+        "exchange-global-send:tenant-fabrikam--synthetic-mean-duration",
+        "teams-call:tenant-fabrikam--synthetic-success-percentage",
+        "teams-call-place-call:tenant-fabrikam--synthetic-mean-duration",
+        ...teamsCallSignals.map(signal => `teams-call:tenant-fabrikam--${signal}`),
+        "teams-service-health:tenant-fabrikam--microsoft-reported-service-status",
+        "teams-service-health:tenant-fabrikam--microsoft-reported-issue-count",
+        "teams-service-health:tenant-fabrikam--microsoft-activity-getUsageMetricsForTeamsByMeetingsJoined",
+        "exchange-service-health:tenant-fabrikam--microsoft-activity-getConnectivityMetricsForExchange",
+      ]) expect(names).toContain(expected);
+      for (const plain of [
+        "exchange-global:synthetic-success-percentage", "teams-call:teams-call-connection-success-percentage",
+        "teams-service-health:microsoft-reported-service-status",
+      ]) expect(names).not.toContain(plain);
+      expect(names.filter(name => !isGroup(name)).every(name => signalOf(name).startsWith("tenant-fabrikam--"))).toBe(true);
+      expect(names.every(name => /^[a-zA-Z0-9][a-zA-Z0-9-]{1,258}[a-zA-Z0-9]$/.test(signalOf(name)))).toBe(true);
+    });
+
+    it.each([
+      ["contoso", [["exchange-global", "priority"], ["exchange-global", "field"], ["teams-global", "priority"]]],
+      ["fabrikam", [["exchange-global", "priority"], ["teams-call", "priority"], ["teams-global", "bridge"]]],
+    ] as const)("leaves %s's group signals exactly as group-<id>--tenant-<alias>--<signal>", async (alias, groups) => {
+      const grouped = (await everything(projectFor(alias))).filter(isGroup);
+      const expected = groups.flatMap(([entity, group]) => ["synthetic-success-percentage", "synthetic-mean-duration",
+        ...(entity === "teams-call" ? teamsCallSignals : [])].map(signal => `${entity}:${groupSignalName(group, alias, signal)}`));
+      expect(grouped.sort()).toEqual(expected.sort());
+    });
+
+    it.each(["contoso", "fabrikam"])("keeps the single-tenant names and only prefixes them with the tenant for %s", async alias => {
+      const alone = await everything(projectFor(alias, true));
+      expect(alone.some(isGroup)).toBe(false);
+      expect(alone.every(name => !signalOf(name).startsWith("tenant-"))).toBe(true);
+      expect(alone).toContain("exchange-global:synthetic-success-percentage");
+      expect(alone).toContain("teams-call:teams-call-connection-success-percentage");
+      expect(alone).toContain("exchange-service-health:microsoft-reported-service-status");
+      const shared = (await everything(projectFor(alias))).filter(name => !isGroup(name));
+      expect(shared.sort()).toEqual(alone.map(name => name.replace(":", `:${tenantSignalName(alias, "")}`)).sort());
+    });
+
+    it("never lets two tenants publish the same signal name on the same entity", async () => {
+      const contoso = byEntity(await everything(projectFor("contoso")));
+      const fabrikam = byEntity(await everything(projectFor("fabrikam")));
+      expect([...contoso.keys()].sort()).toEqual([...fabrikam.keys()].sort());
+      for (const [entity, signals] of contoso) {
+        expect(signals.length, entity).toBeGreaterThan(0);
+        expect(signals.filter(signal => fabrikam.get(entity)!.includes(signal)), entity).toEqual([]);
+      }
+      const plainContoso = byEntity(await everything(projectFor("contoso", true)));
+      const plainFabrikam = byEntity(await everything(projectFor("fabrikam", true)));
+      expect([...plainContoso].every(([entity, signals]) => signals.every(signal => plainFabrikam.get(entity)!.includes(signal)))).toBe(true);
     });
   });
 });

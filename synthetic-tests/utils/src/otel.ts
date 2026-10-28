@@ -8,8 +8,6 @@ import {
 import { probeServices, reportedResult, resultSchema, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { providerLog } from "./provider-diagnostics.js";
 import { outcomeOf, type ExecutionMode, type ResultOutput } from "./results.js";
-import { callQualityMeasurements, callQualitySignals } from "./health-reports.js";
-import { callQualityMetricNames } from "./teams-call-quality.js";
 
 export interface ResultTelemetry extends ResultOutput {
   forceFlush(): Promise<void>;
@@ -149,11 +147,6 @@ export function createResultTelemetry(
     success: meter.createHistogram(`teams.call.${phase.name}.success`, { unit: "1" }),
     duration: meter.createHistogram(`teams.call.${phase.name}.duration`, { unit: "s" }),
   }));
-  const qualityInstruments = Object.fromEntries(callQualityMetricNames.map(metric => [metric,
-    meter.createGauge(`teams.call.quality.${metric}`, {
-      unit: callQualitySignals[metric].unit === "Milliseconds" ? "ms" : callQualitySignals[metric].unit === "Percent" ? "%" : "1",
-    }),
-  ]));
 
   const lifecycle = async (method: "forceFlush" | "shutdown") => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -173,19 +166,6 @@ export function createResultTelemetry(
     if (failed) { failed = false; throw new TelemetryExportError(); }
   };
   return {
-    recordCallQuality(cycle) {
-      if (closed) throw new TelemetryExportError();
-      for (const measurement of callQualityMeasurements(cycle)) {
-        if (measurement.value !== undefined) qualityInstruments[measurement.metric]!.record(measurement.value, {
-          "probe.service": "teams", "probe.journey": "scheduled-meeting", "probe.mode": "live",
-          "quality.complete": measurement.complete,
-        });
-      }
-      logger.emit({
-        body: "teams-call-quality", timestamp: new Date(cycle.collectedAt),
-        attributes: { "quality.cycle_id": cycle.cycleId, "quality.details": JSON.stringify(cycle) },
-      });
-    },
     recordDiagnostic(record) {
       if (closed) throw new TelemetryExportError();
       logger.emit(providerLog(record));

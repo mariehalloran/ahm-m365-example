@@ -67,7 +67,7 @@ An authorized Entra administrator assigns the selected permissions to the servic
 
 Only request the rows actually enabled. These permissions read provider context and do not grant mailbox message access. The prohibition on unscoped Entra `Mail.ReadWrite`/`Mail.Send` grants still applies; do not add those mail roles while configuring provider reads.
 
-Stable Service Health reports exact overview status directly to the single impact-suppressed `exchange-service-health` entity using `microsoft-reported-service-status`: 100 healthy, 50 degraded, 0 interruption. Issues and five approved beta signals share its External Reports group; there are no per-API child entities. Failed/missing/unknown overviews produce Unknown without a value. Collection has an independent provider lane even when journey initialization fails. Beta functions are explicitly opt-in; counts and percentages remain diagnostic unless customer thresholds are configured. They never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available. See [exact provider contracts](./docs/provider-monitoring.md).
+Stable Service Health reports exact overview status directly to the single impact-suppressed `exchange-service-health` entity using `microsoft-reported-service-status` (`tenant-<tenant id>--microsoft-reported-service-status` when the config has several tenants): 100 healthy, 50 degraded, 0 interruption. Issues and five approved beta signals share its External Reports group; there are no per-API child entities. Failed/missing/unknown overviews produce Unknown without a value. Collection has an independent provider lane even when journey initialization fails. Beta functions are explicitly opt-in; counts and percentages remain diagnostic unless customer thresholds are configured. They never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available. See [exact provider contracts](./docs/provider-monitoring.md).
 
 ## 3. Infrastructure and non-secret handoff IDs
 
@@ -80,7 +80,7 @@ The [shared hosting guide](./synthetic-tests/infra/README.md) explains how to ob
 
 The client ID, principal ID, and an application-registration object ID are different things. A managed identity already has a service principal; this setup does not need a separate app registration.
 
-The foundation stage creates identities without workers. Enabling live workers requires a separate `--enable-live` preparation opt-in. Compiling Bicep creates nothing; obtain stable IDs for administrator authorization before enabling a worker.
+The foundation stage (`npm run deploy` with `deployment.stage: "foundation"`) creates identities without workers. Enabling live workers requires `deployment.enableLiveProbes: true`. `npm run deploy -- --plan` changes nothing in Azure; obtain stable IDs for administrator authorization before enabling a worker.
 
 ## 4. Illustrative Exchange administrator setup
 
@@ -142,7 +142,7 @@ Application permission changes can take roughly thirty minutes to two hours to p
 
 ## 5. Runtime configuration
 
-The service config selects:
+The Exchange `execution` block of [monitoring.config.json](./monitoring.config.json) selects:
 
 ```json
 {
@@ -158,15 +158,15 @@ AZURE_CLIENT_ID=<user-assigned managed identity clientId>
 
 The worker uses `ManagedIdentityCredential({ clientId })` for `https://graph.microsoft.com/.default`. It does not fall back to a developer login, system identity, application secret, or certificate if managed identity fails.
 
-Live execution still requires dedicated target configuration, `mode: live`, `enabled: true`, and `ENABLE_LIVE_M365=true`. Start with a single manually initiated run after authorization checks. Simulation stays entirely local and acquires no managed-identity token.
+Live execution still requires dedicated target configuration, `execution.mode: "live"`, `enabled: true`, and `deployment.enableLiveProbes: true` (hosted workers then receive `ENABLE_LIVE_M365=true`; a local run must export it). Start with a single manually initiated run after authorization checks. Simulation stays entirely local and acquires no managed-identity token.
 
-For an approved **cross-tenant or local** M365 application, choose `graphAuthentication: certificate` explicitly and provide `M365_TENANT_ID`, `M365_CLIENT_ID`, and `M365_CLIENT_CERTIFICATE_PATH`. The public certificate belongs on the M365 app registration; its Enterprise application Object ID is the Exchange `$principalId`. Graph no longer reads `AZURE_*` certificate settings. A normal laptop also needs independently selected Azure report certificate authentication (`healthReportAuthentication: certificate` with `AZURE_*`); it does not expose the Container App managed-identity endpoint. Neither certificate option is a silent fallback.
+For an approved **cross-tenant or local** M365 application, choose `graphAuthentication: certificate` explicitly and provide `M365_TENANT_ID`, `M365_CLIENT_ID`, and `M365_CLIENT_CERTIFICATE_PATH`, or the matching `access.m365TenantId`, `m365ClientId` and `m365CertificatePath` references. The public certificate belongs on the M365 app registration; its Enterprise application Object ID is the Exchange `$principalId`. Graph no longer reads `AZURE_*` certificate settings. A normal laptop also needs independently selected Azure report certificate authentication (`healthReportAuthentication: certificate` with `AZURE_*`); it does not expose the Container App managed-identity endpoint. Neither certificate option is a silent fallback.
 
 Same-tenant hosted Exchange remains keyless by default. The shared hosting template supports explicit cross-tenant Graph PEM mounts through approved Key Vault references.
 
 ## 6. Journey and step boundaries
 
-The [Exchange service](./synthetic-tests/exchange/) owns its config, worker, journeys, action functions and tests. Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
+The [Exchange service](./synthetic-tests/exchange/) owns its worker, journeys, action functions and tests; its settings live in the root [monitoring.config.json](./monitoring.config.json). Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
 
 The seven journeys are send/verify, draft lifecycle, attachment delivery, reply delivery, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. The reply journey retains a dedicated received starter message per approved pair, provisioned outside timed attempts with separately visible setup evidence. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 

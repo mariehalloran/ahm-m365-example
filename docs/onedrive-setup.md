@@ -1,23 +1,25 @@
 # Programmatic OneDrive setup
 
-One administrator command prepares every approved account in the private root
-profile: discover its drive, create/reuse the named dedicated folder, grant the
-worker folder-scoped write access, verify the grant, and save the real drive and
-folder IDs. It supports up to 1,000 configured accounts without per-account
+One administrator command prepares every approved account in
+`monitoring.config.json`: discover its drive, create/reuse the named dedicated folder,
+grant the worker folder-scoped write access, verify the grant, and save the real
+drive and folder IDs. It supports up to 1,000 configured accounts without per-account
 commands. The worker remains least-privilege and never provisions its own access.
 
 ## Prerequisites and account input
 
-Use the [normal deployment order](../synthetic-tests/infra/README.md#provision-and-publish):
-health models, worker foundation/identities, approved M365 access, then live
-workers. Keep configuration, certificates and generated parameters outside Git.
+Follow the [deployment order](./deployment.md#deploy-with-one-command): `npm run deploy`
+creates the health models and worker foundation/identities first
+(`deployment.stage: "foundation"` stops there until approvals are in place), then
+approve M365 access, run this setup, and deploy the live workers. Keep certificates
+and keys outside Git.
 
-Generate `services.onedrive.targets` in the private root profile from your
+Generate `tenants[].services.onedrive.targets` in `monitoring.config.json` from your
 approved account-provisioning output. Each target needs a unique opaque `id`,
 real Entra `userId`, `userPrincipalName`, and dedicated `folderName`, normally
 `AHM-Synthetic-Tests`. Set `restoreVersion` deliberately. Omit unknown `driveId`
-and `folderId`; setup fills them. Root selection is the only account inventory;
-setup never enumerates the tenant or silently adds users.
+and `folderId`; setup fills them. The configured targets are the only account
+inventory; setup never enumerates the tenant or silently adds users.
 
 The worker application must already have administrator-approved
 `Files.SelectedOperations.Selected` and, for the app-folder journey,
@@ -37,13 +39,13 @@ assignments. Obtain those approvals through your normal administration pipeline;
 do not attach the provisioning identity to the worker or reuse its credentials
 for tests. Revoke temporary provisioning access according to that approval.
 
-`--worker-client-id` is the worker's **application/client ID**, not its principal
+`setup.workerClientId` is the worker's **application/client ID**, not its principal
 or application-object ID. The foundation identity can be queried programmatically:
 
 ```sh
 az identity show --subscription '<approved-subscription>' \
   --resource-group '<approved-resource-group>' \
-  --name 'uami-<healthModel.name>-onedrive' --query clientId --output tsv
+  --name '<worker.identityName>' --query clientId --output tsv
 ```
 
 ## Provision personal OneDrives
@@ -56,8 +58,9 @@ In an approved SharePoint administrator connection, queue only the root-selected
 accounts in batches of **at most 200**:
 
 ```powershell
-$root = Get-Content -Raw -LiteralPath '/private/monitoring.private.json' | ConvertFrom-Json
-$upns = @($root.services.onedrive.targets |
+$root = Get-Content -Raw -LiteralPath './monitoring.config.json' | ConvertFrom-Json
+$tenant = $root.tenants | Where-Object id -eq '<tenant id>'
+$upns = @($tenant.services.onedrive.targets |
     ForEach-Object { $_.userPrincipalName } | Sort-Object -Unique)
 for ($offset = 0; $offset -lt $upns.Count; $offset += 200) {
     $last = [Math]::Min($offset + 199, $upns.Count - 1)
@@ -75,50 +78,55 @@ This is resource administration, not a SharePoint synthetic workload.
 
 ## Plan, apply and rerun
 
-Run from the repository root with its existing Node dependencies installed.
-After a normal build, production-only installations can invoke
-`node synthetic-tests/dist/onedrive/src/setup-command.js` with the same arguments.
+Select the provisioning credential in the tenant's OneDrive service block of
+`monitoring.config.json`. The M365 tenant is that tenant entry's `tenantId`:
+
+```json
+"setup": {
+  "authentication": "certificate",
+  "workerClientId": "<worker-client-id>",
+  "setupClientId": "<approved-setup-client-id>",
+  "certificatePath": "/secure/setup.client.pem"
+}
+```
+
+`authentication` is `certificate` (requires `setupClientId` and `certificatePath`; a
+relative path resolves against the config file's directory), `managed-identity`
+(requires `setupClientId`, no `certificatePath`) for an approved managed identity on
+the provisioning host, or `azure-cli` (neither) for an already-authorized operator
+session. There is no credential fallback. Managed-identity/certificate setup refuses
+the worker client ID as the setup identity, and `workerClientId` must match
+`worker.identityClientId` when that is set.
+
+Run from `synthetic-tests/` with its Node dependencies installed. After a normal
+build, production-only installations can invoke
+`node dist/onedrive/src/setup-command.js` with the same arguments.
 Use that entry or `npm --silent` when consuming JSON progress in automation.
-The default is a **read-only plan**, including when existing folders need grants:
+Add `--tenant <id>` when the config has several tenants. The default is a
+**read-only plan**, including when existing folders need grants:
 
 ```sh
-npm --prefix synthetic-tests run onedrive:setup -- \
-  /private/monitoring.private.json \
-  --tenant-id '<m365-tenant-id>' --worker-client-id '<worker-client-id>' \
-  --authentication certificate --setup-client-id '<approved-setup-client-id>' \
-  --certificate-path '/secure/setup.client.pem'
+npm run onedrive:setup
 ```
 
 Review the per-target `folderAction` / `permissionAction`, then apply:
 
 ```sh
-npm --prefix synthetic-tests run onedrive:setup -- \
-  /private/monitoring.private.json \
-  --tenant-id '<m365-tenant-id>' --worker-client-id '<worker-client-id>' \
-  --authentication certificate --setup-client-id '<approved-setup-client-id>' \
-  --certificate-path '/secure/setup.client.pem' \
-  --concurrency 4 --target-timeout-seconds 300 --apply
+npm run onedrive:setup -- --apply
 ```
 
-For an approved managed identity on the provisioning host, replace the
-authentication arguments with
-`--authentication managed-identity --setup-client-id '<setup-uami-client-id>'`
-and omit `--certificate-path`. For an already-authorized operator session, use
-`--authentication azure-cli` and omit both credential-specific arguments.
-There is no credential fallback. Managed-identity/certificate setup refuses the
-worker client ID as the setup identity.
+`setup.concurrency` is 1-10, default 4; `setup.targetTimeoutSeconds` bounds each
+target to 30-3,600 seconds, default 300. Credential acquisition is also bounded. Graph
+throttling uses bounded retries and honors `Retry-After` up to 60 seconds; longer
+delays fail explicitly for a later rerun. Ambiguous writes are reconciled by reading
+actual resources, not blindly resending mutations. Short bounded polling verifies
+grant propagation; an unobserved grant is never checkpointed as ready.
 
-Setup concurrency is 1-10, default 4; each target gets a bounded 30-3,600 second
-budget, default 300. Credential acquisition is also bounded. Graph throttling uses
-bounded retries and honors `Retry-After` up to 60 seconds; longer delays fail
-explicitly for a later rerun. Ambiguous writes are reconciled by reading actual
-resources, not blindly resending mutations. Short bounded polling verifies grant
-propagation; an unobserved grant is never checkpointed as ready.
-
-Successful accounts are atomically checkpointed into the **same root file** with
-mode 0600; omitted defaults and unrelated settings remain unchanged. Other
-accounts continue after ordinary permission/provisioning failures. Authentication
-or checkpoint failures stop new scheduling. The summary includes `ready`,
+Successful accounts are atomically checkpointed into **`monitoring.config.json`
+itself** (rewritten as 2-space JSON, mode 0600); omitted defaults and unrelated
+settings remain unchanged. Other accounts continue after ordinary
+permission/provisioning failures. Authentication or checkpoint failures stop new
+scheduling. The summary includes `ready`,
 `planned`, `failed`, and `notStarted`; failure, interruption or incomplete work
 returns a nonzero exit status. Logs contain opaque target IDs/categories, not
 tokens, certificate contents or raw API responses.
@@ -132,18 +140,18 @@ Setup never deletes resources to roll back a partial run.
 A stale configured folder ID or mismatched drive/name
 requires explicit review rather than silently rebinding a different resource.
 
-Apply holds an adjacent `.onedrive-setup.lock` and rejects another apply against
-the same file. Do not edit the profile during setup: detected external edits stop
-checkpointing rather than being overwritten. SIGINT/SIGTERM retain completed
-checkpoints. After a hard crash, remove a stale lock only after confirming its
-recorded process/run has stopped; rerun to reconcile any uncheckpointed grants.
-Use one provisioning job per target set; a local file lock is not a distributed
-lock across copied profiles.
+Apply holds a lock file next to the config (its name plus `.monitoring-setup.lock`)
+and rejects another apply against the same file. Do not edit the config during setup:
+detected external edits stop checkpointing rather than being overwritten.
+SIGINT/SIGTERM retain completed checkpoints. After a hard crash, remove a stale lock
+only after confirming its recorded process/run has stopped; rerun to reconcile any
+uncheckpointed grants. Use one provisioning job per target set; a local file lock is
+not a distributed lock across copies of the config.
 
 ## Size the worker for hundreds of accounts
 
 Setup concurrency and synthetic execution concurrency are independent.
-The service file owns `maxConcurrentProbes` (1-20, default 3) and
+The service's `execution` block owns `maxConcurrentProbes` (1-20, default 3) and
 `cycleTimeoutSeconds` (1-86,400, default 170). Every selected account executes
 every selected journey. Up to 1,000 accounts/3,000 OneDrive attempts are supported;
 health reports remain aggregated by the same journey/business-step IDs, not
@@ -156,8 +164,8 @@ ceil(selected lane attempts / maxConcurrentProbes) * (lane timeoutSeconds + 12)
 ```
 
 For **500 accounts**, three separate 120-second lanes and concurrency 20, each
-lane needs at least `ceil(500 / 20) * 132 = 3,300` seconds. For example, merge
-these fields into the private OneDrive service file:
+lane needs at least `ceil(500 / 20) * 132 = 3,300` seconds. For example, set
+these fields in `tenants[].services.onedrive.execution`:
 
 ```json
 {
@@ -170,7 +178,7 @@ With 300-second lanes, set root `healthModel.reportTtlMinutes` to at least 75 fo
 that example. TTL must exceed cadence + configured cycle budget + 42 seconds
 for cleanup/publication, or +54 with OTEL; enabled providers have an independent
 budget too. Configuration rejects insufficient capacity or TTL before live work.
-Keep existing lane assignments and the separate `ENABLE_LIVE_M365=true` gate.
+Keep existing lane assignments and the separate [live gates](./deployment.md#live-execution-gates).
 
 Concurrency is **per lane**: three simultaneous lanes at 20 can run 60 attempts.
 Lanes never overlap themselves and missed slots are skipped. This conservative
@@ -183,10 +191,11 @@ Additional Container App replicas duplicate work; they do not shard this invento
 
 ## Deploy and verify the actual health flow
 
-Setup does not deploy, restart workers, run journeys or publish health. Rebuild
-the worker image for the new configuration fields, regenerate deployment
-parameters from the updated root/service files, preview and apply the approved
-[worker rollout](../synthetic-tests/infra/README.md#provision-and-publish).
+Setup does not deploy, restart workers, run journeys or publish health. Preview with
+`npm run deploy -- --plan`, then run `npm run deploy` again: it mounts the updated
+config with the saved bindings in a new worker revision, rebuilding the image when
+`deployment.image.mode` is `build`
+([worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)).
 Confirm the ready revision uses the expected immutable image and account bindings.
 
 On an approved host, verify a real

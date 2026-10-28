@@ -242,7 +242,7 @@ describe("two-bot meeting connectivity and verified disconnection", () => {
     }));
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(2);
   });
-  it("does not mistake teardown chain metadata for failed termination or overwrite the established quality record", async () => {
+  it("does not mistake teardown chain metadata for failed termination or overwrite the established call-chain record", async () => {
     const { context, fetcher } = fixture({ cleanupChainChange: true });
     const result = resultSchema.parse(await teamsCallProbe(probe, context));
     expect(result.success).toBe(true);

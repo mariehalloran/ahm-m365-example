@@ -4,8 +4,8 @@
 
 1. Use a customer-approved Azure subscription **associated with the same Entra tenant as Microsoft 365**. The subscription owner's email does not determine its tenant. Use the organization's approved subscription provisioning and billing process.
 2. Approve dedicated test mailboxes, a Teams team/standard channel and bot-only meeting, and provisioned OneDrive accounts with dedicated test folders. Existing licensed mailboxes work; shared mailboxes are optional and do not simplify application authentication. Confirm ownership, cadence and cleanup limits.
-3. Create a private [root configuration](../monitoring.config.json) with approved targets and Azure model destination. Keep both `graphAuthentication` and `healthReportAuthentication` set to `managed-identity` in the service files.
-4. Deploy the [health models](../health-model/README.md#apply-and-migrate), then the [worker foundation](../synthetic-tests/infra/README.md#provision-and-publish), leaving workers disabled. It creates a separate user-assigned managed identity per service.
+3. Edit [monitoring.config.json](../monitoring.config.json) with approved targets and the Azure model destination. Keep both `graphAuthentication` and `healthReportAuthentication` set to `managed-identity` in each service's `execution` block.
+4. Run `npm run deploy` with `deployment.stage: "foundation"` to deploy the [health models](../health-model/README.md#apply-and-migrate) and the [worker foundation](../synthetic-tests/infra/README.md#provision-and-publish) without workers. The foundation creates a separate user-assigned managed identity per service (`worker.identityName`).
 5. Have the customer's administrators grant:
 
    | Service | Required access |
@@ -16,7 +16,7 @@
    | Provider context | Optional `ServiceHealth.Read.All` and provider-app federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
    | Health reports | The foundation grants each Azure identity ingest-only access on its own service model |
 
-6. Enable live execution only after allowed/denied access checks. Follow the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish), verify real journeys and cleanup, then fresh reports and service/root rollup.
+6. Enable live execution only after allowed/denied access checks: reference each approved identity in `worker.identityResourceId`, set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove `deployment.stage` (default `workers`) and run `npm run deploy` (see the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)). Verify real journeys and cleanup, then fresh reports and service/root rollup.
 
 **Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Teams uses only `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`; hosted `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the attached UAMI for Bot Connector, with a second explicitly selected UAMI for meetings. Graph read permissions alone do not authorize posting: approve and install the matching bot. No delegated-user sign-in, bootstrap or token cache exists. Provider credentials remain application-only and separate from synthetic access.
 
@@ -65,8 +65,8 @@ For a new tenant, check `(Get-OrganizationConfig).IsDehydrated`. If `True`, obta
 
 ### 4. Connect the hosted worker
 
-1. Set `graphAuthentication: "certificate"` and `healthReportAuthentication: "managed-identity"` in the private Exchange service file. Set `mode: "live"` and keep optional `serviceHealth` off for the first test.
-2. Set the approved mailbox in the private root configuration. Keep the **existing Azure** subscription/model destination; do not replace it with the M365 tenant ID.
+1. Set `graphAuthentication: "certificate"` and `healthReportAuthentication: "managed-identity"` in the Exchange `execution` block of `monitoring.config.json`. Set `mode: "live"` and keep optional `serviceHealth` off for the first test.
+2. Set the approved mailbox in the Exchange `targets`. Keep the **existing Azure** subscription/model destination; do not replace it with the M365 tenant ID.
 3. Store `exchange.client.pem` as a **raw UTF-8 PEM secret** in the approved hosting-tenant Key Vault. Do not use a base64 PFX certificate secret.
 
    ```sh
@@ -77,15 +77,8 @@ For a new tenant, check `(Get-OrganizationConfig).IsDehydrated`. If `True`, obta
    ```
 
 4. Grant the Exchange worker UAMI **Key Vault Secrets User** on that secret and verify vault network reachability. Obtain approval for any new vault or role assignment. **If the vault is private-only, do not enable public access:** establish approved private connectivity or, only with explicit approval, use the [encrypted Container Apps secret procedure](../synthetic-tests/infra/README.md#approved-temporary-alternative-native-container-apps-certificate-secret).
-5. Copy the `exchange` entry from [service-access.example.json](../synthetic-tests/infra/service-access.example.json) into a private access file. Replace its tenant/client IDs and `m365CertificateSecretUri`; prefer the versioned URI returned above. Omit unused service entries.
-6. Build/publish the updated image and prepare the [shared deployment](../synthetic-tests/infra/README.md#separate-m365-and-azure-credentials):
-
-   ```sh
-   npm --prefix synthetic-tests run deployment:prepare -- \
-     /absolute/path/monitoring.private.json /absolute/path/workers.parameters.json \
-     '<registry>/m365-synthetic@sha256:<digest>' \
-     --enable-live --access-config /absolute/path/service-access.private.json
-   ```
+5. Add the references to the Exchange service's `access` block in `monitoring.config.json`: `m365TenantId`, `m365ClientId`, `m365CertificateSource: "key-vault"` and `m365CertificateSecretUri`; prefer the versioned URI returned above.
+6. Set `deployment.enableLiveProbes: true` and run `npm run deploy` (see the [shared deployment](../synthetic-tests/infra/README.md#separate-m365-and-azure-credentials)); it builds and pins the image and rolls out the workers.
 
 The template sets **`M365_*` for Graph** and leaves **`AZURE_*` for Azure reports**. It mounts the PEM from the explicitly selected secret source. No developer-login, storage-source or credential fallback occurs.
 
@@ -98,3 +91,27 @@ Teams readback/providers prefer approved managed-identity federation; observer
 Graph credentials do not authorize Connector posting or meeting participants.
 Revoke only owned grants/certificates and review retained synthetic artifacts
 when the certificate trial ends.
+
+## Several tenants in one config
+
+Each `tenants[]` entry has its own workers, `access` and identity bindings. A tenant
+`id` or `tenantId` is a label, not authorization. Explicit certificate Graph bindings
+for Exchange and OneDrive may target a different tenant while Azure reporting keeps its
+own identity. The direct managed-identity/federated and Teams bot/readback guards
+require the actual identity tenants to match the entry's `tenantId`, and unsupported
+bindings fail before credential use; never relabel a hosting UAMI's `AZURE_TENANT_ID`.
+An enabled federated `providerClientId` must also match that tenant; a certificate
+Graph binding does not rebind it.
+
+Each service has one health model shared by all tenants. With more than one tenant in
+the config, every overall signal a worker publishes is named
+`tenant-<tenant id>--<signal>`, for example
+`tenant-contoso--synthetic-success-percentage`. That covers journey and step
+success/duration, the `teams-call` phase signals, and the Service Health
+and activity signals, so tenants never overwrite one another and the shared
+`<service>-service-health` entity carries one set per tenant. Each entity's External
+Reports group lists one set per tenant that runs it. With exactly one tenant the names
+stay plain, and [reporting group](./monitoring-groups.md) signals keep
+`group-<id>--tenant-<tenant id>--<signal>`, never qualified twice. Adding a second
+tenant renames every overall signal in one step: run `npm run deploy` so the models and
+workers change together; reports under the old plain names expire after the report TTL.

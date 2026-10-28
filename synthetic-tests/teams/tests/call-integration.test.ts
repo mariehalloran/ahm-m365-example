@@ -1,28 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/src/config.js";
 import { aggregateHealthReports } from "../../utils/src/health-reports.js";
-import { parseProjectConfig, readProjectConfig, readProjectService } from "../../utils/src/project-config.js";
+import { applyProjectConfig } from "../../utils/src/project-config.js";
+import { parseTestProjectConfig as parseProjectConfig, projectFixture, executionFixture } from "../../utils/tests/fixtures.js";
 import { baseResult, simulate } from "../../utils/src/probes.js";
 import { runCycle } from "../../utils/src/runner.js";
-import { parseServiceFileConfig, serviceProbes, serviceSettings } from "../../utils/src/service-config.js";
+import { parseServiceExecution, serviceProbes, serviceSettings } from "../../utils/src/service-config.js";
 import { runServiceWorker } from "../../utils/src/worker.js";
 
-const project = await readProjectConfig("../monitoring.config.json");
-const { service } = await readProjectService("teams", "../monitoring.config.json");
+const project = projectFixture();
+const service = applyProjectConfig(project, executionFixture("teams"));
 
 describe("root-selected two-bot meetings alongside existing messaging", () => {
   it("configures meeting establishment and rejects retired wait/ringing/playback settings", () => {
     const file = {
       type: "teams", intervalSeconds: 120, timeoutSeconds: 45, mode: "simulation", cohort: "teams-global",
     };
-    expect(parseServiceFileConfig(file)).toMatchObject({
+    expect(parseServiceExecution(file)).toMatchObject({
       teamsCallingAnswerTimeoutSeconds: 20,
     });
-    expect(() => parseServiceFileConfig({ ...file, teamsCallingWaitSeconds: 5 })).toThrow("Invalid service config");
-    expect(() => parseServiceFileConfig({ ...file, teamsCallingRingSeconds: 10 })).toThrow("Invalid service config");
-    expect(() => parseServiceFileConfig({ ...file, teamsCallingPlaybackEnabled: true })).toThrow("Invalid service config");
-    expect(() => parseServiceFileConfig({ ...file, teamsCallingPlaybackTimeoutSeconds: 10 })).toThrow("Invalid service config");
-    expect(() => parseServiceFileConfig({ ...file, teamsCallingAnswerTimeoutSeconds: 0 })).toThrow("teamsCallingAnswerTimeoutSeconds");
+    expect(() => parseServiceExecution({ ...file, teamsCallingWaitSeconds: 5 })).toThrow("Invalid service config");
+    expect(() => parseServiceExecution({ ...file, teamsCallingRingSeconds: 10 })).toThrow("Invalid service config");
+    expect(() => parseServiceExecution({ ...file, teamsCallingPlaybackEnabled: true })).toThrow("Invalid service config");
+    expect(() => parseServiceExecution({ ...file, teamsCallingPlaybackTimeoutSeconds: 10 })).toThrow("Invalid service config");
+    expect(() => parseServiceExecution({ ...file, teamsCallingAnswerTimeoutSeconds: 0 })).toThrow("teamsCallingAnswerTimeoutSeconds");
   });
 
   it("publishes hang-up success separately from failed answer and unexecuted meeting verification", () => {

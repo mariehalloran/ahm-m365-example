@@ -2,11 +2,11 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports through **External Reports**, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Twelve journeys reuse three Container Apps; the default family has four models, 67 entities, 63 relationships and 46 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
+Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports through **External Reports**, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Twelve journeys reuse three Container Apps (one per enabled tenant and service); the default family has four models, 67 entities, 63 relationships and 46 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
 
-Exchange, Teams, and OneDrive use separate configs/cadences and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
+Exchange, Teams, and OneDrive use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
-Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey, config and tests; shared code and Node tooling also live in that project. Checked-in configs use simulation: console diagnostics and report previews make no live mutations or Azure calls.
+Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey and tests; shared code and Node tooling also live in that project, while the single root [monitoring.config.json](../monitoring.config.json) holds all configuration. The checked-in config uses simulation: console diagnostics and report previews make no live mutations or Azure calls.
 
 ## Scheduling and shutdown
 
@@ -27,7 +27,7 @@ Do not enable live mode against real-user resources.
 2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access.
 3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) to create folders/grants and save real drive/folder IDs; runtime has no broad permission or root-discovery fallback.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
-5. Set the config to `mode: live` and independently opt in through `ENABLE_LIVE_M365=true`.
+5. Set `execution.mode: "live"` and independently opt in with `deployment.enableLiveProbes: true`; hosted workers then receive `ENABLE_LIVE_M365=true` and a local run exports it. See the [live gates](./deployment.md#live-execution-gates).
 6. Use `--once` first and inspect operation and cleanup outcomes.
 
 Teams defaults to an installed managed-identity bot in a dedicated standard channel.
@@ -42,18 +42,11 @@ two distinct explicit UAMIs with approved `Calls.JoinGroupCall.All` and root-own
 The organizer is owner metadata, never a participant/token identity. Success requires
 both established legs, matching meeting metadata, both identities in both
 rosters and both verified departures. No audio upload, playback or recording is
-required, and connectivity is not audio-quality evidence.
+required, and connectivity does not prove received audio, bidirectional audio or
+call quality.
 The existing Teams app attaches the approved peer through
-`serviceAccess.teams.{botPeerClientId,botPeerManagedIdentityResourceId}`; no runtime
-grants or extra app/host are created. See the
-[meeting/audio quality options](../synthetic-tests/teams/README.md#meeting-and-audio-quality-options)
-for delayed diagnostics and separate media-hosting requirements.
-The opt-in hosted-audio feasibility test is not a scheduled journey or an audio
-health entity. Its signed callback must reach the test process; do not run it
-beside a worker already binding the same port. After verified departure it can
-wait separately for delayed records, publishing only actual returned metrics.
-Missing quality values stay in diagnostics; configure model quality members
-only for metrics verified by that test.
+`tenants[].services.teams.access.{botPeerClientId,botPeerManagedIdentityResourceId}`; no runtime
+grants or extra app/host are created.
 
 Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). Default bot/mail/file journeys need no user password, interactive sign-in or Blob access. Calling's tenant-wide application permission is a separate approved exception, not a scoped recipient grant. Optional provider collection requires separately approved read-only application permissions; it never grants them.
 
@@ -64,11 +57,13 @@ Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for
 
 ## Direct health reporting
 
-The [root configuration](../monitoring.config.json) is the only source for service/scenario selection, account/target metadata, and health-report destination/policy. Service files retain independent mode/cadence/authentication/provider settings; redundant `enabled`, `targets` and obsolete `telemetry` fields are rejected, including with `--config`.
+The [root configuration](../monitoring.config.json) is the only source for service/scenario selection, account/target metadata, health-report destination/policy and each service's independent mode/cadence/authentication/provider settings (`execution`); redundant `enabled`, `targets` and obsolete `telemetry` fields are rejected inside `execution`.
 
 Live workers submit aggregated external health reports and retain structured console diagnostics. Live probes mutate only their approved targets. Simulation prints report previews only; it must not publish simulated cloud health.
 
 Report success is `100 * successful executed samples / executed samples`; mean duration includes failed executed samples. Evaluate each action separately and the whole journey separately. Skipped actions have no fabricated sample and receive Unknown reports without values. Defaults are below 99%/95% success or above 15/60 seconds mean duration; these are demo thresholds, not per-action SLOs. Reports cover one complete cycle, not a rolling historical window.
+
+With more than one tenant in the config, each tenant's worker publishes every overall signal as `tenant-<tenant id>--<signal>` (one tenant keeps the plain names; group signals are `group-<id>--tenant-<tenant id>--<signal>`), so tenants share a service model without overwriting each other. Adding a second tenant renames every overall signal at once: deploy models and workers together with `npm run deploy`, point freshness and report checks at the new names, and expect reports under the old names to expire after the report TTL.
 
 The reporter uses the service identity and ARM audience, with bounded requests/retries and a 30-second batch budget. It never substitutes provider health for synthetic reports. Publication failures are explicit; startup configuration/credential validation can still prevent execution. Check `health-report-failed` and `service-cycle-failed`; one-shot reporting errors return nonzero. A 204 acknowledges ingestion, not model propagation or notification delivery.
 
@@ -144,7 +139,7 @@ Independent monitoring must cover:
 
 Another check sharing the same report/model/alerting dependency is not independent protection against that dependency failing. Do not rely only on Exchange email or Teams notifications while monitoring Microsoft 365; arrange an approved alternative such as a separate incident/paging channel.
 
-The default is service-level monitoring, not individual-mailbox coverage. One active target can keep service reports arriving while another stops. That limitation must be accepted for this simple default; it is not solved by labeling an aggregate as complete coverage.
+The default is service-level monitoring, not individual-mailbox coverage. One active target can keep service reports arriving while another stops. That limitation must be accepted for this simple default; it is not solved by labeling an aggregate as complete coverage. Optional [reporting groups](./monitoring-groups.md) give per-group views, but a group with no fresh reports reads Unknown rather than Unhealthy, so the independent freshness checks above still apply.
 
 For higher availability, evaluate independently placed probe instances with explicit opaque identities and distinct target assignments. Zone redundancy requires a suitable environment and enough replicas to span failure domains; simply adding a replica can duplicate tests. Regional redundancy, active revisions, rollouts, and replica ownership must be designed without introducing worker health state. Do not claim that `minReplicas: 1` is high availability.
 

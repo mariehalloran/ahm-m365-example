@@ -8,7 +8,8 @@ import { ConfigurationError } from "../src/config.js";
 import { probeServices, type Probe, type SyntheticResult } from "../src/contracts.js";
 import * as healthReports from "../src/health-reports.js";
 import { baseResult } from "../src/probes.js";
-import { readProjectConfig, type ProjectConfig } from "../src/project-config.js";
+import type { ProjectConfig } from "../src/project-config.js";
+import { liveTenantEnv, projectFixture } from "./fixtures.js";
 import type { ProviderDiagnostic } from "../src/provider-diagnostics.js";
 import { parseServiceConfig, type ServiceConfig } from "../src/service-config.js";
 import { runServiceWorker } from "../src/worker.js";
@@ -29,10 +30,9 @@ vi.mock("@azure/identity", () => ({
   }),
 }));
 
-const checkedIn = await readProjectConfig("../monitoring.config.json");
+const checkedIn = projectFixture();
 const env = {
-  ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222",
-  AZURE_TENANT_ID: "11111111-1111-4111-8111-111111111111",
+  ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222", ...liveTenantEnv,
 };
 const collectors = { exchange: exchangeProviders, teams: teamsProviders };
 const serviceNames = { exchange: "Exchange Online", teams: "Microsoft Teams" };

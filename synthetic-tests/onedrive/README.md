@@ -13,7 +13,7 @@ Source tests do not establish successful live access or ingestion; see
 
 ## Primary setup
 
-1. Generate the private root account list from approved, licensed test accounts.
+1. Generate `tenants[].services.onedrive.targets` in `monitoring.config.json` from approved, licensed test accounts.
    Provision their personal OneDrives first; missing personal sites can be queued
    [in administrator batches](../../docs/onedrive-setup.md#provision-personal-onedrives).
 2. Deploy the health model and worker foundation, then select the service UAMI
@@ -24,19 +24,19 @@ Source tests do not establish successful live access or ingestion; see
 3. Use [`npm run onedrive:setup`](../../docs/onedrive-setup.md) with a separate,
    approved administrator identity to plan, then apply folder creation and scoped
    grants for **all configured accounts**. It discovers real drive/folder IDs,
-   checkpoints verified bindings into the same private root profile, and safely
+   checkpoints verified bindings into the same `monitoring.config.json`, and safely
    resumes partial runs. No manual per-account IDs/grants are required.
-4. Point root `configFile` at the separate service file and
-   [size its concurrency/cycle budget and report TTL](../../docs/onedrive-setup.md#size-the-worker-for-hundreds-of-accounts).
-5. Deploy the updated worker with `mode: "live"` and separately
-   `ENABLE_LIVE_M365=true`; verify real operations, cleanup and accepted reports.
+4. [Size the service's concurrency/cycle budget and report TTL](../../docs/onedrive-setup.md#size-the-worker-for-hundreds-of-accounts)
+   in its `execution` block.
+5. Deploy the updated worker with `execution.mode: "live"` and
+   `deployment.enableLiveProbes: true` (hosted workers then receive
+   `ENABLE_LIVE_M365=true`); verify real operations, cleanup and accepted reports.
 
-Root selection example; placeholders are not live resource IDs:
+Service block example (`tenants[].services.onedrive`); placeholders are not live resource IDs:
 
 ```json
 {
   "enabled": true,
-  "configFile": "synthetic-tests/onedrive/config.live.example.json",
   "scenarios": {
     "user-drive-roundtrip": true,
     "app-folder-lifecycle": true,
@@ -86,13 +86,13 @@ Existing app-folder data, including old test state, remains untouched.
 
 ## Scheduling and stable model IDs
 
-Both service files use these complete lane assignments:
+The checked-in `execution.executionLanes` use these complete lane assignments:
 
 ```json
 "executionLanes": [
-  { "name": "files", "intervalSeconds": 300, "timeoutSeconds": 120,
+  { "name": "user-drive", "intervalSeconds": 300, "timeoutSeconds": 120,
     "journeys": ["user-drive-roundtrip"] },
-  { "name": "appfolder", "intervalSeconds": 300, "timeoutSeconds": 120,
+  { "name": "app-folder", "intervalSeconds": 300, "timeoutSeconds": 120,
     "journeys": ["app-folder-lifecycle"] },
   { "name": "versions", "intervalSeconds": 300, "timeoutSeconds": 120,
     "journeys": ["document-versions"] }
@@ -131,17 +131,18 @@ Approve `ServiceHealth.Read.All` separately. A configured `providerClientId` sel
 the approved provider application through worker-UAMI federation; it needs its
 own trust for this service identity. The independent provider lane defaults to
 300 seconds and reports only to suppressed `onedrive-service-health`, without
-changing synthetic success. Simulation keeps `serviceHealth: false`; the live
-example enables it. OneDrive beta activity functions are not supported or approved.
+changing synthetic success. Simulation keeps `execution.serviceHealth: false`; set it
+to `true` (with root `serviceHealth.enabled`) to collect. OneDrive beta activity
+functions are not supported or approved.
 
 From `synthetic-tests/`:
 
 ```sh
 npm run onedrive -- --once
-npm run onedrive -- --project-config /approved/path/monitoring.private.json --once
 ```
 
-Private profiles require all three supported scenario keys and no removed
-sharing/search lane assignments. Simulation is explicitly labeled and previews
+Add `--tenant <id>` when the config has several tenants. The config accepts only the
+three supported scenario keys and no removed sharing/search lane assignments.
+Simulation is explicitly labeled and previews
 reports only. For real acceptance, inspect each account's actions and actual
 aggregated ingestion; configuration/deployment success alone is insufficient.

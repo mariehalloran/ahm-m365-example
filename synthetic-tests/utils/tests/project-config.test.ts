@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyProjectConfig, parseProjectConfig, readProjectConfig, readProjectService } from "../src/project-config.js";
-import { parseServiceConfig, readServiceConfig, serviceProbes, serviceSettings } from "../src/service-config.js";
-import { parseWorkerArguments, runServiceWorker } from "../src/worker.js";
+import {
+  applyProjectConfig, parseProjectDocument, readProjectDocument, readProjectService, selectTenant, serviceExecution,
+} from "../src/project-config.js";
+import { parseServiceConfig, serviceProbes, serviceSettings } from "../src/service-config.js";
+import { documentFixture, executionFixture, liveTenantEnv, multiTenantFixture, projectFixture, parseTestProjectConfig as parseProjectConfig } from "./fixtures.js";
+import { runServiceWorker } from "../src/worker.js";
 import { baseResult } from "../src/probes.js";
+import { validateProjectTenantBinding } from "../src/runtime.js";
 
 vi.mock("@azure/identity", () => ({
   ManagedIdentityCredential: vi.fn(function () {
@@ -12,10 +16,158 @@ vi.mock("@azure/identity", () => ({
 }));
 afterEach(() => vi.unstubAllGlobals());
 
-const checkedIn = await readProjectConfig("../monitoring.config.json");
+const checkedIn = projectFixture();
 const service = parseServiceConfig({
   type: "exchange", enabled: true, intervalSeconds: 60, timeoutSeconds: 45, mode: "simulation",
   cohort: "exchange-global", targets: [{ id: "service-file-target" }],
+});
+
+describe("single root document", () => {
+  it("accepts the checked-in monitoring.config.json as written and applies the schema defaults", async () => {
+    const document = await readProjectDocument("../monitoring.config.json");
+    const services = document.tenants[0]!.services;
+    expect(services.exchange.execution).toMatchObject({
+      maxConcurrentProbes: 3, cycleTimeoutSeconds: 170, graphAuthentication: "managed-identity",
+      teamsAuthentication: "bot", botAuthentication: "managed-identity", exchangeCleanupEnabled: true,
+    });
+    expect(services.exchange.access).toEqual({});
+    expect(services.teams.worker).toMatchObject({ cpu: 0.25, memory: "0.5Gi" });
+    expect(document.deployment).toMatchObject({ stage: "workers", commandTimeoutSeconds: 1800, rolloutTimeoutSeconds: 300 });
+    expect(document.otel).toEqual({ enabled: false, destination: "console" });
+    expect(document.groups.map(group => [group.id, group.accounts, group.teams])).toEqual([
+      ["centralus", ["test-user-1@example.invalid"], ["teams-probe-001", "teams-meeting-001"]],
+      ["uksouth", ["test-user-2@example.invalid"], []],
+    ]);
+  });
+
+  it("selects the only tenant without an alias and demands one when there are several", () => {
+    const single = documentFixture();
+    expect(selectTenant(single).tenant).toEqual({ id: "contoso", displayName: "Example tenant", tenantId: single.tenants[0]!.tenantId });
+    expect(selectTenant(single, "contoso").services).toBe(single.tenants[0]!.services);
+    expect(() => selectTenant(single, "missing")).toThrow("Unknown --tenant");
+    const several = multiTenantFixture();
+    expect(() => selectTenant(several)).toThrow("Select one tenant with --tenant");
+    expect(selectTenant(several, "fabrikam").tenant.id).toBe("fabrikam");
+    expect(() => selectTenant(several, "missing")).toThrow("Unknown --tenant");
+  });
+
+  it("marks a tenant's view multi-tenant exactly when the document has several tenants", () => {
+    expect(selectTenant(documentFixture()).multiTenant).toBe(false);
+    expect(projectFixture().multiTenant).toBe(false);
+    const several = multiTenantFixture();
+    expect(selectTenant(several, "contoso").multiTenant).toBe(true);
+    expect(selectTenant(several, "fabrikam").multiTenant).toBe(true);
+    several.tenants.pop();
+    several.groups = [];
+    expect(selectTenant(parseProjectDocument(several)).multiTenant).toBe(false);
+  });
+
+  it("gives each tenant a single-tenant view with only the groups that have members there", () => {
+    const document = multiTenantFixture();
+    const contoso = selectTenant(document, "contoso");
+    const fabrikam = selectTenant(document, "fabrikam");
+    expect(Object.keys(contoso).sort()).toEqual([
+      "deployment", "groups", "healthModel", "multiTenant", "otel", "schemaVersion", "serviceHealth", "services", "tenant",
+    ]);
+    expect(contoso.groups).toEqual([
+      { id: "priority", displayName: "Priority accounts", targetIds: { exchange: ["pair-a"], teams: ["contoso-channel"], onedrive: ["drive-a"] } },
+      { id: "field", displayName: "Field accounts", targetIds: { exchange: ["pair-b"], teams: [], onedrive: ["drive-b"] } },
+    ]);
+    expect(fabrikam.groups.map(group => group.id)).toEqual(["priority", "bridge"]);
+    expect(fabrikam.services.exchange.targets[0]!.mailbox).toBe("probe-a@fabrikam.example.invalid");
+    expect(JSON.stringify(fabrikam.groups)).not.toContain("contoso");
+  });
+
+  it("reads one tenant's service from the root file, defaulting to the only tenant", async () => {
+    const { project, service: exchange } = await readProjectService("exchange", "../monitoring.config.json");
+    expect(project.tenant.id).toBe("contoso");
+    expect(project.multiTenant).toBe(false);
+    expect(project.groups.map(group => group.id)).toEqual(["centralus", "uksouth"]);
+    expect(exchange).toMatchObject({ type: "exchange", enabled: true, mode: "simulation", cohort: "exchange-global" });
+    expect(exchange.targets).toHaveLength(2);
+    await expect(readProjectService("teams", "../monitoring.config.json", "missing")).rejects.toThrow("Unknown --tenant");
+    await expect(readProjectService("exchange", "utils/tests/missing-project.json")).rejects.toThrow("Cannot read the project config");
+  });
+
+  it("explains how to migrate a schemaVersion 1.0 profile and rejects superseded shapes", () => {
+    expect(() => parseProjectDocument({ ...documentFixture(), schemaVersion: "1.0" })).toThrow("Migrate monitoring.config.json from schemaVersion 1.0 to 2.0");
+    const { tenants, ...rest } = documentFixture();
+    expect(() => parseProjectDocument({ ...rest, services: tenants[0]!.services })).toThrow("Invalid project config fields");
+    expect(() => parseProjectDocument({ ...rest, tenants: [] })).toThrow("tenants");
+    const obsolete = documentFixture();
+    Object.assign(obsolete.tenants[0]!.services.exchange, { configFile: "no-longer-supported.json" });
+    expect(() => parseProjectDocument(obsolete)).toThrow("tenants.0.services.exchange");
+  });
+
+  it.each([
+    ["duplicate alias", (document: ReturnType<typeof multiTenantFixture>) => { document.tenants[1]!.id = document.tenants[0]!.id; }],
+    ["duplicate UUID", (document: ReturnType<typeof multiTenantFixture>) => { document.tenants[1]!.tenantId = document.tenants[0]!.tenantId; }],
+    ["wrong Teams tenant", (document: ReturnType<typeof multiTenantFixture>) => { document.tenants[0]!.services.teams.targets[0]!.tenantId = document.tenants[1]!.tenantId; }],
+  ])("rejects a tenant inventory with a %s", (_label, mutate) => {
+    const document = multiTenantFixture();
+    mutate(document);
+    expect(() => parseProjectDocument(document)).toThrow();
+  });
+
+  it("validates every tenant's execution settings", () => {
+    const document = multiTenantFixture();
+    document.tenants[1]!.services.exchange.execution.executionLanes = [
+      { name: "mail", intervalSeconds: 60, timeoutSeconds: 15, journeys: ["send-receive-mail"] },
+    ];
+    expect(() => parseProjectDocument(document)).toThrow("Execution lanes");
+  });
+
+  it("rejects mismatched live tenant bindings before credentials or dependencies are created", async () => {
+    const project = selectTenant(multiTenantFixture(), "contoso");
+    project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
+    const live = applyProjectConfig(project, { ...service, mode: "live" });
+    const createDependencies = vi.fn();
+    const env = {
+      ENABLE_LIVE_M365: "true", M365_TENANT_ID: project.tenant.tenantId,
+      AZURE_TENANT_ID: "22222222-2222-4222-8222-222222222222",
+    };
+    await expect(runServiceWorker(live, { project, once: true, env, createDependencies }))
+      .rejects.toThrow("actual Azure identity tenant");
+    expect(createDependencies).not.toHaveBeenCalled();
+    expect(() => validateProjectTenantBinding(project.tenant, { ...live, graphAuthentication: "certificate" }, env)).not.toThrow();
+    expect(() => validateProjectTenantBinding(project.tenant, live, { AZURE_TENANT_ID: project.tenant.tenantId })).not.toThrow();
+    expect(() => validateProjectTenantBinding(undefined, live, {})).not.toThrow();
+    const certificate = {
+      ...live, graphAuthentication: "certificate" as const, serviceHealth: true,
+      providerClientId: "33333333-3333-4333-8333-333333333333",
+    };
+    expect(() => validateProjectTenantBinding(project.tenant, certificate, env)).toThrow("providerClientId must use");
+    expect(() => validateProjectTenantBinding(project.tenant, { ...certificate, serviceHealth: false }, env)).not.toThrow();
+    expect(() => validateProjectTenantBinding(project.tenant, certificate, {
+      ...env, AZURE_TENANT_ID: project.tenant.tenantId,
+    })).not.toThrow();
+  });
+
+  it("runs 700 attempts from 100 targets and reports per journey and group, never per account", async () => {
+    const document = documentFixture();
+    const exchange = document.tenants[0]!.services.exchange;
+    exchange.targets = Array.from({ length: 100 }, (_, index) => ({
+      id: `pair-${index}`, mailbox: `probe-${index}@example.invalid`, recipientMailbox: "recipient@example.invalid",
+    }));
+    document.groups = [{ id: "everyone", displayName: "Everyone", accounts: exchange.targets.map(target => target.mailbox!), teams: [] }];
+    const project = selectTenant(parseProjectDocument(document));
+    const selected = applyProjectConfig(project, service);
+    expect(serviceSettings(selected, {}, project.services.exchange.scenarios).probes).toHaveLength(700);
+    const telemetry = { emit: vi.fn() };
+    await runServiceWorker(selected, { project, once: true, env: {}, telemetry });
+    expect(telemetry.emit.mock.calls.filter(([event]) => event === "synthetic-result")).toHaveLength(700);
+    const previews = telemetry.emit.mock.calls.filter(([event]) => event === "health-report-preview");
+    expect(previews).toHaveLength(64 + 14);
+    expect(previews.filter(([, report]) => report.body.signalName.startsWith("group-everyone--tenant-contoso--"))).toHaveLength(14);
+    expect(JSON.stringify(telemetry.emit.mock.calls)).not.toContain("probe-0@example.invalid");
+    project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
+    expect(() => applyProjectConfig(project, { ...service, mode: "live" })).toThrow("needs cycleTimeoutSeconds");
+    const budget = { ...service, mode: "live" as const, maxConcurrentProbes: 20, cycleTimeoutSeconds: 1000 };
+    expect(() => applyProjectConfig(project, budget)).toThrow("TTL");
+    project.healthModel.reportTtlMinutes = 30;
+    expect(applyProjectConfig(project, budget).targets).toHaveLength(100);
+    expect(() => applyProjectConfig(project, { ...budget, maxConcurrentProbes: 21 })).toThrow("maxConcurrentProbes");
+  });
 });
 
 describe("project-root monitoring configuration", () => {
@@ -25,7 +177,7 @@ describe("project-root monitoring configuration", () => {
   });
   it.each(["exchange", "teams", "onedrive"] as const)(
     "gates both stable and beta %s providers without changing journey selection", async type => {
-      const file = await readServiceConfig(`${type}/config.json`);
+      const file = executionFixture(type);
       const configured = {
         ...file, serviceHealth: true,
         serviceActivity: { ...file.serviceActivity, enabled: type !== "onedrive" },
@@ -57,18 +209,6 @@ describe("project-root monitoring configuration", () => {
   });
   it.each(["true", 1, null])("rejects a non-boolean Service Health opt-in %j", enabled => {
     expect(() => parseProjectConfig({ ...checkedIn, serviceHealth: { enabled } })).toThrow("serviceHealth.enabled");
-  });
-  it("keeps call quality diagnostic unless explicit, ordered root thresholds are supplied", () => {
-    expect(checkedIn.healthModel.callQualityThresholds).toEqual({});
-    for (const thresholds of [
-      { jitterMs: { degradedAbove: 30, unhealthyAbove: 20 } },
-      { packetLossPercent: { degradedAbove: 1, unhealthyAbove: 101 } },
-      { notAMetric: { degradedAbove: 1, unhealthyAbove: 2 } },
-    ]) {
-      expect(() => parseProjectConfig({
-        ...checkedIn, healthModel: { ...checkedIn.healthModel, callQualityThresholds: thresholds },
-      })).toThrow();
-    }
   });
   it("preserves legacy single-mailbox selection while expanding all explicit pairs independently", () => {
     const project = structuredClone(checkedIn);
@@ -114,13 +254,11 @@ describe("project-root monitoring configuration", () => {
     })).toThrow("select attachment-mail and reply-mail separately");
   });
   it("selects exactly Exchange, Teams and OneDrive without enabling live I/O", async () => {
-    expect(Object.keys(checkedIn).sort()).toEqual(["healthModel", "otel", "schemaVersion", "serviceHealth", "services"]);
     expect(checkedIn.otel).toEqual({ enabled: false, destination: "console" });
     for (const type of ["exchange", "teams", "onedrive"] as const) {
       expect(checkedIn.services[type].enabled).toBe(true);
       expect(Object.values(checkedIn.services[type].scenarios)).toEqual(Array(type === "exchange" ? 7 : type === "teams" ? 2 : 3).fill(true));
-      const selected = await readProjectService(type, "../monitoring.config.json");
-      expect(selected.service).toMatchObject({ enabled: true, type, mode: "simulation" });
+      expect(serviceExecution(checkedIn, type)).toMatchObject({ enabled: true, type, mode: "simulation" });
     }
     expect(Object.keys(checkedIn.services).sort()).toEqual(["exchange", "onedrive", "teams"]);
   });
@@ -178,7 +316,9 @@ describe("project-root monitoring configuration", () => {
     const output = { emit: vi.fn() };
     await runServiceWorker({ ...service, mode: "live" }, {
       project, once: true, telemetry: output,
-      env: { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222" },
+      env: {
+        ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222", ...liveTenantEnv,
+      },
       handler: async probe => ({
         ...baseResult(probe, Date.now()), success: true, durationMs: 1,
         steps: [{ name: "send", status: "succeeded", observedAt: new Date().toISOString(), durationMs: 1 }],
@@ -231,13 +371,5 @@ describe("project-root monitoring configuration", () => {
     expect(applyProjectConfig(project, { ...live, intervalSeconds: 80 }).enabled).toBe(true);
     project.otel.enabled = true;
     expect(() => applyProjectConfig(project, { ...live, intervalSeconds: 320 })).toThrow("224 seconds");
-  });
-  it("surfaces missing root configuration and supports a separate root-config CLI argument", async () => {
-    await expect(readProjectConfig("utils/tests/missing-project.json")).rejects.toThrow("Cannot read the project config");
-    expect(parseWorkerArguments(["--project-config", "/etc/monitoring.json", "--once"], "")).toEqual({
-      config: "", projectConfig: "/etc/monitoring.json", once: true,
-    });
-    expect(() => parseWorkerArguments(["--project-config"], "")).toThrow("Usage");
-    expect(() => parseWorkerArguments(["--project-config", "a", "--project-config", "b"], "")).toThrow("Usage");
   });
 });

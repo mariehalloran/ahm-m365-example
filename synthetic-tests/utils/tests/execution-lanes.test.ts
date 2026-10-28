@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { executionLanes, runExecutionLanes } from "../src/execution-lanes.js";
 import { aggregateHealthReports } from "../src/health-reports.js";
 import { baseResult } from "../src/probes.js";
-import { readProjectConfig } from "../src/project-config.js";
+import { projectFixture } from "./fixtures.js";
 import { runCycle } from "../src/runner.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
 import { runServiceWorker } from "../src/worker.js";
@@ -191,7 +191,7 @@ describe("execution deadlines", () => {
     expect(cycle.results).toHaveLength(3);
     expect(cycle.results.find(result => result.testId === "one")).toMatchObject({ success: false, diagnosticCategory: "delivery-timeout" });
     expect(cycle.results.find(result => result.testId === "two")?.success).toBe(true);
-    const policy = (await readProjectConfig("../monitoring.config.json")).healthModel;
+    const policy = projectFixture().healthModel;
     const reports = aggregateHealthReports("exchange", { ...cycle, results: cycle.results.filter(result => result.testId === "one") }, policy);
     expect(reports.find(report => report.entityName === "exchange-global" && report.body.signalName === "synthetic-success-percentage")?.body)
       .toMatchObject({ value: 0, healthState: "Unhealthy" });

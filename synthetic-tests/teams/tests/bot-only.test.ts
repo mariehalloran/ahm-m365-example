@@ -2,12 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../utils/src/config.js";
 import { probeSchema, probeServices, resultSchema, testTypes } from "../../utils/src/contracts.js";
-import { parseProjectConfig, readProjectConfig } from "../../utils/src/project-config.js";
-import { parseServiceFileConfig } from "../../utils/src/service-config.js";
+import { parseTestProjectConfig as parseProjectConfig, projectFixture, executionFixture } from "../../utils/tests/fixtures.js";
+import { parseServiceExecution } from "../../utils/src/service-config.js";
 import { teamsJourneyDefinitions } from "../src/catalog.js";
 
-const project = await readProjectConfig("../monitoring.config.json");
-const file = JSON.parse(readFileSync("teams/config.json", "utf8"));
+const project = projectFixture();
+const file = executionFixture("teams");
 
 describe("executable bot-only scope", () => {
   it("selects only the same-bot channel roundtrip and two-bot scheduled meeting", () => {
@@ -26,8 +26,8 @@ describe("executable bot-only scope", () => {
   });
 
   it.each(["user-delegated", "certificate", "cli", "default"])("rejects obsolete participant authentication %s", mode => {
-    expect(() => parseServiceFileConfig({ ...file, teamsAuthentication: mode })).toThrow("teamsAuthentication");
-    expect(() => parseServiceFileConfig({ ...file, botAuthentication: mode })).toThrow("botAuthentication");
+    expect(() => parseServiceExecution({ ...file, teamsAuthentication: mode })).toThrow("teamsAuthentication");
+    expect(() => parseServiceExecution({ ...file, botAuthentication: mode })).toThrow("botAuthentication");
     expect(() => loadConfig({ TEAMS_AUTHENTICATION: mode })).toThrow("TEAMS_AUTHENTICATION");
     expect(() => loadConfig({ BOT_AUTHENTICATION: mode })).toThrow("BOT_AUTHENTICATION");
   });

@@ -32,11 +32,8 @@ ingested health reports or notification delivery. See
 
 These are not browser/desktop, employee sign-in or sync-client tests. Teams
 readback does not prove a second bot received a message; meeting connectivity
-does not prove received audio or bidirectional quality. See
-[quality options and limits](./synthetic-tests/teams/README.md#meeting-and-audio-quality-options).
-An opt-in hosted-audio feasibility test can play a synthetic clip and inspect
-delayed call records without adding an audio journey or placeholder quality
-entities; only actual returned measurements can be published.
+does not prove received audio, bidirectional audio or call quality, and the project
+measures no audio quality.
 SharePoint, P2P audio, Adaptive Card interactions, file
 sharing and search prototypes are not part of this project.
 
@@ -44,54 +41,74 @@ Details: [Exchange](./synthetic-tests/exchange/README.md),
 [Teams](./synthetic-tests/teams/README.md),
 [OneDrive](./synthetic-tests/onedrive/README.md).
 
-## Start safely
+## Set up
 
-Requires Node.js 22 or 24 and npm. All Node tooling is under `synthetic-tests/`.
+Requires Node.js 22 or 24 and npm; deployment also needs the Azure CLI and Git. One file
+holds everything you maintain: [monitoring.config.json](./monitoring.config.json).
+It lists the Azure destination and health thresholds, your tenants with their
+services, scenarios, test accounts and targets, each service's execution and worker
+settings, deployment settings and optional
+[reporting groups](./docs/monitoring-groups.md). It holds IDs and references, never
+secrets. Edit it in place; there are no per-service, group or deployment files, and
+a `schemaVersion` `1.0` config must be rewritten to `2.0`.
 
-```sh
-cd synthetic-tests
-npm ci
-npm run exchange -- --once
-npm run teams -- --once
-npm run onedrive -- --once
-```
+1. **Edit** the config: `healthModel` subscription and resource group,
+   `deployment.azureTenantId`, tenants, accounts and targets. All supported
+   services and scenarios are enabled; the checked-in values are simulation
+   placeholders.
+2. **Try it locally.** Simulation prints labeled results and report previews, with
+   no Microsoft 365 operations or Azure ingestion:
 
-Checked-in service files use **simulation**: labeled console results and health
-report previews, with no live Microsoft 365 operations or Azure ingestion.
-Remove `--once` to repeat independently on that service's execution lanes.
+   ```sh
+   cd synthetic-tests
+   npm ci
+   npm run exchange -- --once    # also: teams, onedrive
+   ```
 
-## Configure and enable real execution
+   Add `--tenant <id>` when the config has several tenants. Remove `--once` to
+   repeat on that service's execution lanes.
+3. **Plan.** `npm run deploy -- --plan` checks the config locally and prints the
+   models, workers and phases; it makes no Azure changes.
+4. **Deploy.** Run `az login` for the subscription in `healthModel.subscriptionId`
+   (its tenant must match `deployment.azureTenantId`), then `npm run deploy`: health
+   models, then the foundation, then the image build and workers, then a rollout
+   check. See [deployment](./docs/deployment.md).
+5. **Verify.** Confirm fresh journey reports, roll-up and notifications end to end.
+   A finished deployment proves only the rollout; see
+   [operations](./docs/operations.md#enterprise-reliability-acceptance-gate).
 
-1. Copy [monitoring.config.json](./monitoring.config.json) to a private profile.
-   Set the Azure destination and approved resources. It alone owns service/scenario
-   selection, account/target lists and report thresholds/TTL. All supported scenarios
-   are enabled by default; remove obsolete service/scenario keys during migration.
-2. Each root `configFile` points to a separate service-owned execution file,
-   relative to the root profile's directory. Set mode, cadence/deadlines, independent
-   `executionLanes`, authentication and optional provider collection there—not a
-   duplicate target list or selection switch.
-3. Establish the [health models](./health-model/README.md#apply-and-migrate)
-   before the [Container Apps workers](./synthetic-tests/infra/README.md).
-4. Obtain administrator-approved [access](./docs/cross-tenant-access.md).
-   Hosted identities are explicitly selected UAMIs. Teams participants are bots,
-   never employee tokens; Exchange retains an explicit certificate option.
-5. Select `mode: "live"` and independently set `ENABLE_LIVE_M365=true`.
-   [Provision the retained Exchange reply fixture](./synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately)
-   before selecting reply execution in hosted workers.
-   Run one real cycle first; inspect operations, cleanup, accepted reports and
-   service/root propagation. Missing OneDrive folder IDs/grants fail honestly,
-   never by publishing simulated Healthy results.
+### Enable real Microsoft 365 execution
+
+Live execution stays off until you opt in:
+
+- Obtain administrator-approved [access](./docs/cross-tenant-access.md) first.
+  Hosted identities are explicitly selected UAMIs. Teams participants are bots,
+  never employee tokens; Exchange retains an explicit certificate option.
+- Set `execution.mode: "live"` on the tenant's service and
+  `deployment.enableLiveProbes: true`. Deployment rejects a live worker unless
+  `enableLiveProbes` is true, and that setting also sets `ENABLE_LIVE_M365=true` on
+  hosted workers. The runtime refuses live mode without that variable, so a local
+  live run must set it.
+- [Provision the retained Exchange reply fixture](./synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately)
+  before selecting reply execution in hosted workers.
+- Run one real cycle first; inspect operations, cleanup, accepted reports and
+  service/root propagation. Missing OneDrive folder IDs/grants fail honestly,
+  never by publishing simulated Healthy results.
 
 ## Worker architecture
 
-The diagram shows the **live** data path with all three services selected.
-Each worker has its own Container App and managed identity. The
+The diagram shows the **live** data path with all three services selected for one
+tenant. Each tenant/service worker has its own Container App and managed identity
+and mounts the same root config. The
 [shared runtime](./synthetic-tests/utils/README.md), including scheduling,
 aggregation and reporting, runs inside each worker, not as a separate service.
+Optional [reporting groups](./docs/monitoring-groups.md) add a named signal
+aggregation group to each journey entity, not extra models or entity branches;
+workers stay centrally hosted.
 
 ```mermaid
 flowchart TB
-    config["Root monitoring profile<br/>+ service execution files"]
+    config["monitoring.config.json<br/>(single root config)"]
     m365["Microsoft 365<br/>Microsoft Graph + Teams Bot Connector"]
 
     subgraph workers["Azure Container Apps"]
@@ -123,8 +140,8 @@ flowchart TB
     onedrive -->|"Direct ingestHealthReport"| onedriveModel
 ```
 
-1. **Execute:** the root profile selects journeys and targets; service files set
-   lane cadences and deadlines. Lanes run concurrently without overlapping
+1. **Execute:** the root config selects journeys and targets and sets each
+   service's lane cadences and deadlines. Lanes run concurrently without overlapping
    themselves or replaying missed slots. Each synthetic lane finishes its attempts
    before reporting that cycle.
 2. **Publish:** the in-process [reporter](./synthetic-tests/utils/src/health-reports.ts)
@@ -143,7 +160,8 @@ parallel export, not a prerequisite for direct health-report ingestion.
 
 ## How health is reported
 
-Three independent Container Apps run stateless cycles and publish aggregated
+One Container App per enabled tenant and service (three for the checked-in single
+tenant) runs stateless cycles and publishes aggregated
 journey/action **External Reports** directly. Each attempt contributes success
 **1 or 0** and a measured duration; executed actions are measured separately.
 Skipped actions are not failed requests. Authentication and compensating cleanup
@@ -165,8 +183,9 @@ Service Health requires an explicit root opt-in:
 
 Omitted or `false` means no Service Health entities, collection or provider reports.
 Enabling it adds a supporting entity and relationship to each selected service.
-The configuration's `$comment` explains permissions and advanced-monitoring eligibility;
-stable Service Health does not require the advanced feature's license minimum.
+See [provider monitoring](./docs/provider-monitoring.md) for permissions and
+advanced-monitoring eligibility; stable Service Health does not require the
+advanced feature's license minimum.
 
 When opted in, all three services can collect stable Service Health on independent
 provider lanes, initially every 300 seconds. Exchange and Teams additionally
@@ -181,6 +200,8 @@ is optional and disabled by default; no separate telemetry worker is needed.
 ## Guides and acceptance
 
 - [Runtime configuration, validation and local usage](./synthetic-tests/README.md)
+- [Deployment command, phases and dated evidence](./docs/deployment.md)
+- [Reporting groups](./docs/monitoring-groups.md)
 - [Model topology, report semantics and migration](./health-model/README.md)
 - [Provider permissions, endpoints and mappings](./docs/provider-monitoring.md)
 - [Hosting and rollout](./synthetic-tests/infra/README.md)

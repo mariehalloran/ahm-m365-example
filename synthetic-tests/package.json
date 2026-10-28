@@ -16,10 +16,9 @@
     "exchange": "tsx exchange/src/worker.ts",
     "exchange:mail-test": "tsx exchange/src/mail-test-command.ts",
     "teams": "tsx teams/src/worker.ts",
-    "teams:audio-quality": "tsx teams/src/audio-quality-command.ts",
     "onedrive": "tsx onedrive/src/worker.ts",
     "onedrive:setup": "tsx onedrive/src/setup-command.ts",
-    "deployment:prepare": "npm run catalog:check && tsx utils/src/prepare-deployment.ts"
+    "deploy": "npm run catalog:check && tsx utils/src/deploy.ts"
   },
   "dependencies": {
     "jose": "^6.1.0",

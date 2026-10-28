@@ -12,7 +12,13 @@ export const categories = [
 ] as const;
 export type DiagnosticCategory = (typeof categories)[number];
 
-export const maxOneDriveTargets = 1000;
+export const maxServiceTargets = 1000;
+export const maxOneDriveTargets = maxServiceTargets;
+export const serviceProbeLimits = Object.fromEntries(
+  (["exchange", "teams", "onedrive"] as const).map(service => [
+    service, testTypes.filter(type => probeServices[type].service === service).length * maxServiceTargets,
+  ]),
+) as Record<"exchange" | "teams" | "onedrive", number>;
 export const maxExchangeJourneyMilliseconds = 15000;
 export const replySeedSchema = z.object({
   messageId: z.string().min(1),

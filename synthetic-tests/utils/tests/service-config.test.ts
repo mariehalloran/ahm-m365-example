@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseServiceConfig, parseServiceFileConfig, readServiceConfig, serviceSettings } from "../src/service-config.js";
+import { parseServiceConfig, parseServiceExecution, serviceSettings } from "../src/service-config.js";
+import { executionFixture } from "./fixtures.js";
+import { canonicalProjectFile } from "../src/paths.js";
 import { parseWorkerArguments } from "../src/worker.js";
 
 const raw = {
@@ -7,17 +9,6 @@ const raw = {
   cohort: "exchange-global", targets: [{ id: "exchange-001" }],
 };
 describe("strict config-first service settings", () => {
-  it("keeps call-record collection disabled by default and validates an independent bounded budget", () => {
-    expect(parseServiceConfig(raw).teamsCallQuality.enabled).toBe(false);
-    expect(() => parseServiceConfig({ ...raw, teamsCallQuality: { enabled: true } })).toThrow("only for Teams");
-    expect(parseServiceConfig({ ...raw, type: "teams", teamsCallQuality: { enabled: true } }).teamsCallQuality).toEqual({
-      enabled: true, maxWaitSeconds: 30, pollIntervalSeconds: 5,
-    });
-    expect(() => parseServiceConfig({
-      ...raw, type: "teams", teamsCallQuality: { enabled: true, maxWaitSeconds: 2, pollIntervalSeconds: 3 },
-    })).toThrow("polling interval");
-    expect(() => parseServiceConfig({ ...raw, type: "teams", teamsCallQuality: { maxWaitSeconds: 61 } })).toThrow("maxWaitSeconds");
-  });
   it("defaults to explicit managed identity and one target with no history or exporter settings", () => {
     const service = parseServiceConfig(raw);
     expect(service).toMatchObject({
@@ -45,11 +36,11 @@ describe("strict config-first service settings", () => {
     expect(serviceSettings(service, {}, { "send-receive-mail": false, "edit-reopen-draft": true }).probes.map(probe => probe.type))
       .toEqual(["exchange-draft"]);
   });
-  it("accepts every supported Teams target across channel conversations and dedicated bot-only meetings", () => {
+  it.each([30, 100])("constructs both Teams journeys for %s channel and meeting targets", count => {
     const service = parseServiceConfig({
       ...raw, type: "teams", cohort: "teams-global",
-      targets: Array.from({ length: 30 }, (_, index) => ({ id: `channel-${index}` })),
-      callTargets: Array.from({ length: 30 }, (_, index) => ({
+      targets: Array.from({ length: count }, (_, index) => ({ id: `channel-${index}` })),
+      callTargets: Array.from({ length: count }, (_, index) => ({
         id: `call-${index}`, tenantId: "11111111-1111-4111-8111-111111111111",
         meetingThreadId: `19:meeting_test${index}@thread.v2`,
         organizerUserId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
@@ -59,9 +50,9 @@ describe("strict config-first service settings", () => {
     const config = serviceSettings(service, {}, {
       "channel-conversation": true, "scheduled-meeting": true,
     });
-    expect(config.probes).toHaveLength(60);
+    expect(config.probes).toHaveLength(count * 2);
     for (const type of ["teams-channel-message", "teams-call"]) {
-      expect(config.probes.filter(probe => probe.type === type)).toHaveLength(30);
+      expect(config.probes.filter(probe => probe.type === type)).toHaveLength(count);
     }
   });
   it.each([null, [], "exchange", { ...raw, unexpected: true }, { ...raw, type: "unknown" }, { ...raw, enabled: "true" }])(
@@ -84,7 +75,7 @@ describe("strict config-first service settings", () => {
       graphAuthentication: "certificate", healthReportAuthentication: "managed-identity",
     });
     const { enabled: _enabled, targets: _targets, ...file } = raw;
-    expect(parseServiceFileConfig({ ...file, healthReportAuthentication: "certificate" })).toMatchObject({
+    expect(parseServiceExecution({ ...file, healthReportAuthentication: "certificate" })).toMatchObject({
       graphAuthentication: "managed-identity", healthReportAuthentication: "certificate",
     });
   });
@@ -165,12 +156,11 @@ describe("strict config-first service settings", () => {
     expect(config.probes.every(probe => probe.type === "onedrive-roundtrip")).toBe(true);
     expect(config).not.toHaveProperty("PROBES_JSON");
   });
-  it("keeps root-owned fields out of all simulation and live service files", async () => {
-    await expect(readServiceConfig("utils/tests/nonexistent-config.json")).rejects.toThrow("Cannot read");
+  it("keeps inventory separate from inline execution for every supported service and mode", () => {
     for (const type of ["exchange", "onedrive", "teams"] as const) {
-      for (const suffix of ["", ".live.example"]) {
-        const file = await readServiceConfig(`${type}/config${suffix}.json`);
-        expect(file).toMatchObject({ type, mode: suffix ? "live" : "simulation" });
+      for (const mode of ["simulation", "live"] as const) {
+        const file = executionFixture(type, mode);
+        expect(file).toMatchObject({ type, mode });
         for (const key of ["enabled", "telemetry", "targets"]) expect(file).not.toHaveProperty(key);
       }
     }
@@ -179,20 +169,23 @@ describe("strict config-first service settings", () => {
     const file = {
       type: "exchange", intervalSeconds: 60, timeoutSeconds: 45, mode: "simulation", cohort: "exchange-global",
     };
-    expect(() => parseServiceFileConfig({ ...file, [key]: raw[key as keyof typeof raw] ?? "console" }))
+    expect(() => parseServiceExecution({ ...file, [key]: raw[key as keyof typeof raw] ?? "console" }))
       .toThrow("belong in the root project config");
   });
 });
 describe("explicit worker arguments", () => {
-  it("uses the service entry's default config, allowing an explicit override", () => {
-    expect(parseWorkerArguments(["--once"], "exchange/config.json")).toEqual({ config: "exchange/config.json", once: true });
-    expect(parseWorkerArguments(["--config", "other.json"], "exchange/config.json")).toEqual({ config: "other.json", once: false });
+  it("resolves one canonical root file independently of the caller's working directory", () => {
+    expect(parseWorkerArguments([])).toEqual({ config: canonicalProjectFile, once: false });
+    expect(parseWorkerArguments(["--once", "--tenant", "contoso"]))
+      .toEqual({ config: canonicalProjectFile, once: true, tenant: "contoso" });
+    expect(parseWorkerArguments(["--config", "generated-root.json", "--tenant", "contoso"]))
+      .toEqual({ config: "generated-root.json", once: false, tenant: "contoso" });
   });
-  it("requires an explicit config and supports continuous or once mode", () => {
-    expect(parseWorkerArguments(["--config", "exchange/config.json"])).toEqual({ config: "exchange/config.json", once: false });
-    expect(parseWorkerArguments(["--once", "--config", "onedrive/config.json"])).toEqual({ config: "onedrive/config.json", once: true });
-  });
-  it.each([[], ["--once"], ["--config"], ["--config", "--once"], ["--config", "a", "--config", "b"], ["--config", "a", "--once", "--once"], ["--config", "a", "--extra"]].map(args => ({ args })))(
-    "rejects ambiguous CLI invocation $args", ({ args }) => expect(() => parseWorkerArguments(args)).toThrow(),
+  it.each([
+    ["--tenant"], ["--tenant", "--once"], ["--tenant", "a", "--tenant", "b"], ["--config"], ["--config", "--once"],
+    ["--config", "a", "--config", "b"], ["--config", "a", "--once", "--once"], ["--config", "a", "--extra"],
+    ["--extra", "a"], ["a"],
+  ].map(args => ({ args })))(
+    "rejects unknown or ambiguous CLI invocation $args", ({ args }) => expect(() => parseWorkerArguments(args)).toThrow("Usage"),
   );
 });

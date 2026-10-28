@@ -2,11 +2,11 @@ import type { TokenCredential } from "@azure/identity";
 import { createHealthReportCredential } from "./auth.js";
 import { isReportedStep, journeyStepEntities, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type StepName, type SyntheticResult, type Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
-import type { ProjectConfig } from "./project-config.js";
+import { groupSignalName, tenantSignalName } from "./groups.js";
+import { serviceModelName, type ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import { activityFunctions, isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
-import { callQualityMetricNames, type CallQualityMetric, type CallQualityObservation } from "./teams-call-quality.js";
 
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
@@ -16,17 +16,6 @@ export const teamsCallSignals = [
   "teams-call-connection-success-percentage", "teams-call-mean-connection-duration",
   "teams-call-disconnection-success-percentage", "teams-call-mean-disconnection-duration",
 ] as const;
-export const callQualitySignals: Record<CallQualityMetric, { signalName: `teams-call-quality-${string}`; unit: string }> = {
-  packetLossPercent: { signalName: "teams-call-quality-packet-loss", unit: "Percent" },
-  maxPacketLossPercent: { signalName: "teams-call-quality-max-packet-loss", unit: "Percent" },
-  jitterMs: { signalName: "teams-call-quality-jitter", unit: "Milliseconds" },
-  maxJitterMs: { signalName: "teams-call-quality-max-jitter", unit: "Milliseconds" },
-  roundTripTimeMs: { signalName: "teams-call-quality-round-trip-time", unit: "Milliseconds" },
-  maxRoundTripTimeMs: { signalName: "teams-call-quality-max-round-trip-time", unit: "Milliseconds" },
-  audioDegradation: { signalName: "teams-call-quality-audio-degradation", unit: "MOSDegradation" },
-  concealedSamplesPercent: { signalName: "teams-call-quality-concealed-samples", unit: "Percent" },
-  maxConcealedSamplesPercent: { signalName: "teams-call-quality-max-concealed-samples", unit: "Percent" },
-};
 
 type HealthState = "Healthy" | "Degraded" | "Unhealthy" | "Unknown";
 type Policy = ProjectConfig["healthModel"];
@@ -37,7 +26,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}` | (typeof teamsCallSignals)[number] | `teams-call-quality-${string}`;
+    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}` | (typeof teamsCallSignals)[number] | `group-${string}` | `tenant-${string}`;
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -47,12 +36,7 @@ export interface HealthReport {
 }
 export interface CycleResults { cycleId: string; results: SyntheticResult[] }
 export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[] }
-export type CallQualitySample =
-  | { status: "available"; observation: CallQualityObservation }
-  | { status: "pending" | "unavailable"; callChainId?: string }
-  | { status: "failed"; callChainId: string; category: DiagnosticCategory; httpStatus?: number };
-export interface CallQualityCycle { cycleId: string; collectedAt: string; callQuality: CallQualitySample[] }
-export type HealthReporter = (cycle: CycleResults | ProviderCycle | CallQualityCycle) => Promise<void>;
+export type HealthReporter = (cycle: CycleResults | ProviderCycle) => Promise<void>;
 
 interface MeasurementSample {
   success: boolean;
@@ -182,6 +166,22 @@ export function aggregateHealthReports(
   ];
 }
 
+// Each group re-aggregates only its own results into journey-level signals; groups never publish placeholders.
+export function groupHealthReports(project: ProjectConfig, service: ServiceConfig["type"], cycle: CycleResults): HealthReport[] {
+  return project.groups.flatMap(group => {
+    const members = new Set(group.targetIds[service]);
+    const results = cycle.results.filter(result => members.has(result.testId));
+    if (!results.length) return [];
+    const journeys = new Set<string>(results.map(result => probeServices[result.testType].entityName));
+    return aggregateHealthReports(service, { ...cycle, results }, project.healthModel)
+      .filter(report => journeys.has(report.entityName) && report.body.value !== undefined)
+      .map(report => ({
+        ...report,
+        body: { ...report.body, signalName: groupSignalName(group.id, project.tenant.id, report.body.signalName) },
+      }));
+  });
+}
+
 function callMeasurementReports(cycle: CycleResults, policy: Policy): HealthReport[] {
   const calls = cycle.results.filter(result => result.testType === "teams-call");
   if (!calls.length) return [];
@@ -225,59 +225,6 @@ function callMeasurementReports(cycle: CycleResults, policy: Policy): HealthRepo
         value: attempted ? samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
       }, context, policy.reportTtlMinutes),
     ];
-  });
-}
-
-export function callQualityMeasurements(cycle: CallQualityCycle) {
-  return callQualityMetricNames.map(metric => {
-    const observations = cycle.callQuality.flatMap(sample => sample.status === "available" ? [sample.observation] : []);
-    const samples = observations.flatMap(observation => observation.metrics[metric] ? [observation.metrics[metric]!] : []);
-    const sampleCount = samples.reduce((sum, sample) => sum + sample.sampleCount, 0);
-    const maximum = metric.startsWith("max");
-    const value = sampleCount ? maximum
-      ? Math.max(...samples.map(sample => sample.value))
-      : samples.reduce((sum, sample) => sum + sample.value * sample.sampleCount, 0) / sampleCount : undefined;
-    const complete = cycle.callQuality.length > 0 && cycle.callQuality.every(sample => sample.status === "available") &&
-      observations.every(observation => observation.audioStreamCount > 0 && observation.metrics[metric]?.sampleCount === observation.audioStreamCount);
-    return { metric, value, sampleCount, complete, maximum };
-  });
-}
-
-export function callQualityReports(cycle: CallQualityCycle, policy: Policy): HealthReport[] {
-  const observations = cycle.callQuality.flatMap(sample => sample.status === "available" ? [sample.observation] : []);
-  return callQualityMeasurements(cycle).flatMap<HealthReport>(({ metric, value, sampleCount, complete, maximum }) => {
-    if (value === undefined) return [];
-    const signal = callQualitySignals[metric];
-    const thresholds = policy.callQualityThresholds[metric];
-    const rules: EvaluationRules | undefined = thresholds ? {
-      degradedRule: { operator: "GreaterThan", threshold: thresholds.degradedAbove },
-      unhealthyRule: { operator: "GreaterThan", threshold: thresholds.unhealthyAbove },
-    } : undefined;
-    return [{
-      entityName: "teams-call",
-      body: {
-        signalName: signal.signalName, expiresInMinutes: policy.reportTtlMinutes,
-        healthState: rules && complete ? evaluateHealthState(value, rules) : "Unknown",
-        value,
-        ...(rules && complete ? { evaluationRules: rules } : {}),
-        additionalContext: JSON.stringify({
-          cycleId: cycle.cycleId, collectedAt: cycle.collectedAt, source: "microsoft.graph.callRecords",
-          unit: signal.unit, aggregation: maximum ? "maximum-of-stream-maxima" : "mean-of-stream-averages",
-          sampleCount, complete, expectedCalls: cycle.callQuality.length, availableCalls: observations.length,
-          pendingCalls: cycle.callQuality.filter(sample => sample.status === "pending").length,
-          unavailableCalls: cycle.callQuality.filter(sample => sample.status === "unavailable").length,
-          failures: cycle.callQuality.flatMap(sample => sample.status === "failed" ? [{
-            category: sample.category, ...(sample.httpStatus === undefined ? {} : { httpStatus: sample.httpStatus }),
-          }] : []),
-          observedFrom: observations.map(observation => observation.startDateTime).sort()[0] ?? null,
-          observedThrough: observations.map(observation => observation.endDateTime).sort().at(-1) ?? null,
-          codecs: [...new Set(observations.flatMap(observation => observation.codecs))],
-          streamDirections: [...new Set(observations.flatMap(observation => observation.streamDirections))],
-          callRecords: observations.map(observation => ({ callChainId: observation.callChainId, version: observation.version })),
-          evidence: "provider-reported-not-independent-audio-analysis",
-        }),
-      },
-    }];
   });
 }
 
@@ -450,19 +397,19 @@ export function createHealthReporter(
 ): HealthReporter {
   if (!service.enabled) return async () => undefined;
   const policy = project.healthModel;
-  const selectedQualitySignals = new Set<string>(Object.entries(callQualitySignals)
-    .filter(([metric]) => Object.hasOwn(policy.callQualityThresholds, metric)).map(([, signal]) => signal.signalName));
   const http = service.mode === "live" ? new AuthenticatedHttp(
     options.credential ?? createHealthReportCredential(env, service.healthReportAuthentication),
     "https://management.azure.com/.default", { ...options, attempts: 2, timeoutMs: REPORT_TIMEOUT_MS },
   ) : undefined;
-  const modelName = `${policy.name}-${service.type}`;
+  const modelName = serviceModelName(project, service.type);
   const modelPath = `https://management.azure.com/subscriptions/${encodeURIComponent(policy.subscriptionId)}`
     + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(modelName)}`;
+  // The one place overall signals gain their tenant; group signals are already qualified by group and tenant.
+  const qualified = (report: HealthReport): HealthReport => project.multiTenant
+    ? { ...report, body: { ...report.body, signalName: tenantSignalName(project.tenant.id, report.body.signalName) } }
+    : report;
   return async cycle => {
-    if ("callQuality" in cycle && service.type !== "teams") throw new IntegrationError("configuration-failure");
-    const reports = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
-      : "callQuality" in cycle ? callQualityReports(cycle, policy).filter(report => selectedQualitySignals.has(report.body.signalName))
+    const overall = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
       : project.serviceHealth.enabled && service.mode === "live" ? [
         ...(service.serviceHealth ? [
           serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
@@ -470,6 +417,10 @@ export function createHealthReporter(
         ] : []),
         ...serviceActivityReports(service, cycle, policy.reportTtlMinutes),
       ].filter(report => report.body.value !== undefined) : [];
+    const reports = [
+      ...overall.map(qualified),
+      ...("results" in cycle ? groupHealthReports(project, service.type, cycle) : []),
+    ];
     if (!http) {
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;

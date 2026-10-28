@@ -5,7 +5,7 @@ import { consoleTelemetry, probeServices, resultSchema, type Probe, type Telemet
 import { categoryOf, IntegrationError } from "./http.js";
 import { baseResult, type ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
-import { providerGraphClient, serviceRuntime, validateRuntimeConsent } from "./runtime.js";
+import { providerGraphClient, serviceRuntime, validateProjectTenantBinding, validateRuntimeConsent } from "./runtime.js";
 import { parseServiceConfig, serviceProbes, serviceSettings, type ServiceConfig } from "./service-config.js";
 import type { ProviderCollectionSummary, ProviderCollector } from "./provider-collection.js";
 import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
@@ -14,23 +14,23 @@ import { createResultOutput, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import type { ResultTelemetry } from "./otel.js";
 import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
-import { collectCycleCallQuality } from "./teams-call-quality-collection.js";
+import { canonicalProjectFile } from "./paths.js";
 
-export function parseWorkerArguments(args: readonly string[], defaultConfig?: string) {
+const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
+
+export function parseWorkerArguments(args: readonly string[]) {
   let config: string | undefined;
+  let tenant: string | undefined;
   let once = false;
-  let projectConfig: string | undefined;
+  const hasValue = (index: number) => args[index + 1] !== undefined && !args[index + 1]!.startsWith("--");
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
-    if (argument === "--config" && !config && args[index + 1] && !args[index + 1]!.startsWith("--")) {
-      config = args[++index];
-    } else if (argument === "--project-config" && !projectConfig && args[index + 1] && !args[index + 1]!.startsWith("--")) {
-      projectConfig = args[++index];
-    } else if (argument === "--once" && !once) once = true;
-    else throw new ConfigurationError("Usage: npm run <exchange|teams|onedrive> -- [--project-config <monitoring.config.json>] [--config <service-config.json>] [--once]");
+    if (argument === "--config" && !config && hasValue(index)) config = args[++index];
+    else if (argument === "--tenant" && !tenant && hasValue(index)) tenant = args[++index];
+    else if (argument === "--once" && !once) once = true;
+    else throw new ConfigurationError(usage);
   }
-  if (!config && defaultConfig === undefined) throw new ConfigurationError("An explicit --config is required");
-  return { config: config ?? defaultConfig!, once, ...(projectConfig ? { projectConfig } : {}) };
+  return { config: config ?? canonicalProjectFile, once, ...(tenant ? { tenant } : {}) };
 }
 
 export interface WorkerOptions {
@@ -70,14 +70,6 @@ async function initializeService(
     config,
     dependencies: {
       ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
-      ...(service.type === "teams" && service.teamsCallQuality.enabled ? {
-        async reportCallQuality(cycle, signal) {
-          if (!cycle.results.some(result => result.testType === "teams-call")) return;
-          const quality = await collectCycleCallQuality(cycle, runtime.teamsCalling, service.teamsCallQuality, telemetry, signal);
-          suppliedResults.recordCallQuality?.(quality);
-          await reportHealth?.(quality);
-        },
-      } : {}),
     },
   };
 }
@@ -212,6 +204,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     return;
   }
   const env = options.env ?? process.env;
+  validateProjectTenantBinding(options.project?.tenant, service, env);
   const configuredProbes = serviceProbes(service, options.project?.services[service.type].scenarios);
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
@@ -246,7 +239,6 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
         telemetry.emit("telemetry-output-failed", { category: "collector-failure" });
       }
     },
-    recordCallQuality(cycle) { otel?.recordCallQuality?.(cycle); },
   };
   let initialized: InitializedService | undefined;
   const now = options.now ?? (() => performance.now());

@@ -1,187 +1,167 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { z } from "zod";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { ConfigurationError } from "./config.js";
-import { applyProjectConfig, readProjectConfig, type ProjectConfig } from "./project-config.js";
-import { readServiceConfig, type ServiceConfig, type ServiceFileConfig } from "./service-config.js";
+import { modelCatalog } from "./catalog.js";
+import { type DeploymentSettings } from "./deployment-config.js";
+import { reportingGroups } from "./groups.js";
+import {
+  parseProjectDocument, selectTenant, serviceExecution, serviceModelName, serviceTypes,
+  type ProjectConfig, type ProjectDocument,
+} from "./project-config.js";
+import { validateProjectTenantBinding } from "./runtime.js";
+import { serviceSettings, type ServiceConfig } from "./service-config.js";
 
-const certificateSecretUri = z.string().regex(
-  /^https:\/\/[a-zA-Z0-9-]+\.vault\.azure\.net\/secrets\/[a-zA-Z0-9-]+(?:\/[a-zA-Z0-9]+)?$/,
-);
-const applicationAccess = z.object({
-  m365TenantId: z.string().uuid().optional(),
-  m365ClientId: z.string().uuid().optional(),
-  m365CertificateSource: z.enum(["key-vault", "container-app"]).optional(),
-  m365CertificateSecretUri: certificateSecretUri.optional(),
-  m365CertificateRevision: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
-  botPeerClientId: z.string().uuid().optional(),
-  botPeerManagedIdentityResourceId: z.string().regex(
-    /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/resourceGroups\/[a-z0-9_().-]{1,90}\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[a-z0-9_-]{3,128}$/i,
-  ).optional(),
-}).strict();
-const serviceAccessSchema = z.object({
-  exchange: applicationAccess.optional(),
-  teams: applicationAccess.optional(),
-  onedrive: applicationAccess.optional(),
-}).strict();
-
-async function readServiceAccess(file?: string): Promise<z.infer<typeof serviceAccessSchema>> {
-  if (!file) return {};
-  let text: string;
-  try { text = await readFile(file, "utf8"); }
-  catch { throw new ConfigurationError("Cannot read the service access config file"); }
-  let raw: unknown;
-  try { raw = JSON.parse(text); }
-  catch { throw new ConfigurationError("Service access config must contain valid JSON"); }
-  const parsed = serviceAccessSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new ConfigurationError(`Invalid service access config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}`);
-  }
-  return parsed.data;
+export interface DeploymentWorker {
+  tenant: string;
+  type: ServiceConfig["type"];
+  appName: string;
+  identityResourceId: string;
+  project: ProjectConfig;
+  service: ServiceConfig;
 }
 
-async function readDeploymentService(project: ProjectConfig, type: ServiceConfig["type"], projectFile: string) {
-  const service: ServiceFileConfig = await readServiceConfig(resolve(dirname(projectFile), project.services[type].configFile));
-  if (service.type !== type) throw new ConfigurationError(`Deployment requires a ${type} service config`);
-  const effective = applyProjectConfig(project, service);
-  return { ...service, serviceHealth: effective.serviceHealth, serviceActivity: effective.serviceActivity };
-}
-
-export async function prepareDeploymentParameters(
-  projectFile: string, workerImage?: string, enableLiveProbes = false, accessFile?: string, enableBetaServiceActivity = false,
-) {
-  const project = await readProjectConfig(projectFile);
-  if (project.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
-    throw new ConfigurationError("Deployment requires an approved healthModel.subscriptionId");
-  }
-  if (workerImage !== undefined && workerImage.trim().length === 0) {
-    throw new ConfigurationError("workerImage must be a nonempty image reference");
-  }
-  const [exchange, teams, onedrive] = await Promise.all([
-    readDeploymentService(project, "exchange", projectFile),
-    readDeploymentService(project, "teams", projectFile),
-    readDeploymentService(project, "onedrive", projectFile),
+export function activeServiceInventory(root: string, type: ServiceConfig["type"]) {
+  const definition = modelCatalog.serviceDefinitions.find(service => service.service === type)!;
+  const model = `${root}-${type}`;
+  const groups = [...new Set(definition.journeys.flatMap(journey => "group" in journey ? [journey.group.entityName] : []))];
+  const entityNames = new Set([
+    model, `${type}-service-health`, ...groups,
+    ...definition.journeys.flatMap(journey => [journey.entityName, ...journey.steps.map(step => `${journey.entityName}-${step.name}`)]),
   ]);
-  const serviceAccess = await readServiceAccess(accessFile);
-  for (const service of [exchange, teams, onedrive]) {
-    const teamsMessages = project.services.teams.scenarios["channel-conversation"];
-    const access = serviceAccess[service.type];
-    const live = service.type === "teams" && applyProjectConfig(project, service).enabled && service.mode === "live";
-    const needsPeer = live && project.services.teams.scenarios["scheduled-meeting"];
-    const hasPeer = access?.botPeerClientId || access?.botPeerManagedIdentityResourceId;
-    if (hasPeer && (!needsPeer || !access?.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
-      throw new ConfigurationError("Peer access requires both botPeerClientId and botPeerManagedIdentityResourceId for an enabled live Teams scenario that needs the peer bot");
-    }
-    if (needsPeer && service.botAuthentication !== "managed-identity") {
-      throw new ConfigurationError("Hosted peer-bot scenarios require managed-identity bot authentication");
-    }
-    if (needsPeer && service.teamsCallingPort !== 8080) {
-      throw new ConfigurationError("Hosted scheduled meetings require port 8080");
-    }
-    if (needsPeer && workerImage && !hasPeer) {
-      throw new ConfigurationError("Hosted peer-bot scenarios require serviceAccess.teams botPeerClientId and botPeerManagedIdentityResourceId for the existing approved peer UAMI");
-    }
-    if (hasPeer && project.services.teams.callTargets.some(target =>
-      target.peerBotClientId.toLowerCase() !== access!.botPeerClientId!.toLowerCase())) {
-      throw new ConfigurationError("Root callTargets peerBotClientId must match serviceAccess.teams.botPeerClientId");
-    }
-    if (access && Object.values(access).some(value => value !== undefined)) {
-      const hasM365 = access.m365TenantId || access.m365ClientId || access.m365CertificateSecretUri ||
-        access.m365CertificateSource || access.m365CertificateRevision;
-      const nativeCertificate = access.m365CertificateSource === "container-app";
-      if (hasM365 && !(access.m365TenantId && access.m365ClientId &&
-          (nativeCertificate ? access.m365CertificateRevision : access.m365CertificateSecretUri))) {
-        throw new ConfigurationError(`${service.type} access requires all three M365 application settings`);
-      }
-      if (nativeCertificate && access.m365CertificateSecretUri) {
-        throw new ConfigurationError(`${service.type} certificate storage must select only one source`);
-      }
-      if (!nativeCertificate && access.m365CertificateRevision) {
-        throw new ConfigurationError(`${service.type} native certificate revision requires container-app storage`);
-      }
-      if (hasM365 && service.graphAuthentication !== "certificate") {
-        throw new ConfigurationError(`${service.type} M365 application settings require graphAuthentication: certificate`);
-      }
-      if (service.type === "teams" && access.m365TenantId &&
-          project.services.teams.targets.some(target => target.tenantId?.toLowerCase() !== access.m365TenantId?.toLowerCase())) {
-        throw new ConfigurationError("Teams target and M365 application tenants must match");
-      }
-    }
-    if (workerImage && applyProjectConfig(project, service).enabled && service.mode === "live") {
-      if (service.healthReportAuthentication !== "managed-identity") {
-        throw new ConfigurationError("Hosted workers require healthReportAuthentication: managed-identity");
-      }
-      const needsApplicationGraph = service.type !== "teams" || teamsMessages ||
-        service.serviceHealth || service.serviceActivity.enabled;
-      if (needsApplicationGraph && service.graphAuthentication === "certificate" &&
-          !(access?.m365CertificateSecretUri || access?.m365CertificateSource === "container-app")) {
-        throw new ConfigurationError(`${service.type} hosted Graph certificate access requires --access-config with M365 application settings`);
-      }
+  const relationshipNames = new Set([
+    `${model}-to-${type}-service-health`, ...groups.map(group => `${model}-to-${group}`),
+    ...definition.journeys.flatMap(journey => [
+      `${"group" in journey ? journey.group.entityName : model}-to-${journey.entityName}`,
+      ...journey.steps.map(step => `${journey.entityName}-to-${journey.entityName}-${step.name}`),
+    ]),
+  ]);
+  return { entityNames, relationshipNames };
+}
+
+function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings): void {
+  const { service, project } = worker;
+  const selected = project.services[service.type];
+  const access = selected.access;
+  const live = service.mode === "live";
+  const calling = live && service.type === "teams" && project.services.teams.scenarios["scheduled-meeting"];
+  const peer = access.botPeerClientId || access.botPeerManagedIdentityResourceId;
+  if (peer && (service.type !== "teams" || !access.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
+    throw new ConfigurationError("Teams peer access requires both botPeerClientId and botPeerManagedIdentityResourceId");
+  }
+  if (calling && (!peer || !access.botPeerResourceId || service.teamsCallingPort !== 8080 ||
+      !service.teamsCallingCallbackUrl || project.services.teams.callTargets.some(target =>
+        target.peerBotClientId.toLowerCase() !== access.botPeerClientId?.toLowerCase()))) {
+    throw new ConfigurationError("Live Teams meetings require port 8080, the existing HTTPS callback, approved matching peer identity and both bot resource references");
+  }
+  if (live && service.type === "teams" && !access.botResourceId) {
+    throw new ConfigurationError("Live Teams requires access.botResourceId for the existing approved bot endpoint/identity preflight");
+  }
+  const certificate = service.graphAuthentication === "certificate";
+  const certificateFields = access.m365ClientId || access.m365TenantId || access.m365CertificateSource ||
+    access.m365CertificateSecretUri || access.m365CertificateRevision ||
+    access.m365CertificateEnvironmentVariable || access.m365CertificatePath;
+  if (!certificate && certificateFields) throw new ConfigurationError("M365 certificate references require graphAuthentication: certificate");
+  if (certificate && live) {
+    const native = access.m365CertificateSource === "container-app";
+    if (!access.m365TenantId || !access.m365ClientId ||
+        (native ? !access.m365CertificateEnvironmentVariable || !access.m365CertificateRevision || access.m365CertificateSecretUri
+          : !access.m365CertificateSecretUri || access.m365CertificateEnvironmentVariable || access.m365CertificateRevision)) {
+      throw new ConfigurationError("Hosted Graph certificates require explicit M365 tenant/client and exactly one complete Key Vault or environment-referenced native certificate source");
     }
   }
-  if (workerImage && !enableLiveProbes && [exchange, teams, onedrive].some(service =>
-    applyProjectConfig(project, service).enabled && service.mode === "live")) {
-    throw new ConfigurationError("Deploying live worker profiles requires explicit --enable-live");
+  if (!live || settings.stage !== "workers") return;
+  if (!settings.enableLiveProbes) throw new ConfigurationError("Live execution requires deployment.enableLiveProbes: true");
+  if (!selected.worker?.identityResourceId) throw new ConfigurationError("Live workers must bind an existing approved worker.identityResourceId; deployment never grants Graph access");
+  if (service.healthReportAuthentication !== "managed-identity") throw new ConfigurationError("Hosted workers require healthReportAuthentication: managed-identity");
+  if (service.serviceActivity.enabled && !settings.enableBetaServiceActivity) {
+    throw new ConfigurationError("Beta collection requires deployment.enableBetaServiceActivity: true");
   }
-  if (workerImage && !enableBetaServiceActivity && [exchange, teams, onedrive].some(service =>
-    applyProjectConfig(project, service).enabled && service.serviceActivity.enabled)) {
-    throw new ConfigurationError("Deploying beta provider collection requires explicit --enable-beta-service-activity");
+  const identity = selected.worker.identityClientId ?? "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const env = {
+    ENABLE_LIVE_M365: "true", ENABLE_BETA_SERVICE_ACTIVITY: settings.enableBetaServiceActivity ? "true" : "false",
+    AZURE_TENANT_ID: settings.azureTenantId, AZURE_CLIENT_ID: identity,
+    BOT_TENANT_ID: settings.azureTenantId, BOT_CLIENT_ID: identity,
+    M365_TENANT_ID: access.m365TenantId ?? settings.azureTenantId, TEAMS_CALLING_PEER_CLIENT_ID: access.botPeerClientId,
+  };
+  validateProjectTenantBinding(project.tenant, service, env);
+  serviceSettings(service, env, selected.scenarios);
+  if (service.type === "exchange" && project.services.exchange.scenarios["reply-mail"] &&
+      project.services.exchange.targets.some(target => !target.replySeed)) {
+    throw new ConfigurationError("Live reply-mail requires verified retained replySeed bindings for every selected initiating pair; run exchange:mail-test setup without disabling the journey");
   }
+  if (service.type === "onedrive" &&
+      (project.services.onedrive.scenarios["user-drive-roundtrip"] || project.services.onedrive.scenarios["document-versions"]) &&
+      project.services.onedrive.targets.some(target => !target.driveId || !target.folderId)) {
+    throw new ConfigurationError("Live OneDrive selected-folder journeys require approved driveId/folderId bindings; run onedrive:setup without inventing IDs");
+  }
+}
+
+function deploymentWorker(document: ProjectDocument, project: ProjectConfig, type: ServiceConfig["type"]): DeploymentWorker {
+  const hosting = project.services[type].worker;
+  if (!hosting || Boolean(hosting.identityName) === Boolean(hosting.identityResourceId)) {
+    throw new ConfigurationError("Each deployed tenant/service requires worker.appName and exactly one identityResourceId or identityName");
+  }
+  if (Number(hosting.memory.replace("Gi", "")) !== hosting.cpu * 2) {
+    throw new ConfigurationError("Consumption workers require memory in Gi equal to twice cpu");
+  }
+  const identityResourceId = hosting.identityResourceId ??
+    `/subscriptions/${document.healthModel.subscriptionId}/resourceGroups/${document.healthModel.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${hosting.identityName}`;
   return {
-    $schema: "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-    contentVersion: "1.0.0.0",
-    parameters: {
-      projectConfig: { value: project },
-      serviceConfigs: { value: { exchange, teams, onedrive } },
-      serviceAccess: { value: serviceAccess },
-      deployWorkers: { value: workerImage !== undefined },
-      workerImage: { value: workerImage ?? "" },
-      enableLiveProbes: { value: enableLiveProbes },
-      enableBetaServiceActivity: { value: enableBetaServiceActivity },
-    },
+    tenant: project.tenant.id, type, appName: hosting.appName, identityResourceId, project,
+    service: serviceExecution(project, type),
   };
 }
 
-async function main(args: string[]): Promise<void> {
-  const { projectFile, outputFile, workerImage, enableLiveProbes, accessFile, enableBetaServiceActivity } = parseDeploymentArguments(args);
-  if (resolve(projectFile) === resolve(outputFile)) {
-    throw new ConfigurationError("Deployment output must not overwrite the project config");
-  }
-  const parameters = await prepareDeploymentParameters(resolve(projectFile), workerImage, enableLiveProbes, accessFile && resolve(accessFile), enableBetaServiceActivity);
-  await writeFile(outputFile, `${JSON.stringify(parameters, null, 2)}\n`, { mode: 0o600 });
-  console.log(JSON.stringify({ event: "deployment-parameters-prepared", deployWorkers: workerImage !== undefined }));
-}
-
-export function parseDeploymentArguments(args: string[]) {
-  const [projectFile, outputFile, ...remaining] = args;
-  const usage = "Usage: npm run deployment:prepare -- <project-config> <output-parameters.json> [worker-image] [--enable-live] [--enable-beta-service-activity] [--access-config <file>]";
-  if (!projectFile || !outputFile || projectFile.startsWith("--") || outputFile.startsWith("--")) {
-    throw new ConfigurationError(usage);
-  }
-  let workerImage: string | undefined;
-  let accessFile: string | undefined;
-  let enableLiveProbes = false;
-  let enableBetaServiceActivity = false;
-  for (let index = 0; index < remaining.length; index++) {
-    const argument = remaining[index]!;
-    if (argument === "--enable-live" && !enableLiveProbes) enableLiveProbes = true;
-    else if (argument === "--enable-beta-service-activity" && !enableBetaServiceActivity) enableBetaServiceActivity = true;
-    else if (argument === "--access-config" && !accessFile) {
-      accessFile = remaining[++index];
-      if (!accessFile || accessFile.startsWith("--")) throw new ConfigurationError(usage);
-    } else if (!argument.startsWith("--") && workerImage === undefined) workerImage = argument;
-    else throw new ConfigurationError(usage);
-  }
-  return { projectFile, outputFile, workerImage, enableLiveProbes, accessFile, enableBetaServiceActivity };
-}
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  await main(process.argv.slice(2)).catch(error => {
-    console.error(JSON.stringify({
-      event: "deployment-parameters-failed", errorType: error instanceof Error ? error.name : "unknown",
-      ...(error instanceof ConfigurationError ? { message: error.message } : {}),
-    }));
-    process.exitCode = 1;
+// One worker per tenant and service that has an enabled scenario; it runs the tenant's whole inventory.
+function deploymentWorkers(document: ProjectDocument, settings: DeploymentSettings): DeploymentWorker[] {
+  const workers = document.tenants.flatMap(tenant => {
+    const project = selectTenant(document, tenant.id);
+    return serviceTypes
+      .filter(type => project.services[type].enabled && Object.values(project.services[type].scenarios).some(Boolean))
+      .map(type => deploymentWorker(document, project, type));
   });
+  for (const worker of workers) validateAccess(worker, settings);
+  if (new Set(workers.map(worker => worker.appName)).size !== workers.length) {
+    throw new ConfigurationError("Worker appName values must be unique across tenant/service execution owners");
+  }
+  const bots = workers.filter(worker => worker.type === "teams").flatMap(worker =>
+    [worker.project.services.teams.access.botResourceId, worker.project.services.teams.access.botPeerResourceId].filter(Boolean));
+  if (new Set(bots.map(id => id!.toLowerCase())).size !== bots.length) {
+    throw new ConfigurationError("Each approved Teams bot must have exactly one tenant/service callback owner");
+  }
+  return workers;
 }
+
+export function prepareProjectDeployment(raw: unknown, workerImage?: string) {
+  const document = parseProjectDocument(raw);
+  const settings = document.deployment;
+  if (!settings) throw new ConfigurationError("Deployment requires the deployment section in monitoring.config.json");
+  if (workerImage !== undefined && !/^.+@sha256:[a-f0-9]{64}$/.test(workerImage)) {
+    throw new ConfigurationError("Worker images must be pinned by immutable sha256 digest");
+  }
+  const workers = deploymentWorkers(document, settings);
+  for (const entry of settings.retireEntities) {
+    if (activeServiceInventory(document.healthModel.name, entry.service).entityNames.has(entry.entityName)) {
+      throw new ConfigurationError("Cannot retire an entity still supported by the source catalogue");
+    }
+  }
+  const parameters = (values: Record<string, unknown>) => ({
+    $schema: "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    contentVersion: "1.0.0.0",
+    parameters: Object.fromEntries(Object.entries(values).map(([name, value]) => [name, { value }])),
+  });
+  const groups = reportingGroups(document);
+  return {
+    document, settings, workers, reportingGroups: groups,
+    modelNames: [document.healthModel.name, ...serviceTypes.filter(type => workers.some(worker => worker.type === type))
+      .map(type => serviceModelName(document, type))],
+    healthParameters: parameters({
+      projectConfig: document, reportingGroups: groups, location: settings.healthModelLocation ?? settings.location,
+      workspaceName: settings.workspaceName ?? `law-${document.healthModel.name}`,
+      applicationInsightsName: settings.applicationInsightsName ?? `appi-${document.healthModel.name}`,
+    }),
+    workerParameters: parameters({
+      projectConfig: document, location: settings.location,
+      deployWorkers: settings.stage === "workers", workerImage: workerImage ?? "",
+    }),
+  };
+}
+export type PreparedDeployment = ReturnType<typeof prepareProjectDeployment>;

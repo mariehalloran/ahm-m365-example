@@ -2,8 +2,11 @@ targetScope = 'resourceGroup'
 
 import { serviceDefinitions, ServiceDefinition, getJourneyGroups } from './service-catalog.bicep'
 
-@description('The same project-root configuration consumed by the workers. Supply a private file with projectConfig=@<path>.')
+@description('The root monitoring.config.json as normalized by `npm run deploy`, which also supplies reportingGroups.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
+
+@description('Reporting groups from `npm run deploy`: [{ id, displayName, scopes: [{ tenant, service, journeys }] }].')
+param reportingGroups array = []
 
 @description('A region supporting Microsoft.CloudHealth.')
 param location string = resourceGroup().location
@@ -11,6 +14,27 @@ param location string = resourceGroup().location
 @description('Created only when OTEL exports to Azure Monitor.')
 param workspaceName string = 'law-${projectConfig.healthModel.name}'
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
+
+// A tenant runs a journey when it enables the service and the scenario.
+func runsJourney(tenant object, service string, journey string) bool =>
+  (tenant.services[?service].?enabled ?? false) && (tenant.services[?service].?scenarios[?journey] ?? false)
+
+// A journey is modeled when any tenant runs it.
+func isJourneySelected(tenants array, service string, journey string) bool =>
+  !empty(filter(tenants, tenant => runsJourney(tenant, service, journey)))
+
+// The journeys of a service that each tenant runs; tenants that run none are left out.
+func tenantJourneys(tenants array, service ServiceDefinition) array =>
+  filter(
+    map(tenants, tenant => {
+      tenant: tenant.id
+      journeys: map(
+        filter(service.journeys, journey => runsJourney(tenant, service.service, journey.name)),
+        journey => journey.name
+      )
+    }),
+    entry => !empty(entry.journeys)
+  )
 
 var modelName = projectConfig.healthModel.name
 var enableServiceHealth = projectConfig.?serviceHealth.?enabled ?? false
@@ -20,14 +44,11 @@ var selectedServices ServiceDefinition[] = map(
     union(service, {
       journeys: filter(
         service.journeys,
-        journey => projectConfig.services[?service.service].?scenarios[?journey.name] ?? false
+        journey => isJourneySelected(projectConfig.tenants, service.service, journey.name)
       )
     })
 )
-var enabledServices = filter(
-  selectedServices,
-  service => (projectConfig.services[?service.service].?enabled ?? false) && !empty(service.journeys)
-)
+var enabledServices = filter(selectedServices, service => !empty(service.journeys))
 var journeys = flatten(map(enabledServices, service => service.journeys))
 var journeyGroupCount = length(getJourneyGroups(journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
@@ -86,12 +107,17 @@ module serviceModels './service.bicep' = [
       policy: projectConfig.healthModel
       enableServiceHealth: enableServiceHealth
       suppressOneDriveRestore: service.service == 'onedrive' && empty(filter(
-        projectConfig.services[?'onedrive'].?targets ?? [],
+        flatten(map(projectConfig.tenants, tenant => tenant.services.?onedrive.?targets ?? [])),
         target => target.?restoreVersion ?? false
       ))
       enableOtel: useOtel
       workspaceName: workspaceName
       applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
+      externalReportTenants: length(projectConfig.tenants) > 1 ? tenantJourneys(projectConfig.tenants, service) : []
+      reportingGroups: filter(
+        reportingGroups,
+        group => !empty(filter(group.scopes, scope => scope.service == service.service))
+      )
     }
   }
 ]

@@ -11,3 +11,6 @@ coverage
 **/*.key
 **/config*.json
 npm-debug.log*
+.test-work
+**/tests
+**/*.log

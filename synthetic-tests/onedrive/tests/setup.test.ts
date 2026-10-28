@@ -5,13 +5,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { IntegrationError } from "../../utils/src/http.js";
-import { readProjectConfig, type ProjectConfig } from "../../utils/src/project-config.js";
-import { cachedSetupCredential, parseSetupArguments, runSetupCommand } from "../src/setup-command.js";
+import { canonicalProjectFile } from "../../utils/src/paths.js";
+import { parseProjectDocument, readProjectDocument, selectTenant, type ProjectConfig } from "../../utils/src/project-config.js";
+import { documentFixture, multiTenantFixture } from "../../utils/tests/fixtures.js";
+import { cachedSetupCredential, parseSetupArguments, selectedSetupOptions, runSetupCommand } from "../src/setup-command.js";
 import { setupOneDriveTargets, type SetupGraph, type SetupOptions } from "../src/setup.js";
 
 const workerClientId = "22222222-2222-4222-8222-222222222222";
 const tenantId = "33333333-3333-4333-8333-333333333333";
-const sample = await readProjectConfig("../monitoring.config.json");
+const sample = documentFixture();
 type Target = ProjectConfig["services"]["onedrive"]["targets"][number];
 interface Folder {
   id: string; name: string; folder: object; parentReference: { id: string; driveId: string };
@@ -134,18 +136,19 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 
-async function privateProfile(targets: Target[]) {
+async function privateProfile(targets: Target[], concurrency = 4) {
   const directory = await mkdtemp(join(tmpdir(), "ahm-onedrive-setup-"));
   directories.push(directory);
   const file = join(directory, "monitoring.private.json");
-  const { serviceHealth: _serviceHealth, ...root } = sample;
-  const { callQualityThresholds: _thresholds, ...healthModel } = root.healthModel;
-  const original = {
-    ...root, healthModel,
-    services: { ...root.services, onedrive: { ...root.services.onedrive, targets } },
-  };
+  const { serviceHealth: _serviceHealth, ...root } = structuredClone(sample);
+  const tenant = root.tenants[0]!;
+  tenant.tenantId = tenantId;
+  for (const target of [...tenant.services.teams.targets, ...tenant.services.teams.callTargets]) target.tenantId = tenantId;
+  tenant.services.onedrive.targets = targets;
+  tenant.services.onedrive.setup = { authentication: "azure-cli", workerClientId, concurrency, targetTimeoutSeconds: 300 };
+  const original = root;
   await writeFile(file, `${JSON.stringify(original, null, 2)}\n`, { mode: 0o600 });
-  const args = [file, "--tenant-id", tenantId, "--worker-client-id", workerClientId, "--authentication", "azure-cli"];
+  const args = ["--config", file];
   return { directory, file, original, args };
 }
 
@@ -257,25 +260,55 @@ describe("bulk dedicated-folder setup", () => {
 });
 
 describe("private root configuration checkpoints", () => {
+  it("writes bindings only into the selected tenant of a multi-tenant document and preserves everything else", async () => {
+    const f = fixture();
+    const profile = await privateProfile(f.targets);
+    const document = multiTenantFixture();
+    document.tenants[0]!.services.onedrive.targets = f.targets;
+    document.tenants[0]!.services.onedrive.setup = { authentication: "azure-cli", workerClientId, concurrency: 4, targetTimeoutSeconds: 300 };
+    await writeFile(profile.file, JSON.stringify(document));
+    const args = ["--config", profile.file, "--tenant", "contoso", "--apply"];
+    expect(await runSetupCommand(parseSetupArguments(args), f.graph, f.telemetry, f.options.signal))
+      .toMatchObject({ ready: 2, total: 2, failed: 0 });
+    const written = JSON.parse(await readFile(profile.file, "utf8"));
+    expect(written.tenants[0].services.onedrive.targets).toMatchObject([
+      { driveId: "drive-0", folderId: "folder-account-0" }, { driveId: "drive-1", folderId: "folder-account-1" },
+    ]);
+    expect(written.tenants[0].services.exchange).toEqual(document.tenants[0]!.services.exchange);
+    expect(written.tenants[0].services.teams).toEqual(document.tenants[0]!.services.teams);
+    expect(written.tenants[1]).toEqual(document.tenants[1]);
+    expect(written.groups).toEqual(document.groups);
+    expect(written.healthModel).toEqual(document.healthModel);
+    expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
+    f.authenticate.mockClear();
+    const unselected = parseSetupArguments(["--config", profile.file, "--apply"]);
+    await expect(runSetupCommand(unselected, f.graph, f.telemetry, f.options.signal)).rejects.toThrow("Select one tenant");
+    await expect(runSetupCommand({ ...unselected, tenant: "missing" }, f.graph, f.telemetry, f.options.signal))
+      .rejects.toThrow("Unknown --tenant");
+    expect(f.authenticate).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(profile.file, "utf8"))).toEqual(written);
+  });
+
   it("persists only verified bindings, preserves unrelated settings/default omissions, and cleans its lock", async () => {
     const f = fixture();
     f.accounts[1]!.denied = true;
     const profile = await privateProfile(f.targets);
     const options = parseSetupArguments([...profile.args, "--apply"]);
     expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({ ready: 1, failed: 1 });
-    const written = await readProjectConfig(profile.file);
+    const written = selectTenant(await readProjectDocument(profile.file));
     expect(written.services.onedrive.targets[0]).toMatchObject({ driveId: "drive-0", folderId: "folder-account-0" });
     expect(written.services.onedrive.targets[1]).not.toHaveProperty("folderId");
     const raw = JSON.parse(await readFile(profile.file, "utf8"));
-    expect(raw.services.exchange).toEqual(profile.original.services.exchange);
-    expect(raw.services.teams).toEqual(profile.original.services.teams);
+    expect(raw.tenants[0].services.exchange).toEqual(profile.original.tenants[0]!.services.exchange);
+    expect(raw.tenants[0].services.teams).toEqual(profile.original.tenants[0]!.services.teams);
+    expect(raw.groups).toEqual(profile.original.groups);
     expect(raw.healthModel).toEqual(profile.original.healthModel);
     expect(raw).not.toHaveProperty("serviceHealth");
     expect((await stat(profile.file)).mode & 0o777).toBe(0o600);
     expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
     f.accounts[1]!.denied = false;
     expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({ ready: 2, failed: 0 });
-    expect((await readProjectConfig(profile.file)).services.onedrive.targets.every(target => target.folderId)).toBe(true);
+    expect(selectTenant(await readProjectDocument(profile.file)).services.onedrive.targets.every(target => target.folderId)).toBe(true);
   });
   it("does not rewrite the profile in plan mode", async () => {
     const f = fixture();
@@ -288,21 +321,21 @@ describe("private root configuration checkpoints", () => {
   it("refuses a second apply against a locked profile before authentication or mutations", async () => {
     const f = fixture();
     const profile = await privateProfile(f.targets);
-    await writeFile(`${profile.file}.onedrive-setup.lock`, "other process");
+    await writeFile(`${profile.file}.monitoring-setup.lock`, "other process");
     await expect(runSetupCommand(parseSetupArguments([...profile.args, "--apply"]), f.graph, f.telemetry, f.options.signal))
       .rejects.toThrow("Another setup holds");
     expect(f.authenticate).not.toHaveBeenCalled();
     expect(f.calls).toEqual([]);
-    expect(await readFile(`${profile.file}.onedrive-setup.lock`, "utf8")).toBe("other process");
+    expect(await readFile(`${profile.file}.monitoring-setup.lock`, "utf8")).toBe("other process");
   });
   it("stops scheduling on an external config edit without overwriting it or rolling back verified cloud resources", async () => {
     const f = fixture(3);
-    const profile = await privateProfile(f.targets);
+    const profile = await privateProfile(f.targets, 1);
     const external = `${JSON.stringify({ ...profile.original, healthModel: {
       ...profile.original.healthModel, reportTtlMinutes: 45,
     } }, null, 2)}\n`;
     f.hooks.afterMutation = async () => { await writeFile(profile.file, external); };
-    const options = parseSetupArguments([...profile.args, "--apply", "--concurrency", "1"]);
+    const options = parseSetupArguments([...profile.args, "--apply"]);
     expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({
       ready: 0, failed: 1, notStarted: 2,
     });
@@ -313,30 +346,41 @@ describe("private root configuration checkpoints", () => {
   });
   it("retains completed checkpoints on cancellation and starts no more accounts", async () => {
     const f = fixture(3);
-    const profile = await privateProfile(f.targets);
+    const profile = await privateProfile(f.targets, 1);
     const stop = new AbortController();
     f.telemetry.emit.mockImplementation((event, data) => {
       if (event === "onedrive-setup-target" && data.status === "ready") stop.abort();
     });
-    const options = parseSetupArguments([...profile.args, "--apply", "--concurrency", "1"]);
+    const options = parseSetupArguments([...profile.args, "--apply"]);
     expect(await runSetupCommand(options, f.graph, f.telemetry, stop.signal)).toMatchObject({
       ready: 1, failed: 0, notStarted: 2,
     });
-    const written = await readProjectConfig(profile.file);
+    const written = selectTenant(await readProjectDocument(profile.file));
     expect(written.services.onedrive.targets.filter(target => target.folderId)).toHaveLength(1);
     expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
   });
 });
 
 describe("explicit setup authentication", () => {
+  it("parses only the root config, an optional tenant and the apply flag", () => {
+    expect(parseSetupArguments([])).toEqual({ projectFile: canonicalProjectFile, apply: false });
+    expect(parseSetupArguments(["--apply", "--tenant", "contoso", "--config", "root.json"]))
+      .toEqual({ projectFile: "root.json", tenant: "contoso", apply: true });
+    for (const args of [["--tenant"], ["--tenant", "a", "--tenant", "b"], ["--apply", "--apply"], ["--unknown", "x"], ["root.json"]]) {
+      expect(() => parseSetupArguments(args)).toThrow("Usage");
+    }
+  });
+
   it("requires explicit credentials and refuses the worker as the privileged setup application", async () => {
     const profile = await privateProfile(fixture().targets);
-    expect(() => parseSetupArguments(profile.args.filter(value => !["--authentication", "azure-cli"].includes(value)))).toThrow("Usage");
+    const project = selectTenant(parseProjectDocument(profile.original));
+    delete project.services.onedrive.setup;
+    expect(() => selectedSetupOptions(parseSetupArguments(profile.args), project)).toThrow("explicit privileged");
     expect(() => parseSetupArguments([...profile.args, "--concurrency", "11"])).toThrow("Usage");
-    expect(() => parseSetupArguments([
-      profile.file, "--tenant-id", tenantId, "--worker-client-id", workerClientId,
-      "--authentication", "managed-identity", "--setup-client-id", workerClientId,
-    ])).toThrow("separate from");
+    project.services.onedrive.setup = {
+      authentication: "managed-identity", workerClientId, setupClientId: workerClientId, concurrency: 4, targetTimeoutSeconds: 300,
+    };
+    expect(() => selectedSetupOptions(parseSetupArguments(profile.args), project)).toThrow("separate from");
   });
   it("shares one credential request across a large batch and refreshes before expiry without inspecting opaque tokens", async () => {
     vi.useFakeTimers();

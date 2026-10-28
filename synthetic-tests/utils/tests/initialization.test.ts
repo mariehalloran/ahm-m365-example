@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigurationError } from "../src/config.js";
-import { readProjectConfig } from "../src/project-config.js";
+import { liveTenantEnv, projectFixture } from "./fixtures.js";
 import { parseServiceConfig } from "../src/service-config.js";
 import { runServiceWorker, type WorkerOptions } from "../src/worker.js";
 import { baseResult } from "../src/probes.js";
@@ -17,7 +17,7 @@ vi.mock("@azure/identity", () => ({
 }));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
-const checkedIn = await readProjectConfig("../monitoring.config.json");
+const checkedIn = projectFixture();
 const project = () => ({
   ...structuredClone(checkedIn),
   healthModel: { ...checkedIn.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
@@ -36,7 +36,7 @@ const project = () => ({
     onedrive: structuredClone(checkedIn.services.onedrive),
   },
 });
-const env = { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222" };
+const env = { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222", ...liveTenantEnv };
 const service = (type: "exchange" | "teams") => parseServiceConfig({
   type, enabled: true, intervalSeconds: 60, timeoutSeconds: 45, mode: "live",
   cohort: `${type}-global`, targets: [{ id: `${type}-probe-001` }],

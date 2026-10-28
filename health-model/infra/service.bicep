@@ -13,6 +13,10 @@ param suppressOneDriveRestore bool = false
 param enableOtel bool = false
 param workspaceName string
 param applicationInsightsResourceId string
+@description('With several tenants, each tenant worker qualifies its signal names: [{ tenant, journeys }]. Empty keeps plain names.')
+param externalReportTenants array = []
+@description('Reporting groups with at least one scope for this service.')
+param reportingGroups array = []
 
 func bindTelemetryQuery(queryText string, service string, journey string, step string, applicationId string, aggregation string) string =>
   replace(
@@ -45,6 +49,34 @@ func sourceGroup(name string, displayName string, members string[]) object => {
   members: members
 }
 
+// Journey entities and their steps report the synthetic signals; the call journey adds its four call phases.
+func journeySignals(entityName string, callSignals string[]) string[] =>
+  concat(['synthetic-success-percentage', 'synthetic-mean-duration'], entityName == 'teams-call' ? callSignals : [])
+
+// Workers publish tenant-<alias>--<signal> when several tenants report; a journey lists the tenants that run it.
+func externalSignals(tenants array, journey string, signals string[]) string[] =>
+  empty(tenants)
+    ? signals
+    : flatten(map(
+        filter(tenants, entry => empty(journey) || contains(entry.journeys, journey)),
+        entry => map(signals, signal => 'tenant-${entry.tenant}--${signal}')
+      ))
+
+// One aggregation group per reporting group with a scope for this journey. Members are the per-tenant
+// signals (group-<id>--tenant-<alias>--<signal>) that each tenant worker publishes.
+func reportingGroupEntries(groups array, service string, journey string, signals string[]) array =>
+  filter(
+    map(groups, group => sourceGroup(
+      'reporting-${group.id}',
+      group.displayName,
+      flatten(map(
+        filter(group.scopes, scope => scope.service == service && contains(scope.journeys, journey)),
+        scope => map(signals, signal => 'group-${group.id}--tenant-${scope.tenant}--${signal}')
+      ))
+    )),
+    entry => !empty(entry.members)
+  )
+
 var contextName = '${service.service}-service-health'
 var journeyGroups = getJourneyGroups(service.journeys)
 var providerSignalNames = concat(
@@ -58,21 +90,6 @@ var teamsCallSignals = [
   'teams-call-disconnection-success-percentage'
   'teams-call-mean-disconnection-duration'
 ]
-var teamsCallQualitySignalNames = {
-  packetLossPercent: 'teams-call-quality-packet-loss'
-  maxPacketLossPercent: 'teams-call-quality-max-packet-loss'
-  jitterMs: 'teams-call-quality-jitter'
-  maxJitterMs: 'teams-call-quality-max-jitter'
-  roundTripTimeMs: 'teams-call-quality-round-trip-time'
-  maxRoundTripTimeMs: 'teams-call-quality-max-round-trip-time'
-  audioDegradation: 'teams-call-quality-audio-degradation'
-  concealedSamplesPercent: 'teams-call-quality-concealed-samples'
-  maxConcealedSamplesPercent: 'teams-call-quality-max-concealed-samples'
-}
-var selectedCallQualitySignals = map(
-  items(policy.?callQualityThresholds ?? {}),
-  threshold => teamsCallQualitySignalNames[threshold.key]
-)
 var telemetryMetrics = [
   {
     name: 'otel-success-percentage'
@@ -257,16 +274,20 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                 sourceGroup(
                   'external-reports',
                   'External Reports',
-                  node.kind == 'context'
-                    ? providerSignalNames
-                    : concat(
-                        ['synthetic-success-percentage', 'synthetic-mean-duration'],
-                        node.name == 'teams-call' ? concat(teamsCallSignals, selectedCallQualitySignals) : []
-                      )
+                  externalSignals(
+                    externalReportTenants,
+                    node.journey,
+                    node.kind == 'context' ? providerSignalNames : journeySignals(node.name, teamsCallSignals)
+                  )
                 )
               ],
               enableOtel && (node.kind == 'journey' || node.kind == 'step')
                 ? [sourceGroup('otel', 'OpenTelemetry', ['otel-success-percentage', 'otel-mean-duration'])]
+                : [],
+              node.kind == 'journey'
+                ? reportingGroupEntries(
+                    reportingGroups, service.service, node.journey, journeySignals(node.name, teamsCallSignals)
+                  )
                 : []
             )
           }

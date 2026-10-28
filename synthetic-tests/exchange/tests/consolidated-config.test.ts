@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { probeServices } from "../../utils/src/contracts.js";
 import { executionLanes } from "../../utils/src/execution-lanes.js";
-import { parseServiceConfig, readServiceConfig, serviceProbes } from "../../utils/src/service-config.js";
+import { parseServiceConfig, serviceProbes } from "../../utils/src/service-config.js";
+import { executionFixture } from "../../utils/tests/fixtures.js";
 
 const families = {
   "send-receive-mail": "exchange-mail-flow",
@@ -20,9 +21,9 @@ const targets = accounts.map((mailbox, index) => ({
 }));
 
 describe("Exchange focused journey execution selection", () => {
-  it.each(["exchange/config.json", "exchange/config.live.example.json"])(
-    "runs all selected account pairs for seven journeys with independent 60/300-second lanes in %s", async path => {
-      const service = parseServiceConfig({ ...await readServiceConfig(path), enabled: true, targets });
+  it.each(["simulation", "live"] as const)(
+    "runs all selected account pairs for seven journeys with independent 60/300-second lanes in %s", mode => {
+      const service = parseServiceConfig({ ...executionFixture("exchange", mode), enabled: true, targets });
       const probes = serviceProbes(service, selected);
       expect(probes).toHaveLength(14);
       expect(new Set(probes.map(probe => probe.type))).toEqual(new Set(Object.values(families)));
@@ -40,7 +41,7 @@ describe("Exchange focused journey execution selection", () => {
     },
   );
   it("honors root scenario deselection for every account without silently restoring a core or optional variant", async () => {
-    const service = parseServiceConfig({ ...await readServiceConfig("exchange/config.json"), enabled: true, targets });
+    const service = parseServiceConfig({ ...executionFixture("exchange"), enabled: true, targets });
     const probes = serviceProbes(service, { ...selected, "recurring-calendar": false });
     expect(probes).toHaveLength(12);
     expect(probes.some(probe => probe.type === "exchange-recurring-calendar")).toBe(false);

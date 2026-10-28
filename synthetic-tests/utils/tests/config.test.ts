@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRuntimeConfig, loadConfig } from "../src/config.js";
+import { serviceProbeLimits } from "../src/contracts.js";
 
 describe("safe runtime configuration", () => {
   it("accepts typed runtime settings without retaining a serialized probe inventory", () => {
@@ -54,9 +55,10 @@ describe("safe runtime configuration", () => {
     expect(config.probes).toHaveLength(2);
   });
   it("keeps the expanded probe inventory bounded", () => {
-    const probes = Array.from({ length: 151 }, (_, index) => ({
+    const probes = Array.from({ length: serviceProbeLimits.teams + 1 }, (_, index) => ({
       id: `probe-${index}`, type: "teams-channel-message", cohort: "teams-global",
     }));
+    expect(loadConfig({ PROBES_JSON: JSON.stringify(probes.slice(0, 100)) }).probes).toHaveLength(100);
     expect(() => loadConfig({ PROBES_JSON: JSON.stringify(probes) })).toThrow("Invalid PROBES_JSON");
   });
   it.each(["NaN", "-1", "0", "120001"])("rejects invalid execution deadlines %s", PROBE_TIMEOUT_MS => {

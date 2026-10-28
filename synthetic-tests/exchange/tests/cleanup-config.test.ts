@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServiceConfig, parseServiceFileConfig, readServiceConfig, serviceSettings } from "../../utils/src/service-config.js";
+import { parseServiceConfig, parseServiceExecution, serviceSettings } from "../../utils/src/service-config.js";
+import { executionFixture } from "../../utils/tests/fixtures.js";
 import { reportedResult, resultSchema } from "../../utils/src/contracts.js";
 import { simulate } from "../../utils/src/probes.js";
 
@@ -10,10 +11,10 @@ const targets = [{ id: "exchange-001", mailbox: "synthetic@example.invalid" }];
 const selection = { "send-receive-mail": true, "edit-reopen-draft": true };
 
 describe("Exchange service-config cleanup selection", () => {
-  it("defaults to cleanup in both checked-in profiles", async () => {
-    expect(parseServiceFileConfig(file).exchangeCleanupEnabled).toBe(true);
-    for (const path of ["exchange/config.json", "exchange/config.live.example.json"]) {
-      expect((await readServiceConfig(path)).exchangeCleanupEnabled).toBe(true);
+  it("defaults to cleanup for inline simulation and live execution", () => {
+    expect(parseServiceExecution(file).exchangeCleanupEnabled).toBe(true);
+    for (const mode of ["simulation", "live"] as const) {
+      expect(executionFixture("exchange", mode).exchangeCleanupEnabled).toBe(true);
     }
   });
   it("uses the service-file setting rather than an environment override", () => {
@@ -23,7 +24,7 @@ describe("Exchange service-config cleanup selection", () => {
     expect(serviceSettings(disabled, { EXCHANGE_CLEANUP_ENABLED: "true" }).EXCHANGE_CLEANUP_ENABLED).toBe("false");
   });
   it.each(["false", "true", 0, 1, null])("rejects a non-boolean setting: %s", exchangeCleanupEnabled => {
-    expect(() => parseServiceFileConfig({ ...file, exchangeCleanupEnabled })).toThrow("exchangeCleanupEnabled");
+    expect(() => parseServiceExecution({ ...file, exchangeCleanupEnabled })).toThrow("exchangeCleanupEnabled");
     expect(() => parseServiceConfig({ ...file, enabled: true, targets, exchangeCleanupEnabled })).toThrow("exchangeCleanupEnabled");
   });
   it.each(["healthy", "failed"] as const)("models retention honestly for both Exchange journeys (%s)", async scenario => {

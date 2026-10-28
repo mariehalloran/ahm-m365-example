@@ -36,7 +36,7 @@ These parents roll up child health with native `WorstOf` dependencies; they do
 not receive synthetic reports or OTEL signals. A parent is omitted when none of
 its children are selected. Teams and OneDrive retain their direct journey children.
 
-The selected root profile and shared catalogue determine the model inventory.
+The root config and shared catalogue determine the model inventory.
 Explicit root `"serviceHealth": { "enabled": true }` adds one supporting entity
 and relationship per selected service and permits configured provider collection.
 The default and omission are off; there are no provider calls, provider lanes or
@@ -45,7 +45,8 @@ provider reports while off.
 Disabling a service or every one of its scenarios excludes its nested model and
 root reference from the desired deployment. Individual scenario switches remove
 that journey and its steps from the desired inventory, plus its parent when the
-last selected child is removed.
+last selected child is removed. With several tenants, a journey stays modeled while
+any tenant runs it.
 
 ### Stable journey IDs
 
@@ -70,7 +71,7 @@ Journey guides define exact evidence and API boundaries:
 [Teams](../synthetic-tests/teams/README.md#journeys-and-evidence),
 [OneDrive](../synthetic-tests/onedrive/README.md#journeys-and-exact-endpoints).
 Graph bot readback is not a second bot's receipt, and verified meeting
-connectivity is not received-audio proof.
+connectivity does not prove received audio, bidirectional audio or call quality.
 
 ## Health reports target signals
 
@@ -81,6 +82,19 @@ Success is `100 * succeeded / executed`; mean duration includes failed executed
 samples. A skipped action produces Unknown without a value, never a failed or
 invented successful request.
 
+With more than one tenant in the root config, each tenant's worker publishes every
+overall signal as `tenant-<tenant id>--<signal>` (for example
+`tenant-contoso--synthetic-success-percentage`), and each entity's **External
+Reports** group lists one such set per tenant that runs it, so tenants never
+overwrite one another on the shared service model. This covers the journey and step
+signals above, the `teams-call` signals below and the Service Health and
+activity signals. With exactly one tenant the names stay plain, as listed here.
+Group signals keep `group-<id>--tenant-<tenant id>--<signal>` and are not qualified
+twice. Adding a second tenant (or dropping back to one) renames every overall signal
+at once: `npm run deploy` changes models and workers together, new members stay
+unresolved until workers publish under the new names, and reports under the old
+names expire after the report TTL.
+
 Default Degraded/Unhealthy rules are below 99%/95% success or above
 15,000/60,000 ms mean duration; equality does not breach. A timed-out attempt
 contributes success 0 and is Unhealthy, while unexecuted dependent actions remain
@@ -88,16 +102,8 @@ unobserved. Cleanup/credential failures can fail the journey without inventing
 failed business actions.
 
 The existing `teams-call` entity also has four immediate call-specific signals:
-connection/disconnection success and duration. No audio-quality entity or
-placeholder quality members are deployed by default.
-Only explicitly selected keys in root `healthModel.callQualityThresholds` add
-quality members to its External Reports group. Configure those keys only after
-the [opt-in audio feasibility test](../synthetic-tests/teams/README.md) confirms
-the corresponding metrics are actually returned for the selected bots.
-Quality collection uses actual returned call-chain IDs and publishes only
-observed metric values, including real zeros. Missing, denied or pending
-measurements stay in diagnostics, not placeholder entity reports.
-These measurements do not add journeys or business-step entities.
+connection/disconnection success and duration. These measurements do not add
+journeys or business-step entities.
 
 Live ingestion uses the
 [Health Report Ingestion API](https://learn.microsoft.com/azure/azure-monitor/health-models/health-report-ingestion)
@@ -114,13 +120,28 @@ The ingestion request schema does not support `dataUnit`, and external signal
 definitions are read-only. Native unit labels therefore cannot be written by
 this reporter; optional query-backed signals have native units.
 
+## Optional reporting groups
+
+Root `groups` add native `signalAggregationGroups` to **journey** entities only,
+next to `external-reports`: one `reporting-<group id>` group per user group,
+displayed with the group's `displayName` and combined `WorstOf`. Its `members` are the
+group's `group-<id>--tenant-<tenant>--<signal>` signals, one set per tenant service the
+group has member targets in: `synthetic-success-percentage` and
+`synthetic-mean-duration`, plus the four call-phase signals on `teams-call`. Step,
+Service Health and OTEL signals are never included, and no entities,
+relationships or models are added. A journey receives a group only when its tenant
+service and scenario are enabled and the group has a member target for it.
+TypeScript resolves membership into the template's `reportingGroups` parameter; Bicep
+applies no membership logic. Group health reaches parents through the normal
+dependency roll-up. See [reporting groups](../docs/monitoring-groups.md).
+
 ## Microsoft-reported Service Health
 
-This section applies only when root `serviceHealth.enabled` is `true`. Existing
-service-file source switches, cadences, permissions and live/beta approvals still
-apply. The root configuration includes a `$comment` explaining advanced monitoring's
-documented 5,000 qualifying E3/E5 license / 50 monthly-active-user requirements and
-the need to confirm beta API eligibility. Stable Service Health has no such minimum.
+This section applies only when root `serviceHealth.enabled` is `true`. Each service's
+`execution` source switches, cadences, permissions and live/beta approvals still
+apply. Microsoft documents the related advanced monitoring feature for at least
+5,000 qualifying E3/E5 licenses and 50 monthly active users; confirm beta API
+eligibility with Microsoft. Stable Service Health has no such minimum.
 
 All provider reports for a product target **`${service}-service-health` itself**:
 
@@ -129,6 +150,9 @@ All provider reports for a product target **`${service}-service-health` itself**
 | Stable `serviceAnnouncement.healthOverviews` | `microsoft-reported-service-status` |
 | Stable `serviceAnnouncement.issues` | `microsoft-reported-issue-count` |
 | Each approved beta activity function | `microsoft-activity-<activity-function>` |
+
+With several tenants each name is published as `tenant-<tenant id>--<name>`, so the
+single `${service}-service-health` entity carries one set per tenant.
 
 The stable list collector selects exact product service names: `Exchange Online`,
 `Microsoft Teams`, and `Microsoft OneDrive`. OneDrive additionally requires
@@ -142,8 +166,9 @@ activity call is introduced.
 Native grouping uses the `2026-10-01-preview`
 [ARM `signalAggregationGroups` contract](https://learn.microsoft.com/azure/templates/microsoft.cloudhealth/2026-10-01-preview/healthmodels/entities#signalaggregationgroup):
 one `external-reports` group, display name **External Reports**, `WorstOf`, and
-`members` containing **signal-name strings**, not entity names or signal
-definitions. Ingestion creates external signals; the template does not write
+`members` containing **signal-name strings** (one set per tenant when several
+tenants run the entity), not entity names or signal definitions. Ingestion creates
+external signals; the template does not write
 read-only external signal definitions or invent `signalGroups.externalReports`.
 Predeclared members without reports are unresolved/Unknown. Each report retains
 its source and API version in `additionalContext`, so grouping does not conflate
@@ -190,18 +215,12 @@ Neither permission authorizes Microsoft 365 access.
 
 ## Apply and migrate
 
-Commands run from the repository root using the **same reviewed private root**
-as the workers:
-
-```sh
-az deployment group what-if --subscription '<subscription>' \
-  --resource-group '<resource-group>' --template-file health-model/infra/main.bicep \
-  --parameters projectConfig=@/approved/path/monitoring.private.json
-
-az deployment group create --subscription '<subscription>' \
-  --resource-group '<resource-group>' --template-file health-model/infra/main.bicep \
-  --parameters projectConfig=@/approved/path/monitoring.private.json
-```
+Run `npm run deploy` from `synthetic-tests/`. It deploys these models first, from the
+same root config the workers mount, then the workers; `npm run deploy -- --plan`
+previews locally with no Azure changes. The command passes the template the config
+plus the TypeScript-resolved `reportingGroups`, so do not apply
+`health-model/infra/main.bicep` with `az deployment` directly: that would omit the
+group aggregation. See [deployment](../docs/deployment.md#deploy-with-one-command).
 
 Incremental ARM deployment does **not** delete omitted entities, relationships,
 models, query bindings or worker apps. Compare paginated live inventories with
@@ -212,7 +231,7 @@ OneDrive IDs above.
 
 ### Grouping Exchange under Mail and Calendar
 
-1. Deploy the updated model with the same reviewed root configuration. It creates
+1. Deploy the updated model with `npm run deploy` and the same root config. It creates
    the selected `exchange-mail`/`exchange-calendar` parents and routes the existing
    journeys through them. Journey/step IDs, direct-report destinations, optional
    OTEL queries and worker schedules are unchanged by grouping alone. The separate
@@ -234,36 +253,13 @@ business-step children before updated workers send reports there. After old
 workers stop, explicitly retire only the attachment journey's old reply/confirm
 children and their relationships. See the [ordered scenario/fixture migration](../synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately).
 
-### Retiring Teams audio testing
-
-The `teams-call` journey keeps its ID and five connectivity business steps.
-Audio playback is no longer a prerequisite or a reported step.
-
-1. Deploy the matching model and worker image/configuration. Remove
-   `teamsCallingPlaybackEnabled`/`teamsCallingPlaybackTimeoutSeconds` and
-   `TEAMS_CALLING_PLAYBACK_*` environment settings from private profiles; stop
-   all old Teams worker revisions so they cannot refresh retired reports.
-2. In the Teams service model, remove only the owned
-   `teams-call-to-teams-call-play-audio` relationship, then the
-   `teams-call-play-audio` entity. Incremental deployment does not delete them.
-   Keep `teams-call` and its five retained business steps. There is no separate
-   audio-quality entity.
-3. The updated journey External Reports group omits
-   `teams-call-playback-success-percentage`, `teams-call-mean-playback-duration`
-   and unselected quality measurements. Quality members require explicitly
-   configured thresholds for verified metrics; the checked-in thresholds are
-   empty. Stop old workers that refresh placeholder reports, allow retired
-   reports to expire at their configured TTL, and verify fresh connectivity
-   reports and the evaluated rollup. Do not write read-only external signal
-   definitions or assume that a source change repairs live health.
-
 ### Consolidating Service Health: ordered handoff
 
-1. Deploy the matching model template first, with the same reviewed root profile
-   used to prepare workers. Existing parent entities gain their combined signal
+1. Deploy the matching model template first, with the same root config the
+   workers use. Existing parent entities gain their combined signal
    group; do **not** delete old children yet.
 2. Deploy one immutable image containing the matching reporters and collectors
-   to all selected workers, together with the matching root/service files.
+   to all selected workers, together with the matching root config.
    Retain independently scheduled 300-second provider lanes and explicit live/
    beta approvals. For OneDrive, enable stable `serviceHealth` and select the
    existing federated read-only `providerClientId`; verify that the explicitly
@@ -316,8 +312,8 @@ parent journeys, 12 executable journeys and
 
 The Teams scenario key migrates to `channel-conversation`; the old misleading
 key is rejected. Select only `channel-conversation`/`scheduled-meeting`, and only
-the three OneDrive scenarios above. Delete removed service/scenario keys from
-private profiles and their execution lanes. Redeploy source/models/workers
+the three OneDrive scenarios above. Delete removed service/scenario keys and
+their execution lanes from the config. Redeploy source/models/workers
 coherently; do not route reports to an undeployed replacement ID.
 
 When disabling OTEL, explicitly retire owned stale query bindings, permissions,

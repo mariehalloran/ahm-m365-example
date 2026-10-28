@@ -9,12 +9,12 @@ import { createProbeTelemetry, validateConnectionString, type AzureExporterFacto
 import { createResultTelemetry, TelemetryExportError } from "../src/otel.js";
 import { baseResult, simulate } from "../src/probes.js";
 import { isReportedStep, probeServices, testTypes, type SyntheticResult } from "../src/contracts.js";
-import { readProjectConfig } from "../src/project-config.js";
+import { liveTenantEnv, projectFixture } from "./fixtures.js";
 import { parseServiceConfig } from "../src/service-config.js";
 import { runServiceWorker } from "../src/worker.js";
 
 const stamp = "2026-10-22T12:00:00.000Z";
-const project = await readProjectConfig("../monitoring.config.json");
+const project = projectFixture();
 vi.mock("@azure/identity", () => ({
   ManagedIdentityCredential: vi.fn(function () {
     return { getToken: vi.fn(async () => ({ token: "mock-arm-token", expiresOnTimestamp: Date.now() + 60000 })) };
@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 describe("optional OTEL observation contract", () => {
-  it("exports call-phase samples and quality snapshots without target dimensions or synthetic double-counting", async () => {
+  it("exports call-phase samples without target dimensions or synthetic double-counting", async () => {
     const sinks = exporters();
     const telemetry = createResultTelemetry(sinks, output());
     try {
@@ -59,27 +59,11 @@ describe("optional OTEL observation contract", () => {
         signal: new AbortController().signal, telemetry: output(), now: () => Date.parse(stamp),
       });
       telemetry.record(result, "live");
-      telemetry.recordCallQuality?.({
-        cycleId: "quality-cycle", collectedAt: stamp,
-        callQuality: [{
-          status: "available", observation: {
-            callChainId: "11111111-1111-4111-8111-111111111111", version: 1,
-            startDateTime: stamp, endDateTime: stamp, audioStreamCount: 1,
-            codecs: ["opus"], streamDirections: ["callerToCallee"],
-            metrics: { jitterMs: { value: 12, sampleCount: 1 } },
-          },
-        }],
-      });
       await telemetry.forceFlush();
       const metrics = sinks.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics));
       expect(metrics.find(metric => metric.descriptor.name === "teams.call.connection.success")?.dataPoints[0]?.value).toMatchObject({ count: 1, sum: 1 });
       expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value).toMatchObject({ count: 1, sum: 1 });
-      const jitter = metrics.find(metric => metric.descriptor.name === "teams.call.quality.jitterMs");
-      expect(jitter?.descriptor.unit).toBe("ms");
-      expect(jitter?.dataPoints[0]?.value).toBe(12);
-      expect(metrics.some(metric => metric.descriptor.name === "teams.call.quality.packetLossPercent")).toBe(false);
       expect(JSON.stringify(metrics)).not.toMatch(/bot-target|probe\.id|callChainId/);
-      expect(sinks.logs.getFinishedLogRecords().filter(record => record.body === "teams-call-quality")).toHaveLength(1);
     } finally { await telemetry.shutdown(); }
   });
   it.each(testTypes)("exports %s with explicit mode and journey attribution", async type => {
@@ -343,7 +327,7 @@ describe("worker health-report independence", () => {
           ...project, otel: { enabled: true, destination: "console" },
           healthModel: { ...project.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
         },
-        once: true, env: { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222" },
+        once: true, env: { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222", ...liveTenantEnv },
         telemetry: events, createOtel,
         handler: async probe => ({ ...baseResult(probe, Date.now()), success: true, durationMs: 1 }),
       })).rejects.toThrow();
@@ -364,7 +348,7 @@ describe("worker health-report independence", () => {
         healthModel: { ...project.healthModel, subscriptionId: "11111111-1111-4111-8111-111111111111" },
       },
       once: true, telemetry: events,
-      env: { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222" },
+      env: { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222", ...liveTenantEnv },
       handler: async probe => ({ ...baseResult(probe, Date.now()), success: true, durationMs: 1 }),
       providers: async context => {
         context.results.recordDiagnostic({

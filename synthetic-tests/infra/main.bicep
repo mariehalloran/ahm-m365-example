@@ -1,49 +1,61 @@
 targetScope = 'resourceGroup'
 
-@description('The approved root configuration. Keep credentials out of this object.')
+@description('The single root monitoring configuration. Secrets are references, never values.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
-@description('Resolved service-owned files, prepared from root configFile paths by deployment:prepare.')
-param serviceConfigs object = {
-  exchange: loadJsonContent('../exchange/config.json')
-  teams: loadJsonContent('../teams/config.json')
-  onedrive: loadJsonContent('../onedrive/config.json')
-}
-@description('Nonsecret M365 application and peer-bot access metadata and Key Vault secret URIs; never private keys or tokens.')
-param serviceAccess object = {}
 @secure()
-@description('Approved Container Apps native certificate PEMs keyed by service. Supply separately as a protected secure parameter, never in ordinary config/parameter files.')
+@description('Internal secure input: native certificate PEMs keyed by tenant alias and service.')
 param serviceCertificates object = {}
-param location string = resourceGroup().location
-@description('Reuse the already-approved registry/environment without issuing foundation PUTs. They must already exist with this model naming.')
-param reuseExistingFoundation bool = false
-@description('First deploy false to establish the private registry and identities; then deploy the built image.')
+param location string = projectConfig.deployment.location
 param deployWorkers bool = false
 param workerImage string = ''
-@description('Separate Microsoft 365 mutation gate; simulation deployments leave this false.')
-param enableLiveProbes bool = false
-param enableBetaServiceActivity bool = false
-@description('The optional Application Insights component created by the health-model deployment.')
-param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
+param applicationInsightsName string = projectConfig.deployment.?applicationInsightsName ?? 'appi-${projectConfig.healthModel.name}'
+
+// A tenant service gets one worker when it is enabled with at least one scenario.
+func hostsWorker(selection object) bool =>
+  selection.enabled && !empty(filter(items(selection.scenarios), scenario => scenario.value))
+
+func workerIdentityId(worker object, healthModel object) string =>
+  worker.?identityResourceId ?? '/subscriptions/${healthModel.subscriptionId}/resourceGroups/${healthModel.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${worker.?identityName ?? ''}'
 
 var modelName = projectConfig.healthModel.name
-var services = filter(
-  ['exchange', 'teams', 'onedrive'],
-  service =>
-    (projectConfig.services[?service].?enabled ?? false) && !empty(filter(
-      items(projectConfig.services[?service].?scenarios ?? {}),
-      scenario => scenario.value
-    ))
-)
-var resourceToken = uniqueString(resourceGroup().id, modelName)
-var registryName = 'crm365${resourceToken}'
+var settings = projectConfig.deployment
+var workers = flatten(map(
+  projectConfig.tenants,
+  tenant => map(
+    filter(['exchange', 'teams', 'onedrive'], service => hostsWorker(tenant.services[service])),
+    service => {
+      tenant: tenant.id
+      service: service
+      selection: tenant.services[service]
+      identityId: workerIdentityId(tenant.services[service].worker, projectConfig.healthModel)
+    }
+  )
+))
 var tags = { workload: modelName, purpose: 'synthetic-worker' }
+var createFoundation = settings.foundation.mode == 'create'
+var registryId = createFoundation
+  ? resourceId('Microsoft.ContainerRegistry/registries', settings.foundation.registryName)
+  : settings.foundation.registryResourceId
+var environmentId = createFoundation
+  ? resourceId('Microsoft.App/managedEnvironments', settings.foundation.environmentName)
+  : settings.foundation.environmentResourceId
+var identityIds = union(map(workers, worker => worker.identityId), [])
+var newIdentityNames = union(map(
+  filter(workers, worker => empty(worker.selection.worker.?identityResourceId ?? '')),
+  worker => worker.selection.worker.identityName
+), [])
+var reportGrants = union(
+  map(workers, worker => { service: worker.service, identityId: worker.identityId }),
+  []
+)
+var modelServices = union(map(workers, worker => worker.service), [])
 var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'
-resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (useAzureMonitor && !empty(services)) {
+
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (useAzureMonitor && !empty(workers)) {
   name: applicationInsightsName
 }
-
-resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (!reuseExistingFoundation) {
-  name: registryName
+resource newRegistry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (createFoundation) {
+  name: settings.foundation.registryName
   location: location
   tags: tags
   sku: { name: 'Basic' }
@@ -54,17 +66,31 @@ resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (!reu
     roleAssignmentMode: 'LegacyRegistryPermissions'
   }
 }
-
-resource environment 'Microsoft.App/managedEnvironments@2026-07-01' = if (!reuseExistingFoundation) {
-  name: 'cae-${modelName}'
+resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
+  scope: resourceGroup(split(registryId, '/')[2], split(registryId, '/')[4])
+  name: last(split(registryId, '/'))
+}
+resource newEnvironment 'Microsoft.App/managedEnvironments@2026-07-01' = if (createFoundation) {
+  name: settings.foundation.environmentName
   location: location
   tags: tags
   properties: {
-    // Console streaming works without configuring workspace log forwarding.
     workloadProfiles: [{ name: 'Consumption', workloadProfileType: 'Consumption' }]
   }
 }
-
+resource newIdentities 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = [
+  for name in newIdentityNames: {
+    name: name
+    location: location
+    tags: tags
+  }
+]
+resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = [
+  for id in identityIds: {
+    scope: resourceGroup(split(id, '/')[2], split(id, '/')[4])
+    name: last(split(id, '/'))
+  }
+]
 resource reportWriter 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(resourceGroup().id, modelName, 'health-report-writer')
   properties: {
@@ -72,87 +98,71 @@ resource reportWriter 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
     description: 'Publish health reports only; no model administration or Microsoft 365 access.'
     type: 'CustomRole'
     assignableScopes: [resourceGroup().id]
-    permissions: [
-      {
-        actions: ['Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action']
-        notActions: []
-        dataActions: []
-        notDataActions: []
-      }
-    ]
+    permissions: [{
+      actions: ['Microsoft.CloudHealth/healthmodels/entities/ingestHealthReport/action']
+      notActions: []
+      dataActions: []
+      notDataActions: []
+    }]
   }
 }
-
-resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = [
-  for service in services: {
-    name: 'uami-${modelName}-${service}'
-    location: location
-    tags: tags
-  }
-]
-
 resource models 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' existing = [
-  for service in services: {
+  for service in modelServices: {
     name: '${modelName}-${service}'
   }
 ]
-
 resource reportAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for (service, index) in services: {
-    name: guid(models[index].id, identities[index].id, reportWriter.id)
-    scope: models[index]
+  for grant in reportGrants: {
+    name: guid(models[indexOf(modelServices, grant.service)].id, grant.identityId, reportWriter.id)
+    scope: models[indexOf(modelServices, grant.service)]
     properties: {
       roleDefinitionId: reportWriter.id
-      principalId: identities[index].properties.principalId
+      principalId: identities[indexOf(identityIds, grant.identityId)].properties.principalId
       principalType: 'ServicePrincipal'
     }
+    dependsOn: [newIdentities]
   }
 ]
-
-resource imagePullAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for (service, index) in services: {
-    name: guid(registry.id, identities[index].id, 'acr-pull')
-    scope: registry
-    properties: {
-      roleDefinitionId: subscriptionResourceId(
-        'Microsoft.Authorization/roleDefinitions',
-        '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-      )
+module imagePullAssignments './registry-pull.bicep' = {
+  name: 'registry-pull'
+  scope: resourceGroup(split(registryId, '/')[2], split(registryId, '/')[4])
+  params: {
+    registryName: registry.name
+    assignments: [for (id, index) in identityIds: {
+      identityId: id
       principalId: identities[index].properties.principalId
-      principalType: 'ServicePrincipal'
-    }
+    }]
   }
-]
-
-module workers './worker.bicep' = [
-  for (service, index) in services: if (deployWorkers) {
-    name: '${service}-worker'
+  dependsOn: [newIdentities, newRegistry]
+}
+module workerApps './worker.bicep' = [
+  for worker in workers: if (deployWorkers) {
+    name: 'worker-${worker.tenant}-${worker.service}'
     params: {
-      appName: 'm365-${take(resourceToken, 6)}-${service}'
+      appName: worker.selection.worker.appName
       location: location
       tags: tags
-      environmentId: environment.id
-      registryServer: registry!.properties.loginServer
-      identityResourceId: identities[index].id
-      identityClientId: identities[index].properties.clientId
+      environmentId: environmentId
+      registryServer: registry.properties.loginServer
+      identityResourceId: worker.identityId
+      identityClientId: identities[indexOf(identityIds, worker.identityId)].properties.clientId
       tenantId: subscription().tenantId
+      tenantAlias: worker.tenant
+      service: worker.service
       workerImage: workerImage
       projectConfig: projectConfig
-      serviceConfig: serviceConfigs[service]
-      serviceAccess: serviceAccess[?service] ?? {}
-      m365CertificatePem: (serviceAccess[?service].?m365CertificateSource ?? 'key-vault') == 'container-app'
-        ? serviceCertificates[service]
-        : ''
-      enableLiveProbes: enableLiveProbes
-      enableBetaServiceActivity: enableBetaServiceActivity
+      m365CertificatePem: (worker.selection.?access.?m365CertificateSource ?? 'key-vault') == 'container-app'
+        ? (serviceCertificates[?worker.tenant][?worker.service] ?? '') : ''
+      enableLiveProbes: settings.enableLiveProbes
+      enableBetaServiceActivity: settings.enableBetaServiceActivity
       applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
-    dependsOn: [reportAssignments, imagePullAssignments]
+    dependsOn: [newEnvironment, newRegistry, newIdentities, reportAssignments, imagePullAssignments]
   }
 ]
 
 output registryName string = registry.name
-output registryServer string = registry!.properties.loginServer
-output environmentId string = environment.id
-output appNames array = [for service in services: 'm365-${take(resourceToken, 6)}-${service}']
-output identityIds array = [for (service, index) in services: identities[index].id]
+output registryServer string = registry.properties.loginServer
+output environmentId string = environmentId
+output appNames array = map(workers, worker => worker.selection.worker.appName)
+output identityIds array = identityIds

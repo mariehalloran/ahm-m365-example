@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServiceConfig, parseServiceFileConfig, readServiceConfig, serviceSettings } from "../../utils/src/service-config.js";
+import { parseServiceConfig, parseServiceExecution, serviceSettings } from "../../utils/src/service-config.js";
+import { executionFixture } from "../../utils/tests/fixtures.js";
 import { reportedResult, resultSchema } from "../../utils/src/contracts.js";
 import { simulate } from "../../utils/src/probes.js";
 
@@ -10,10 +11,10 @@ const targets = [{ id: "teams-001" }];
 const selection = { "channel-conversation": true };
 
 describe("Teams service-config cleanup selection", () => {
-  it("defaults to cleanup and explicitly keeps both checked-in profiles safe", async () => {
-    expect(parseServiceFileConfig(file).teamsCleanupEnabled).toBe(true);
-    for (const path of ["teams/config.json", "teams/config.live.example.json"]) {
-      expect((await readServiceConfig(path)).teamsCleanupEnabled).toBe(true);
+  it("defaults to cleanup for inline simulation and live execution", () => {
+    expect(parseServiceExecution(file).teamsCleanupEnabled).toBe(true);
+    for (const mode of ["simulation", "live"] as const) {
+      expect(executionFixture("teams", mode).teamsCleanupEnabled).toBe(true);
     }
   });
   it("carries the service-file setting through execution config without environment overrides", () => {
@@ -23,7 +24,7 @@ describe("Teams service-config cleanup selection", () => {
     expect(serviceSettings(disabled, { TEAMS_CLEANUP_ENABLED: "true" }).TEAMS_CLEANUP_ENABLED).toBe("false");
   });
   it.each(["false", "true", 0, 1, null])("rejects a non-boolean toggle: %s", teamsCleanupEnabled => {
-    expect(() => parseServiceFileConfig({ ...file, teamsCleanupEnabled })).toThrow("teamsCleanupEnabled");
+    expect(() => parseServiceExecution({ ...file, teamsCleanupEnabled })).toThrow("teamsCleanupEnabled");
     expect(() => parseServiceConfig({ ...file, enabled: true, targets, teamsCleanupEnabled })).toThrow("teamsCleanupEnabled");
   });
   it.each(["healthy", "failed"] as const)(

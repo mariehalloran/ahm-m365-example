@@ -6,7 +6,6 @@ permit the source settings below. Omitting the root setting, omitting `enabled`,
 or setting it to `false` means no Service Health entity, provider lane, Graph
 provider calls or provider reports. Synthetic journeys are unchanged.
 
-The root configuration's `$comment` records permissions and eligibility.
 Microsoft documents the related advanced monitoring feature for at least 5,000
 qualifying Office/Microsoft 365 E3/E5 licenses and 50 monthly active users.
 Confirm beta API eligibility with Microsoft; consent alone does not establish it.
@@ -17,8 +16,8 @@ Each existing service container has an **independent provider lane**. It does no
 ## Short setup
 
 1. Explicitly enable root `serviceHealth.enabled` only when this supporting context is wanted.
-2. Approve application `ServiceHealth.Read.All` for stable data across Exchange, Teams and OneDrive; separately approve `ServiceActivity-Exchange.Read.All` and/or `ServiceActivity-Teams.Read.All` only when enabling those beta collectors. Keep mailbox/calendar/drive grants on the synthetic identity narrowly scoped. Optional service `providerClientId` selects the separately federated read-only provider application; it never selects the synthetic or Azure-report identity. Every hosted worker uses its explicitly selected managed identity and needs its own trust on that provider application; there is no certificate fallback.
-3. Set these **service-file** settings (not root selection/target fields):
+2. Approve application `ServiceHealth.Read.All` for stable data across Exchange, Teams and OneDrive; separately approve `ServiceActivity-Exchange.Read.All` and/or `ServiceActivity-Teams.Read.All` only when enabling those beta collectors. Keep mailbox/calendar/drive grants on the synthetic identity narrowly scoped. Optional `execution.providerClientId` selects the separately federated read-only provider application; it never selects the synthetic or Azure-report identity. Every hosted worker uses its explicitly selected managed identity and needs its own trust on that provider application; there is no certificate fallback.
+3. Set these in the service's `execution` block (`tenants[].services.<service>.execution`), not in root selection/target fields:
 
 ```json
 {
@@ -39,20 +38,17 @@ Each existing service container has an **independent provider lane**. It does no
 }
 ```
 
-The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects 1–5 unique functions for that service; omitting it selects all five approved functions. Beta remains **disabled by default** in checked-in profiles.
+The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects 1–5 unique functions for that service; omitting it selects all five approved functions. Beta remains **disabled by default** in the checked-in config.
 
 For **OneDrive**, set `serviceHealth: true` and keep `serviceActivity.enabled: false`, with no beta `functions` or `thresholds`. The same optional `providerClientId` selects the existing read-only provider app; it does not add Graph permissions. Its provider lane is also 300 seconds.
 
-4. Deploy matching models first (one combined External Reports group per Service Health entity), then prepare workers with explicit approvals:
+4. Set the explicit approvals in the `deployment` section, then run `npm run deploy`, which deploys the matching models first (one combined External Reports group per Service Health entity) and then the workers:
 
-```sh
-npm --prefix synthetic-tests run deployment:prepare -- \
-  /absolute/path/monitoring.private.json ./workers.parameters.json \
-  registry.example.invalid/probes:approved \
-  --enable-live --enable-beta-service-activity
+```json
+"deployment": { "enableLiveProbes": true, "enableBetaServiceActivity": true }
 ```
 
-The generated ARM parameter `enableBetaServiceActivity: true` mounts `ENABLE_BETA_SERVICE_ACTIVITY=true` in each worker. No environment override or hidden deployment profile is required. Local live commands still require both `ENABLE_LIVE_M365=true` and `ENABLE_BETA_SERVICE_ACTIVITY=true`; beta acknowledgement is also required when explicitly testing beta-enabled simulation. `--once` settles synthetic and provider lanes before exit.
+`enableBetaServiceActivity: true` mounts `ENABLE_BETA_SERVICE_ACTIVITY=true` in each worker, and deployment rejects a live worker that enables `serviceActivity` without it. No environment override is required. Local live commands still require both `ENABLE_LIVE_M365=true` and `ENABLE_BETA_SERVICE_ACTIVITY=true`; beta acknowledgement is also required when explicitly testing beta-enabled simulation. `--once` settles synthetic and provider lanes before exit.
 
 5. Validate actual Graph authorization, returned buckets and accepted AHM ingestion. Permission assignment is not proof of tenant eligibility, publication latency, model evaluation or alert delivery. Beta APIs are preview/unsupported for production under their beta contract.
 
@@ -106,9 +102,9 @@ Authentication or permission failures and unavailable observations produce **no 
 
 Issue history is bounded diagnostic context, not an independent availability score. A successful complete snapshot emits an `issue-summary` diagnostic, including an empty snapshot as count zero; `microsoft-reported-issue-count` reports that count on the same supporting entity with Unknown health and no evaluation rules. Failed/incomplete/missing snapshots produce no report, never zero issues. Old incident update times are not the collection freshness of an overview.
 
-Every enabled selected function with usable data produces `microsoft-activity-<function>` on **`${service}-service-health`**, alongside available `microsoft-reported-service-status` and `microsoft-reported-issue-count` reports. Signal names remain distinct and unchanged; only destinations are consolidated. Without a threshold an activity signal reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic or call-quality score. All approved signal names remain group members when disabled/unselected, but receive no new reports; OneDrive has only its two stable members.
+Every enabled selected function with usable data produces `microsoft-activity-<function>` on **`${service}-service-health`**, alongside available `microsoft-reported-service-status` and `microsoft-reported-issue-count` reports. Signal names remain distinct and unchanged; only destinations are consolidated. With more than one tenant in the config each is published as `tenant-<tenant id>--<name>`, one set per tenant on the shared entity; with one tenant the names stay plain. Without a threshold an activity signal reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic score. All approved signal names remain group members when disabled/unselected, but receive no new reports; OneDrive has only its two stable members.
 
-The native ARM `signalAggregationGroups` entry is named `external-reports`, displayed as **External Reports**, and lists the signal-name strings in `members`. It is not a child-entity graph, an unsupported `signalGroups.externalReports` object or a writable external-signal declaration. `WorstOf` combines known member states; Unknown members do not override known states, even with `ignoreUnknown: false`. Per-signal health and source diagnostics remain authoritative for missing data. `additionalContext.source` and `apiVersion` distinguish each stable endpoint/beta function within the combined group; the supporting entity remains suppressed.
+The native ARM `signalAggregationGroups` entry is named `external-reports`, displayed as **External Reports**, and lists the signal-name strings in `members` (one set per tenant when several tenants run the service). It is not a child-entity graph, an unsupported `signalGroups.externalReports` object or a writable external-signal declaration. `WorstOf` combines known member states; Unknown members do not override known states, even with `ignoreUnknown: false`. Per-signal health and source diagnostics remain authoritative for missing data. `additionalContext.source` and `apiVersion` distinguish each stable endpoint/beta function within the combined group; the supporting entity remains suppressed.
 
 Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Available diagnostic measurements with Unknown health also retain unit context; missing observations are not published. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#direct-report-units-platform-limitation) and [ordered migration with exact retired IDs and model inventory](../health-model/README.md#consolidating-service-health-ordered-handoff). All old worker revisions must be inactive before final child/relationship pruning.
 

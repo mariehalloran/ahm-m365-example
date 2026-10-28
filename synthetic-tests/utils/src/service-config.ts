@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { maxOneDriveTargets, probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
-import { ConfigurationError, createRuntimeConfig, readConfigJson, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
+import { maxServiceTargets, probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
+import { ConfigurationError, createRuntimeConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 export { activityFunctions } from "./provider-catalog.js";
 
@@ -31,11 +31,6 @@ const serviceFields = {
   teamsCallingCallbackUrl: teamsCallingCallbackUrlSchema.optional(),
   teamsCallingPort: z.number().int().min(1024).max(65535).default(8080),
   teamsCallingAnswerTimeoutSeconds: z.number().int().min(1).max(30).default(20),
-  teamsCallQuality: z.object({
-    enabled: z.boolean().default(false),
-    maxWaitSeconds: z.number().int().min(1).max(60).default(30),
-    pollIntervalSeconds: z.number().int().min(1).max(30).default(5),
-  }).strict().default({}),
   teamsCleanupEnabled: z.boolean().default(true),
   exchangeCleanupEnabled: z.boolean().default(true),
   executionLanes: z.array(z.object({
@@ -49,10 +44,9 @@ const serviceFields = {
   providerIntervalSeconds: z.number().int().min(1).max(86400).default(300),
   serviceActivity: serviceActivitySchema.default({}),
 };
-const serviceFileSchema = z.object({
-  ...serviceFields, type: z.enum(["exchange", "teams", "onedrive"]),
-}).strict();
-export type ServiceFileConfig = z.infer<typeof serviceFileSchema>;
+export const serviceExecutionSchema = z.object(serviceFields).strict();
+const typedExecutionSchema = serviceExecutionSchema.extend({ type: z.enum(["exchange", "teams", "onedrive"]) });
+export type ServiceExecution = z.infer<typeof typedExecutionSchema>;
 const common = {
   ...serviceFields,
   enabled: z.boolean(),
@@ -63,24 +57,24 @@ export const serviceTargetSchemas = {
     mailbox: probeSchema.shape.mailbox, recipientMailbox: probeSchema.shape.recipientMailbox,
     replySeed: probeSchema.shape.replySeed,
     distributionList: probeSchema.shape.distributionList,
-  }).strict()).max(30),
+  }).strict()).max(maxServiceTargets),
   onedrive: z.array(target.extend({
     userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
     driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
     folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
-  }).strict()).max(maxOneDriveTargets),
+  }).strict()).max(maxServiceTargets),
   teams: z.array(target.extend({
     tenantId: probeSchema.shape.tenantId,
     teamId: probeSchema.shape.teamId,
     channelId: probeSchema.shape.channelId,
     serviceUrl: probeSchema.shape.serviceUrl,
-  }).strict()).max(30),
+  }).strict()).max(maxServiceTargets),
 };
 export const teamsCallTargetsSchema = z.array(target.extend({
   tenantId: z.string().uuid(),
   meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
   organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
-}).strict()).max(30).default([]);
+}).strict()).max(maxServiceTargets).default([]);
 const serviceSchema = z.discriminatedUnion("type", [
   z.object({
     ...common, type: z.literal("exchange"),
@@ -98,13 +92,7 @@ const serviceSchema = z.discriminatedUnion("type", [
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
 
-function validateProviderSettings(service: ServiceFileConfig): void {
-  if (service.teamsCallQuality.enabled && service.type !== "teams") {
-    throw new ConfigurationError("teamsCallQuality is supported only for Teams");
-  }
-  if (service.teamsCallQuality.pollIntervalSeconds > service.teamsCallQuality.maxWaitSeconds) {
-    throw new ConfigurationError("teamsCallQuality polling interval must not exceed its collection budget");
-  }
+function validateProviderSettings(service: ServiceExecution): void {
   if (service.type === "onedrive" && (service.serviceActivity.enabled ||
       service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
     throw new ConfigurationError("OneDrive has no approved beta service activity functions");
@@ -144,8 +132,8 @@ function validateProviderSettings(service: ServiceFileConfig): void {
   }
 }
 
-export function parseServiceFileConfig(raw: unknown): ServiceFileConfig {
-  const parsed = serviceFileSchema.safeParse(raw);
+export function parseServiceExecution(raw: unknown): ServiceExecution {
+  const parsed = typedExecutionSchema.safeParse(raw);
   if (!parsed.success) {
     throw new ConfigurationError(`Invalid service config fields: ${parsed.error.issues.map(issue => issue.path.join(".") || "(root)").join(", ")}; enabled and targets belong in the root project config`);
   }
@@ -167,10 +155,6 @@ export function parseServiceConfig(raw: unknown): ServiceConfig {
     throw new ConfigurationError("Probe IDs must be unique");
   }
   return service;
-}
-
-export async function readServiceConfig(file: string): Promise<ServiceFileConfig> {
-  return parseServiceFileConfig(await readConfigJson(file, "service"));
 }
 
 export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readonly<Record<string, boolean>>): Probe[] {

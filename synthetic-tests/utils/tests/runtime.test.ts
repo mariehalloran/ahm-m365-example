@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
 import { createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "../src/auth.js";
 import { createHealthReporter } from "../src/health-reports.js";
-import { readProjectConfig } from "../src/project-config.js";
+import { projectFixture } from "./fixtures.js";
 import { providerGraphClient, serviceRuntime } from "../src/runtime.js";
 import { TeamsBotClient } from "../src/teams.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
@@ -40,7 +40,7 @@ const certificate = {
   AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222",
   AZURE_CLIENT_CERTIFICATE_PATH: "certificate.pem",
 };
-const project = await readProjectConfig("../monitoring.config.json");
+const project = projectFixture();
 
 describe("independent Graph and health-report identities", () => {
   it.each(["id", "tenantId", "meetingThreadId", "organizerUserId", "peerBotClientId"] as const)(
