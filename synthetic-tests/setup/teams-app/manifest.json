@@ -1,0 +1,46 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.19",
+  "version": "{{version}}",
+  "id": "{{appId}}",
+  "developer": {
+    "name": "M365 Synthetic Monitoring",
+    "websiteUrl": "https://{{host}}/about",
+    "privacyUrl": "https://{{host}}/about",
+    "termsOfUseUrl": "https://{{host}}/about"
+  },
+  "name": {
+    "short": "M365 Synthetic Bot",
+    "full": "M365 Synthetic Monitoring Bot"
+  },
+  "description": {
+    "short": "Dedicated managed-identity synthetic monitoring for Teams.",
+    "full": "Internal monitoring bot for synthetic channel messaging, replies, readback and bot-to-bot meeting calls on dedicated test resources. Uses managed identity rather than employee sign-in. Does not test the Teams user interface, employee authentication or audio/video quality. Test messages may be retained for inspection. Use dedicated test resources, not business conversations."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#2563EB",
+  "bots": [
+    {
+      "botId": "{{botId}}",
+      "scopes": ["team", "groupChat"],
+      "isNotificationOnly": false,
+      "supportsCalling": {{calling}},
+      "supportsVideo": false
+    }
+  ],
+  "validDomains": ["{{host}}"],
+  "webApplicationInfo": {
+    "id": "{{readbackClientId}}",
+    "resource": "api://{{readbackClientId}}"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        { "name": "ChannelMessage.Read.Group", "type": "Application" }
+      ]
+    }
+  }
+}

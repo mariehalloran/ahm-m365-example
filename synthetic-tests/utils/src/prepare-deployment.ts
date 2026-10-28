@@ -47,7 +47,7 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   const calling = live && service.type === "teams" && project.services.teams.scenarios["scheduled-meeting"];
   const peer = access.botPeerClientId || access.botPeerManagedIdentityResourceId;
   if (peer && (service.type !== "teams" || !access.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
-    throw new ConfigurationError("Teams peer access requires both access.peerIdentity and its client ID (access.botPeerClientId, which npm run setup writes to .env)");
+    throw new ConfigurationError("Teams peer access requires both access.peerIdentity and its client ID (access.botPeerClientId, which npm run setup:ids writes to .env)");
   }
   if (calling && (!peer || !access.botPeerResourceId || service.teamsCallingPort !== 8080 ||
       !service.teamsCallingCallbackUrl || project.services.teams.callTargets.some(target =>
@@ -88,7 +88,7 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   serviceSettings(service, env, selected.scenarios);
   if (service.type === "exchange" && project.services.exchange.scenarios["reply-mail"] &&
       project.services.exchange.targets.some(target => !target.replySeed)) {
-    throw new ConfigurationError("Live SELF-REPLY requires retained received self-addressed replySeed bindings for every selected mailbox; run npm run setup (it writes them to .env); re-provision incompatible paired seeds before upgrading");
+    throw new ConfigurationError("Live SELF-REPLY requires retained received self-addressed replySeed bindings for every selected mailbox; run npm run setup:reply-seeds (it writes them to .env); re-provision incompatible paired seeds before upgrading");
   }
   if (service.type === "onedrive" &&
       (project.services.onedrive.scenarios["user-drive-roundtrip"] || project.services.onedrive.scenarios["document-versions"]) &&

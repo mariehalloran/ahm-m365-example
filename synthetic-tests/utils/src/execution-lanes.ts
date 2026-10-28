@@ -40,8 +40,9 @@ export async function runExecutionLanes(
     while (!options.signal.aborted) {
       if (lane.alignToMinute && !options.once) {
         slot = Math.max(slot, Math.floor((now() - laneOrigin) / interval));
-        if (slot <= lastStartedSlot) {
-          try { await sleep(Math.max(0, laneOrigin + (lastStartedSlot + 1) * interval - now()), options.signal); }
+        if (slot <= lastStartedSlot || now() < laneOrigin + slot * interval) {
+          const nextSlot = Math.max(slot, lastStartedSlot + 1);
+          try { await sleep(Math.max(0, laneOrigin + nextSlot * interval - now()), options.signal); }
           catch (error) { if (!options.signal.aborted) throw error; }
           continue;
         }

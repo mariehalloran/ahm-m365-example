@@ -52,10 +52,11 @@ The administrator registers the existing managed identity's service-principal
 reference in Exchange, creates a resource scope and assigns those roles only to
 approved independent mailboxes. Configure root targets as `{ id, mailbox }`;
 there are no sender/recipient pairs or distribution groups. After one-time approval,
-`npm run setup` extends the same scope to every configured mailbox (add-only) and
-validates/provisions a retained received self-addressed SELF-REPLY fixture
-([setup](./docs/deployment.md#set-up-microsoft-365-with-one-script)). Verify actual
-Graph access and RBAC diagnostics after propagation, including denial of an unrelated
+an administrator extends the same scope to every configured mailbox, add-only
+([`docs/setup.md`, section 4](./docs/setup.md#4-exchange-mailbox-access)), and
+`npm run setup:reply-seeds` validates/provisions a retained received self-addressed
+SELF-REPLY fixture. Verify actual Graph access and RBAC diagnostics after propagation,
+including denial of an unrelated
 control account. See [five journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
 
 **Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite`, `Mail.Send`, or `Calendars.ReadWrite` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
@@ -99,7 +100,7 @@ The foundation stage (`npm run deploy` with `deployment.stage: "foundation"`) cr
 
 These are **reviewable examples, not commands that have been executed**. Supply approved values and review any preexisting scope/role assignments before applying. An Exchange administrator with Organization Management or suitable delegated application-role assignment rights performs these changes; the worker never runs Exchange administration cmdlets.
 
-This is the one-time approval of the worker identity; `npm run setup` does not create it. Keep all three role assignments on the single scope below and build its filter only from `PrimarySmtpAddress -eq` clauses joined with `-or`, as shown: setup later adds every configured mailbox to that scope (add-only, preserving existing clauses) and stops, saying so, if the identity's roles span more than one scope or the filter has any other clause. Exchange's recipient-filter length limit applies.
+This is the one-time approval of the worker identity; it is not scripted. Keep all three role assignments on the single scope below and build its filter only from `PrimarySmtpAddress -eq` clauses joined with `-or`, as shown: [`docs/setup.md`, section 4](./docs/setup.md#4-exchange-mailbox-access) extends that same scope's filter to cover every configured mailbox the same way, add-only, preserving existing clauses, and keeps every mailbox in this one scope. Exchange's recipient-filter length limit applies.
 
 Connect using the administrator's normal approved authentication, and verify the actual Exchange session tenant. A cached home-tenant session can differ from the selected Azure subscription.
 
@@ -185,7 +186,7 @@ The five journeys are send-to-self/Inbox verification, own-draft lifecycle,
 self-attachment delivery/download verification, explicitly labelled SELF-REPLY,
 and private recurring-calendar lifecycle with no attendees. A retained received
 self-addressed reply fixture is provisioned in that same mailbox outside timed
-attempts (`npm run setup`, generated IDs in `.env`) with separate setup evidence.
+attempts (`npm run setup:reply-seeds`, generated IDs in `.env`) with separate setup evidence.
 Fixtures and created replies reject non-self recipients, including `replyTo`.
 Each executed action contributes 1/0 success and duration. Blocked actions are
 skipped, not fabricated failed requests.

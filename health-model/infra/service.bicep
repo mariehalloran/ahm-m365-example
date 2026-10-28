@@ -13,7 +13,7 @@ param suppressOneDriveRestore bool = false
 param enableOtel bool = false
 param workspaceName string
 param applicationInsightsResourceId string
-@description('Reporting groups with at least one scope for this service.')
+@description('Exchange/OneDrive user groups with at least one runnable scope for this service.')
 param reportingGroups array = []
 
 func bindTelemetryQuery(queryText string, service string, journey string, step string, applicationId string, aggregation string) string =>
@@ -39,39 +39,50 @@ func bindTelemetryQuery(queryText string, service string, journey string, step s
     aggregation
   )
 
-// A journey entity reports the two synthetic signals; the call journey adds its four call phases.
-func journeySignals(entityName string, callSignals string[]) string[] =>
-  concat(['synthetic-success-percentage', 'synthetic-mean-duration'], entityName == 'teams-call' ? callSignals : [])
-
 // One aggregation group per reporting group with a scope for this journey. Members are the per-tenant
 // signals (group-<id>--tenant-<alias>--<signal>) that each tenant worker publishes.
 func reportingGroupEntries(groups array, service string, journey string, signals string[]) array =>
   filter(
-    map(groups, group => {
+    map(filter(groups, group => group.service == service), group => {
       name: 'reporting-${group.id}'
       displayName: group.displayName
       aggregationType: 'WorstOf'
       ignoreUnknown: false
       members: flatten(map(
-        filter(group.scopes, scope => scope.service == service && contains(scope.journeys, journey)),
+        filter(group.scopes, scope => contains(scope.journeys, journey)),
         scope => map(signals, signal => 'group-${group.id}--tenant-${scope.tenant}--${signal}')
       ))
     }),
     entry => !empty(entry.members)
   )
 
-// Aggregation groups appear only on journey entities, and only when a reporting group runs the journey.
-func aggregationGroupsProperty(groups array) object => empty(groups) ? {} : { signalAggregationGroups: groups }
+// The API requires at least one group when this optional property is present.
+func aggregationGroupsProperty(groups array) object =>
+  empty(groups) ? {} : { signalAggregationGroups: groups }
+
+func centerX(positions int[]) int => empty(positions) ? 0 : (min(positions) + max(positions)) / 2
 
 var contextName = '${service.service}-service-health'
 var journeyGroups = getJourneyGroups(service.journeys)
+// Give supporting context its own column and center parents over their selected children.
+var columnSpacing = 500
+var journeyPositions = map(
+  range(0, length(service.journeys)),
+  index => (index + (enableServiceHealth ? 1 : 0)) * columnSpacing
+)
+var groupPositions = map(journeyGroups, group => centerX(map(
+  filter(service.journeys, journey => journey.?group.?entityName == group.entityName),
+  journey => journeyPositions[indexOf(service.journeys, journey)]
+)))
+var rootChildPositions = concat(
+  enableServiceHealth ? [0] : [],
+  groupPositions,
+  map(
+    filter(service.journeys, journey => journey.?group == null),
+    journey => journeyPositions[indexOf(service.journeys, journey)]
+  )
+)
 var telemetryQuery = loadTextContent('../queries/synthetic.kql')
-var teamsCallSignals = [
-  'teams-call-connection-success-percentage'
-  'teams-call-mean-connection-duration'
-  'teams-call-disconnection-success-percentage'
-  'teams-call-mean-disconnection-duration'
-]
 var telemetryMetrics = [
   {
     name: 'otel-success-percentage'
@@ -104,7 +115,7 @@ var nodes = concat(
       step: ''
       rollup: true
       impact: 'Standard'
-      x: 300
+      x: centerX(rootChildPositions)
       y: 0
     }
   ],
@@ -129,10 +140,7 @@ var nodes = concat(
     step: ''
     rollup: true
     impact: 'Standard'
-    x: 400 + indexOf(service.journeys, first(filter(
-      service.journeys,
-      journey => journey.?group.?entityName == group.entityName
-    ))) * 500
+    x: groupPositions[indexOf(journeyGroups, group)]
     y: 240
   }),
   map(service.journeys, journey => {
@@ -143,7 +151,7 @@ var nodes = concat(
     step: ''
     rollup: true
     impact: 'Standard'
-    x: 400 + indexOf(service.journeys, journey) * 500
+    x: journeyPositions[indexOf(service.journeys, journey)]
     y: journey.?group != null ? 440 : 240
   }),
   flatten(map(
@@ -157,7 +165,7 @@ var nodes = concat(
         step: step.?telemetryName ?? step.name
         rollup: false
         impact: suppressOneDriveRestore && service.service == 'onedrive' && journey.name == 'document-versions' && step.name == 'step-4' ? 'Suppressed' : 'Standard'
-        x: 400 + indexOf(service.journeys, journey) * 500
+        x: journeyPositions[indexOf(service.journeys, journey)]
         y: (journey.?group != null ? 640 : 440) + indexOf(journey.steps, step) * 170
       })
   ))
@@ -248,9 +256,10 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey' || node.kind == 'journey-group'
         ? { icon: { iconName: 'UserFlow' } }
         : {},
-      node.kind == 'journey'
+      node.kind == 'journey' && service.service != 'teams'
         ? aggregationGroupsProperty(reportingGroupEntries(
-            reportingGroups, service.service, node.journey, journeySignals(node.name, teamsCallSignals)
+            reportingGroups, service.service, node.journey,
+            ['synthetic-success-percentage', 'synthetic-mean-duration']
           ))
         : {}
     )

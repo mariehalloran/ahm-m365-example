@@ -6,8 +6,8 @@ The whole flow is three steps, all driven by the single root
 1. **Edit** it: tenants, accounts and targets, scenarios, cadence and the reporting
    [`groups`](./monitoring-groups.md). It names things and holds only the few IDs you
    must supply ([what the config holds](#what-the-config-holds)).
-2. **Set up Microsoft 365** with `npm run setup`
-   ([below](#set-up-microsoft-365-with-one-script)).
+2. **Set up Microsoft 365**: grant access by hand, then run the two small commands that
+   turn that access into `.env` values ([below](#set-up-microsoft-365)).
 3. **Deploy** the health models, foundation and workers with `npm run deploy`
    ([below](#deploy-with-one-command)).
 
@@ -60,85 +60,27 @@ command's own client IDs ([OneDrive setup](./onedrive-setup.md#plan-apply-and-re
   `serviceActivity` enabled and no `execution.providerClientId` of its own; set the
   per-service value only to override it.
 
-**Looked up by `npm run setup`**, never in the config: each OneDrive account's user ID,
+**Looked up by `npm run setup:ids`**, never in the config: each OneDrive account's user ID,
 each call target's organizer user ID (from its `organizer`, the organizer's user principal
-name, which only setup reads), the peer bot's client ID and the Teams calling callback URL.
-Setup writes them to `.env` ([keys](#generated-ids-in-env)).
+name, which only that command reads), the peer bot's client ID and the Teams calling
+callback URL. It writes them to `.env` ([keys](#generated-ids-in-env)).
 
-## Set up Microsoft 365 with one script
+## Set up Microsoft 365
 
-`npm run setup` runs one PowerShell script,
-[`setup/setup.ps1`](../synthetic-tests/setup/setup.ps1); its header comment is the
-reference. It needs:
+Every Microsoft 365 or Azure **access grant** is manual: follow
+[`docs/setup.md`](./setup.md), which lists each one by name, with who can do it and the
+exact `az`, Graph or PowerShell commands to run. Two small commands then generate `.env`
+values from that access — never a new grant — and are safe to automate:
 
-- PowerShell 7.4+ and the Exchange module:
-  `Install-Module ExchangeOnlineManagement -Scope CurrentUser`.
-- The Azure CLI signed in with `az login` as an Exchange and Teams administrator of the
-  Microsoft 365 tenant. The lookups only read (Reader on the peer identity and the
-  foundation's environment, and Graph read access to the users involved); the reply-seed
-  step also needs Contributor on the resource group and ACR build rights.
-- The one-time Exchange RBAC approval of the worker identity (below, not part of setup),
-  the identity itself (`worker.identity`), the foundation's environment (setup reads its
-  default domain for the Teams callback URL and runs the reply-seed job in it) and, for
-  reply seeds, its registry. For a new foundation, run `npm run deploy` with
-  `deployment.stage: "foundation"` first.
+- `npm run setup:ids` looks up or creates the Teams channel, the peer bot's client ID, the
+  Teams calling callback URL, call targets' organizer user IDs and OneDrive accounts' user
+  IDs.
+- `npm run setup:reply-seeds` provisions the retained SELF-REPLY message each `reply-mail`
+  mailbox answers (only when that scenario is selected).
 
-```sh
-cd synthetic-tests
-az login
-npm run setup -- -Plan   # only reports what would change
-npm run setup
-```
-
-Setup is idempotent and add-only, so re-running it is safe. It signs in through the same
-`az login` as deploy (the Exchange module is given an Azure CLI access token) and sets up
-the config tenant whose `tenantId` matches the signed-in tenant, so run it once per
-tenant; if the signed-in tenant is not in the config it stops and names the
-`az login --tenant <tenantId>` to run. It acts only on enabled services in `live` mode
-and:
-
-1. **Exchange access:** extends the Exchange worker identity's existing management scope
-   (Exchange RBAC for Applications) to every configured mailbox, preserving its existing
-   clauses, and checks with `Test-ServicePrincipalAuthorization` that every mailbox is in
-   scope. That check bypasses Exchange's permission cache, which holds an active app's
-   permissions for 30 minutes to 2 hours, so the running worker can keep getting HTTP 403 for a
-   newly added mailbox for that long.
-2. **Teams:** adds every account of each group that lists a Teams target to that target's
-   team (Graph `groups/{id}/members/$ref`), then finds or creates the standard channel named
-   by the target's optional `channelName` (Graph `teams/{id}/channels`) and writes its ID to
-   `.env`.
-3. **Lookups:** finds the IDs the config leaves out and writes them to `.env`: each
-   OneDrive account's user ID (Graph `users/{userPrincipalName}`); the peer bot's client ID
-   (`az identity show` on `access.peerIdentity`); and, when `scheduled-meeting` is selected,
-   each call target's organizer user ID (Graph `users/{organizer}`) and the Teams calling
-   callback URL (`https://<Teams worker appName>.<environment default domain>/api/calls`,
-   the domain from `az containerapp env show`).
-4. **SELF-REPLY seeds:** validates or provisions a retained received self-addressed
-   message in each independent Exchange mailbox (when `reply-mail` is selected),
-   builds the worker image from the current checkout in ACR, runs the worker's own
-   `mail-test-command --apply --setup-only` once in a temporary Container Apps job under the
-   worker's managed identity (only that identity can create the retained message), copies the
-   seeds from the job output to `.env` and deletes the job. A permission failure (HTTP 403)
-   right after step 1 is the cache above catching up, so only that is retried, every 2
-   minutes for up to about 2.3 hours; any other failure stops at once. Press Ctrl+C to stop
-   waiting and re-run setup later. Old paired fixtures fail explicit ownership/scope
-   validation; use `npm run setup -- -ReprovisionReplySeeds` to replace incompatible
-   bindings without deleting retained old seeds. No distribution groups are provisioned.
-
-**Not covered:** the one-time Exchange RBAC approval that gives the worker identity its
-roles and initial scope, which setup only extends
-([MAILBOX-SYNTHETIC-ACCESS.md, section 4](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup));
-OneDrive's drives and folders, which need a separately approved `Files.ReadWrite.All`
-credential and keep their own command, `npm run onedrive:setup`
-([OneDrive setup](./onedrive-setup.md); it reads the user IDs that `npm run setup` looks up);
-Teams meeting creation; and chats (no journey uses chats, so none are created).
-
-**Limits:** same-tenant managed identity only. If `deployment.azureTenantId` names a tenant
-other than the Microsoft 365 tenant, setup stops and points to
-[cross-tenant access](./cross-tenant-access.md).
-The Exchange scope filter must consist only of `PrimarySmtpAddress -eq` clauses (setup stops
-and says so otherwise), and Exchange's recipient-filter length limit applies. The journeys it
-prepares are API-backed: they do not exercise the real Teams or Outlook user interface.
+Both are idempotent and read the same root config; [`docs/setup.md`](./setup.md) covers
+requirements, flags and retries in full. OneDrive's drives and folders are a separate,
+separately approved command, [`npm run onedrive:setup`](./onedrive-setup.md).
 
 ### Generated IDs in `.env`
 
@@ -150,11 +92,11 @@ deploy fails and names the conflict when the config sets one to a different valu
 
 | Where | Keys, each `<TENANT>__<TARGET>__…` | Fills | Written by |
 | --- | --- | --- | --- |
-| Exchange target | `REPLY_SEED_MESSAGE_ID`, `REPLY_SEED_CORRELATION_ID` | `replySeed` | `npm run setup`; a local `npm run exchange:mail-test -- --apply` |
-| Teams channel target | `CHANNEL_ID` | `channelId` | `npm run setup` |
-| Teams call target | `ORGANIZER_USER_ID` | `organizerUserId` | `npm run setup`, from the target's `organizer` |
-| Teams service (`<TARGET>` is `TEAMS`) | `BOT_PEER_CLIENT_ID`, `CALLING_CALLBACK_URL` | `access.botPeerClientId`, `execution.teamsCallingCallbackUrl` | `npm run setup`, from `access.peerIdentity` and the foundation's environment |
-| OneDrive target | `USER_ID` | `userId` | `npm run setup`, from `userPrincipalName` |
+| Exchange target | `REPLY_SEED_MESSAGE_ID`, `REPLY_SEED_CORRELATION_ID` | `replySeed` | `npm run setup:reply-seeds`; a local `npm run exchange:mail-test -- --apply` |
+| Teams channel target | `CHANNEL_ID` | `channelId` | `npm run setup:ids` |
+| Teams call target | `ORGANIZER_USER_ID` | `organizerUserId` | `npm run setup:ids`, from the target's `organizer` |
+| Teams service (`<TARGET>` is `TEAMS`) | `BOT_PEER_CLIENT_ID`, `CALLING_CALLBACK_URL` | `access.botPeerClientId`, `execution.teamsCallingCallbackUrl` | `npm run setup:ids`, from `access.peerIdentity` and the foundation's environment |
+| OneDrive target | `USER_ID` | `userId` | `npm run setup:ids`, from `userPrincipalName` |
 | OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup` |
 
 `<TENANT>` and `<TARGET>` are the tenant alias and the target `id`, uppercased with every
@@ -437,7 +379,7 @@ The [root configuration](../monitoring.config.json) is the only file you maintai
 | `healthModel`, `otel`, `serviceHealth` | Azure destination, thresholds and report TTL; optional OTEL and Service Health context, both off by default |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins, above |
 | `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (certificate references and, for Teams, bot names), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
-| `groups[]` | Optional [reporting groups](./monitoring-groups.md) |
+| `tenants[].services.exchange.targets`, `….onedrive.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
 
 It holds names, choices and the few [IDs only you can supply](#what-the-config-holds),
 never secrets. Model and worker deployment use this same file, and every worker mounts
@@ -450,8 +392,9 @@ Use an explicitly selected managed identity per service and separate
 authorization for Microsoft 365 access and health-report ingestion.
 
 - **Exchange:** application RBAC scoped to the dedicated test mailboxes; see
-  [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md). The one-time approval is manual;
-  `npm run setup` then extends the scope to every configured mailbox.
+  [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md). Both the one-time approval and
+  extending the scope to every configured mailbox are manual
+  ([`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access)).
 - **Teams messaging:** managed-identity Bot Connector authentication and a
   separate federated application with team-scoped Graph readback permission.
   No user sign-in, MFA, refresh-token cache or bot-to-bot delivery claim.

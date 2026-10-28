@@ -3,8 +3,12 @@
 Only two journeys are implemented. Participants are explicitly selected
 managed-identity **bots**, never employee accounts. No delegated sign-in, MFA,
 password, user token cache or human answer is required.
-Source tests prove code behavior, not live authorization, media delivery or
+Local source validation does not establish live authorization, media delivery or
 ingestion; see [deployment evidence](../../docs/deployment.md#deployment-status-and-order).
+
+Channel `targets[]` and meeting `callTargets[]` are ungrouped arrays. User groups
+apply only to Exchange and OneDrive; Teams publishes its journey, step and
+call-phase reports without user-group signals or telemetry labels.
 
 ## Journeys and evidence
 
@@ -24,7 +28,9 @@ There is no separate reply journey, P2P media implementation, file-sharing
 workflow, Adaptive Card interaction or always-failing capability assertion.
 
 The checked-in Teams lane starts immediately and recurs every 120 seconds.
-Its selected journeys execute concurrently; each retains independent results:
+Every selected channel target or meeting target runs its enabled journey.
+Execution is concurrent up to `execution.maxConcurrentProbes` per lane (default 3),
+with sequential business steps and independent results:
 
 ```json
 "executionLanes": [
@@ -34,78 +40,95 @@ Its selected journeys execute concurrently; each retains independent results:
 ```
 
 Root scenario switches select execution; lane assignments remain complete even
-when a scenario is disabled. Providers use an independent default 300-second lane.
+when a scenario is disabled. The lane has a 45-second per-attempt execution deadline;
+timeouts count as unsuccessful attempts, not Unknown. Cleanup has its own bounded
+signal and the runner allows 12 seconds for settlement. `cycleTimeoutSeconds`
+defaults to 170; late slots are skipped without overlapping the same lane.
+Providers use an independent default 300-second lane.
 
 ## Primary setup: unattended bot
 
-1. Identify the existing Teams worker UAMI. Register an approved same-tenant
-   Azure Bot with `UserAssignedMSI` and that UAMI; enable its Teams channel and
-   install the matching Teams app in the dedicated standard channel's team.
-   Name the UAMI in `worker.identity` and the bot in `access.bot`.
-2. Register a separate same-tenant Entra application for Graph readback. In the
-   Teams manifest, `webApplicationInfo.id` is **that application's client ID**;
+Run npm commands from `synthetic-tests/`. Follow [`docs/setup.md`](../../docs/setup.md) as
+an approved administrator: it creates missing named foundation resources/identities and
+configures bots, roles, federation and the app package, all by hand. It does not create the
+readback application (step 2 below) — administrators create that outside this project.
+Keep the root foundation mode `"existing"`; missing bare-name foundation resources can
+still be created.
+
+1. Name the approved same-tenant worker UAMI in `worker.identity` and Azure Bot in
+   `access.bot`; [`docs/setup.md`](../../docs/setup.md) creates missing named resources,
+   binds the bot as `UserAssignedMSI` and enables its Teams channel.
+2. Supply a separate existing same-tenant Entra application for Graph readback.
+   In the generated Teams manifest, `webApplicationInfo.id` is **that application's client ID**;
    `bots[].botId` is the bot UAMI's client ID. Request only installed-team
    application RSC `ChannelMessage.Read.Group`; approve it by installing the app
    in the dedicated team. Do not substitute tenant-wide channel read.
-3. Add a federated credential to the readback application: issuer
-   `https://login.microsoftonline.com/<tenant>/v2.0`, subject equal to the worker
-   UAMI's **principal/object ID**, audience `api://AzureADTokenExchange`.
+3. [`docs/setup.md`](../../docs/setup.md) adds the readback application's federated
+   credential: issuer `https://login.microsoftonline.com/<tenant>/v2.0`, subject equal to
+   the worker UAMI's **principal/object ID**, audience `api://AzureADTokenExchange`.
    Set `execution.teamsReadbackClientId` to the readback application's client ID.
 4. Keep `teamsAuthentication: "bot"`, `botAuthentication: "managed-identity"` and
    `graphAuthentication: "managed-identity"` in `execution`. Hosting supplies explicit
    `BOT_CLIENT_ID`, `BOT_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`.
    The bot/observer/target tenants must match. No certificate/user/CLI fallback
    is attempted.
-5. Configure `tenants[].services.teams.targets[]` with `id`, `teamId` and, optionally,
+5. Configure `tenants[].services.teams.targets[]` with `id`, `teamId` and
    `channelName`; `tenantId` defaults to the tenant's and `serviceUrl` to
-   `https://smba.trafficmanager.net/teams/`. `npm run setup` finds the standard
-   channel with that name in the team (creating it if missing) and writes its ID to
+   `https://smba.trafficmanager.net/teams/`. `npm run setup:ids` finds the named
+   channel (creating a standard channel if missing) and writes its ID to
    `.env` (`<TENANT>__<TARGET>__CHANNEL_ID`, filled in as `channelId`); leave
-   `channelId` out of the config. The runtime ignores `channelName`. Setup also adds the
-   accounts of every [group](../../docs/monitoring-groups.md) that lists the target to
-   the team: that is team membership only, and the journeys stay bot-only. It creates
-   no meetings and no chats (no journey uses chats), and it does not register or
-   install the bots ([setup](../../docs/deployment.md#set-up-microsoft-365-with-one-script)).
+   `channelId` out of the config. The runtime ignores `channelName`. Adding configured
+   accounts from that tenant's [groups](../../docs/monitoring-groups.md) listing the target
+   to the team — membership only, not synthetic participants — is a manual step in
+   [`docs/setup.md`](../../docs/setup.md), alongside filling in and zipping the app
+   package from its [template](../setup/teams-app/). A Teams administrator then uploads
+   that package and installs it in each dedicated team, approving the team-scoped RSC
+   permission; it creates no meetings or chats.
    Set `serviceUrl` only for another region; public-cloud service URLs are restricted to
    `https://smba.trafficmanager.net/{teams|amer|emea|apac}/`.
 
 Bot Connector uses `https://api.botframework.com/.default`. Graph readback
 uses `https://graph.microsoft.com/.default` through the federated application;
-calling remains on the bot UAMIs. Azure reports use the reporting UAMI and ARM
-audience. Provider access separately uses the tenant's `providerClientId`.
+calling remains on the bot UAMIs. Azure reports use `healthReportAuthentication`
+(managed identity by default) and the ARM audience. Provider access separately
+uses the tenant's `providerClientId`.
 
 ## Two-bot meeting setup
 
 1. Supply an existing dedicated meeting with compatible lobby/organizer policy.
-   Neither the runtime nor `npm run setup` creates meetings or authenticates the organizer.
-2. Use two distinct same-tenant Azure Bot UAMIs. Separately approve Graph
-   application `Calls.JoinGroupCall.All` on **both**. This is not a per-meeting
-   permission; the root meeting allowlist is a runtime safeguard.
+   Neither the runtime nor any setup command creates meetings or authenticates the organizer.
+2. Use two distinct same-tenant Azure Bot UAMIs. Approve Graph application
+   `Calls.JoinGroupCall.All` on **both**, by hand, following
+   [`docs/setup.md`](../../docs/setup.md). This is not a per-meeting permission; the root
+   meeting allowlist is a runtime safeguard.
 3. `tenants[].services.teams.callTargets[]` contains `{ id, meetingThreadId, organizer }`.
    `meetingThreadId` has the form `19:meeting_...@thread.v2`; `organizer` is the
-   organizer's user principal name. `npm run setup` looks up that user's ID into `.env`
+   organizer's user principal name. `npm run setup:ids` looks up that user's ID into `.env`
    (`<TENANT>__<CALLTARGET>__ORGANIZER_USER_ID`, filled in as `organizerUserId`); only
-   setup reads `organizer`. The organizer is ownership metadata, not a synthetic
+   that command reads `organizer`. The organizer is ownership metadata, not a synthetic
    participant. `tenantId` defaults to the tenant's and `peerBotClientId` to the peer
    bot's client ID.
 4. Name the approved peer's UAMI in `access.peerIdentity` and the two bot registrations
    in `access.bot` and `access.peerBot` (a bare name in the health model's resource
    group, or a full `/subscriptions/...` resource ID elsewhere:
-   [names](../../docs/deployment.md#what-the-config-holds)). `npm run setup` looks up
+   [names](../../docs/deployment.md#what-the-config-holds)). `npm run setup:ids` looks up
    the peer's client ID with `az identity show` into `.env`
    (`<TENANT>__TEAMS__BOT_PEER_CLIENT_ID`, filled in as `access.botPeerClientId`).
-   The template attaches this existing UAMI; it creates no peer or Graph grant.
+   [`docs/setup.md`](../../docs/setup.md) creates the named peer identity/bot and grants
+   calling access, by hand; the worker template only attaches the existing UAMI.
    `TEAMS_CALLING_PEER_CLIENT_ID` must match every selected call target's peer.
 5. Register both bots' calling channels against the same public HTTPS `/api/calls`
    callback on the existing Teams app:
    `https://<Teams worker appName>.<environment default domain>/api/calls`.
-   `npm run setup` finds the default domain (`az containerapp env show`, so the
-   foundation's environment must exist) and writes the URL to `.env`
+   `npm run setup:ids` finds the named environment, reads its default domain
+   and writes the URL to `.env`
    (`<TENANT>__TEAMS__CALLING_CALLBACK_URL`, filled in as
    `execution.teamsCallingCallbackUrl`); the port is 8080. Only selected live scheduled
    meetings enable public ingress; `/healthz` is static readiness, not journey progress.
-6. The default establishment budget is 20 seconds. The probe timeout must allow
-   that budget plus five seconds for requests; cleanup is independently bounded.
+6. Both legs share the default 20-second establishment/roster budget, with concurrent
+   state and roster checks. The probe timeout must allow that budget plus five
+   seconds for requests. Both owned calls get independent bounded departure attempts
+   even after cancellation or a failed peer join.
    The journey involves no audio upload, playback or recording. Message-retention
    settings cannot disable call termination.
 
@@ -130,8 +153,10 @@ application, the team and the meeting (other `execution` settings omitted):
 
 Join bodies include the configured tenant both at top level and at
 `meetingInfo.organizer.user.tenantId`. Every owned call is checked against the
-thread, organizer and tenant; both rosters must show distinct bot participants
-outside the lobby. Mere call creation, ringing or partial rosters are not success.
+thread, organizer and tenant. Before roster verification, observed call-chain IDs
+must match when both are available. Both rosters must show distinct bot participants outside the lobby, and
+both calls are rechecked as established. Mere creation, ringing or partial rosters
+are not success.
 
 ## Exact endpoints and completion rules
 
@@ -152,8 +177,9 @@ An ambiguous mutation is not retried or treated as successfully cleaned merely
 because the root was deleted. Known reply and root cleanup are attempted
 independently on a fresh bounded signal.
 
-`teamsCleanupEnabled` defaults true. Explicit false retains bot posts/replies
-for inspection; skipped generic cleanup is not a failed business request.
+`teamsCleanupEnabled` defaults true, but the checked-in root config sets it false
+to retain bot posts/replies for inspection; call termination remains mandatory.
+Skipped generic cleanup is not a failed business request.
 Failures to remove owned artifacts fail the overall journey without erasing
 earlier measured success.
 
@@ -166,10 +192,24 @@ creation, guesses a call ID or enumerates tenant calls to find it.
 
 ## Call measurements
 
-The `teams-call` entity carries four immediate call measurements: connection and
-disconnection success percentages and mean durations (connection duration includes
-join submission). These are
-connectivity measurements; the project collects no audio or call-quality data.
+The `teams-call` entity reports connection/disconnection success percentages and
+mean durations from executed `wait-for-answer`/`end-call` steps; skipped phases
+have no numeric measurement. Connection duration includes join submission. These
+are connectivity measurements, not audio or call-quality data.
+
+## Provider context
+
+Stable Service Health uses the independent provider lane (default 300 seconds),
+with root `serviceHealth.enabled` and service `execution.serviceHealth` enabled.
+Optional beta activity also needs separate approval, `execution.serviceActivity.enabled`
+and `ENABLE_BETA_SERVICE_ACTIVITY=true` (the hosted gate is
+`deployment.enableBetaServiceActivity`). Provider access uses `ServiceHealth.Read.All`
+and, for beta activity, `ServiceActivity-Teams.Read.All`. Stable reports and dynamic
+`microsoft-activity-*` signals share the single suppressed `teams-service-health`
+entity; they never change synthetic success or the Experience rollup. Counts and
+unthresholded activity values are diagnostic; unavailable sources are not ingested.
+Tenant audio-stream activity context is not per-bot call quality. See
+[provider monitoring](../../docs/provider-monitoring.md).
 
 ## Run
 
@@ -179,7 +219,7 @@ From `synthetic-tests/`:
 npm run teams -- --once
 ```
 
-Add `--tenant <id>` when the config has several tenants. A service in `simulation`
+Add `--tenant <alias>` when the config has several tenants. A service in `simulation`
 mode is labeled and makes no live calls. Real execution additionally requires `execution.mode: "live"`,
 `deployment.enableLiveProbes: true` for hosted workers (`ENABLE_LIVE_M365=true` for a
 local run) and the approved report destination.

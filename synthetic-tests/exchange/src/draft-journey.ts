@@ -66,11 +66,11 @@ export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
       now,
     );
     await measureStep(
-        result,
-        "delete-draft",
-        () => deleteDraft(graph, attempt, draftId, signal),
-        now,
-        () => "cleanup-failure",
+      result,
+      "delete-draft",
+      () => deleteDraft(graph, attempt, draftId, signal),
+      now,
+      () => "cleanup-failure",
     );
     result.success = true;
     result.diagnosticContext.testStage = "complete";

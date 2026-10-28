@@ -5,7 +5,7 @@ import { serviceDefinitions, ServiceDefinition, getJourneyGroups } from './servi
 @description('The root monitoring.config.json as normalized by `npm run deploy`, which also supplies reportingGroups.')
 param projectConfig object = loadJsonContent('../../monitoring.config.json')
 
-@description('Reporting groups from `npm run deploy`: [{ id, displayName, scopes: [{ tenant, service, journeys }] }].')
+@description('Exchange/OneDrive user groups from `npm run deploy`: [{ id, displayName, service, scopes: [{ tenant, journeys }] }].')
 param reportingGroups array = []
 
 @description('A region supporting Microsoft.CloudHealth.')
@@ -24,6 +24,7 @@ func isJourneySelected(tenants array, service string, journey string) bool =>
   !empty(filter(tenants, tenant => runsJourney(tenant, service, journey)))
 
 var modelName = projectConfig.healthModel.name
+var alertActionGroupIds = projectConfig.?healthModel.?alertActionGroupIds ?? []
 var enableServiceHealth = projectConfig.?serviceHealth.?enabled ?? false
 var selectedServices ServiceDefinition[] = map(
   serviceDefinitions,
@@ -36,6 +37,8 @@ var selectedServices ServiceDefinition[] = map(
     })
 )
 var enabledServices = filter(selectedServices, service => !empty(service.journeys))
+var serviceColumnSpacing = 500
+var rootX = max(0, length(enabledServices) - 1) * serviceColumnSpacing / 2
 var journeys = flatten(map(enabledServices, service => service.journeys))
 var journeyGroupCount = length(getJourneyGroups(journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
@@ -126,7 +129,10 @@ module serviceModels './service.bicep' = [
       policy: projectConfig.healthModel
       enableServiceHealth: enableServiceHealth
       suppressOneDriveRestore: service.service == 'onedrive' && empty(filter(
-        flatten(map(projectConfig.tenants, tenant => tenant.services.?onedrive.?targets ?? [])),
+        flatten(map(
+          projectConfig.tenants,
+          tenant => flatten(map(items(tenant.services.?onedrive.?targets ?? {}), group => group.value.users))
+        )),
         target => target.?restoreVersion ?? false
       ))
       enableOtel: useOtel
@@ -134,7 +140,7 @@ module serviceModels './service.bicep' = [
       applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
       reportingGroups: filter(
         reportingGroups,
-        group => !empty(filter(group.scopes, scope => scope.service == service.service))
+        group => group.service == service.service
       )
     }
   }
@@ -178,10 +184,22 @@ resource rootEntity 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-prev
   properties: {
     displayName: 'Microsoft 365 Experience'
     impact: 'Standard'
-    canvasPosition: { x: 500, y: 0 }
+    canvasPosition: { x: rootX, y: 0 }
     signalGroups: {
       dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false }
     }
+    alerts: !empty(alertActionGroupIds) ? {
+      degraded: {
+        severity: 'Sev2'
+        description: 'Microsoft 365 Experience entered the Degraded state.'
+        actionGroupIds: alertActionGroupIds
+      }
+      unhealthy: {
+        severity: 'Sev1'
+        description: 'Microsoft 365 Experience entered the Unhealthy state.'
+        actionGroupIds: alertActionGroupIds
+      }
+    } : {}
   }
 }
 
@@ -192,7 +210,7 @@ resource serviceReferences 'Microsoft.CloudHealth/healthmodels/entities@2026-05-
     properties: {
       displayName: service.displayName
       impact: 'Standard'
-      canvasPosition: { x: index * 400, y: 250 }
+      canvasPosition: { x: index * serviceColumnSpacing, y: 250 }
       signalGroups: {
         azureResource: {
           azureResourceId: nestedModels[index].id
@@ -220,6 +238,7 @@ resource relationships 'Microsoft.CloudHealth/healthmodels/relationships@2026-05
 output modelId string = model.id
 output modelName string = model.name
 output rootEntityName string = rootEntity.name
+output alertActionGroupIds array = alertActionGroupIds
 output apiVersion string = '2026-05-01-preview'
 output serviceModelIds array = [
   for service in enabledServices: resourceId('Microsoft.CloudHealth/healthmodels', '${modelName}-${service.service}')

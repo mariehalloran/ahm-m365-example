@@ -21,8 +21,9 @@ reads another file) and the `.env` beside it, whose looked-up and generated IDs 
 matching fields ([generated IDs](../../docs/deployment.md#generated-ids-in-env)),
 and runs the selected tenant's service. Pass `--tenant <id>`
 when the config has several tenants; it is optional only when there is exactly one.
-Every target of that tenant's service runs; [reporting groups](../../docs/monitoring-groups.md)
-only add group-named journey signals and need no flag. `--once` settles selected
+Every unique target of that tenant's service runs; Exchange/OneDrive
+[user groups](../../docs/monitoring-groups.md) add group-named journey signals and
+need no flag. Teams stays ungrouped. `--once` settles selected
 synthetic/provider lanes, not proof of successful service operations. Other service
 types are rejected. `npm run deploy` (`utils/src/deploy.ts`) is the single deployment
 command; see [deployment](../../docs/deployment.md#deploy-with-one-command).
@@ -33,13 +34,19 @@ command; see [deployment](../../docs/deployment.md#deploy-with-one-command).
 IDs, then `references.ts` (`expandReferences`) expands resource names to resource IDs and
 applies the defaults ([names and defaults](../../docs/deployment.md#what-the-config-holds)).
 The expanded document is what deploy mounts into workers, and expanding it again changes
-nothing. Each `tenants[].services.<service>.execution` block is then validated with
-`service-config.ts`:
+nothing. `.env` supplies generated bindings, not generic process environment
+variables; local live/beta approvals and credential variables must still be exported.
+Exchange/OneDrive `targets` are keyed `{ userGroupName, users }` groups.
+`selectTenant` flattens and deduplicates their users once for the runtime while
+retaining service-local group membership; Teams target arrays are unchanged.
+Root `healthModel` holds report policy and optional
+[action-group alert references](../../health-model/README.md#root-health-alerts).
+Each `tenants[].services.<service>.execution` block is then validated with `service-config.ts`:
 
 | `execution` field | Contract |
 | --- | --- |
 | `mode` / `scenario` | `simulation` or explicitly gated `live`; optional deterministic simulation scenario |
-| `intervalSeconds` / `timeoutSeconds` | Other services: 1–86,400 second cadence and 1–120 second execution budget. Exchange: one 60-second lane, fixed per-journey 15-second execution deadline (30 for SELF-REPLY) |
+| `intervalSeconds` / `timeoutSeconds` | Other services: 1–86,400 second cadence and 1–120 second execution budget. Exchange: one 60-second lane, fixed live per-journey 15-second execution deadline (30 for SELF-REPLY) |
 | `maxConcurrentProbes` | Other products: 1-20 concurrent attempts per lane, default 3; not an Exchange journey cap |
 | `maxConcurrentRequests` / `maxConcurrentRequestsPerMailbox` | Exchange actual Graph-request permits, defaults 32 global / 2 per mailbox, covering retries, polls and cleanup; queued waits share the journey deadline |
 | `cycleTimeoutSeconds` | Other products: 1-86,400 second execution budget, default 170. Exchange bounds execution/settlement, reports and flush inside its aligned minute |
@@ -52,9 +59,9 @@ nothing. Each `tenants[].services.<service>.execution` block is then validated w
 | `providerClientId` | Optional per-service override of the tenant's `providerClientId`, the independently federated provider application that every service with `serviceHealth` or `serviceActivity` inherits; not a synthetic identity override |
 | `exchangeCleanupEnabled` | Default true; false retains mail artifacts for diagnostics; deliberate draft and private-series deletion remain mandatory |
 | `teamsCleanupEnabled` | Default true; false retains owned channel posts/replies, never calls |
-| `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`, written to `.env` by `npm run setup`; default port 8080 |
+| `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`, written to `.env` by `npm run setup:ids`; default port 8080 |
 | `teamsCallingAnswerTimeoutSeconds` | Default 20, bounded 1–30; execution budget must allow this plus five seconds |
-| `serviceHealth` / `providerIntervalSeconds` | Optional stable collection for each service, simulation default off / independent 300-second lane |
+| `serviceHealth` / `providerIntervalSeconds` | Optional stable collection, default off; independent provider lane, default 300 seconds |
 | `serviceActivity` | Optional separately gated five-function Exchange/Teams beta collection and explicit customer thresholds |
 
 `enabled`, `targets`, report settings and obsolete `telemetry` fields are
@@ -76,8 +83,10 @@ provider catalogue. Runtime contracts derive from it; Bicep reads its generated
 `npm run catalog:generate` from `synthetic-tests/`. Typechecking, builds and
 `npm run deploy` reject stale projections.
 
-Default lanes are one aligned-minute Exchange lane for all five single-user journeys,
-one Teams lane for both journeys, and three OneDrive lanes. Other products and
+The checked-in configuration uses one aligned-minute Exchange lane for all five
+single-user journeys, one Teams lane for both journeys, and three explicit
+OneDrive lanes. Without `executionLanes`, non-Exchange services use one lane for all
+their journeys at the service's cadence/deadline. Other products and
 providers start immediately; Exchange continuous execution starts at the next
 wall-clock minute boundary (`--once` is immediate). A lane never overlaps itself; independent
 lanes run concurrently. Missed slots are logged/skipped without catch-up bursts.
@@ -97,6 +106,8 @@ Readback/provider application federation uses `api://AzureADTokenExchange`.
 Only the selected application receives exchanged Graph tokens; other identity
 paths remain independent. Exchange's approved explicit certificate Graph mode
 uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`.
+`providerClientId`, including an inherited tenant value, requires managed-identity
+Graph authentication and cannot be combined with certificate mode.
 Reporting uses the ARM audience and separately approved ingestion permission.
 
 `ENABLE_LIVE_M365=true` is required independently of live mode.
@@ -112,8 +123,9 @@ Each schema-2.0 attempt contributes success **1 or 0** and total elapsed time.
 Executed actions contribute their own binary success/duration; skipped actions
 have no duration/sample. Internal authentication/generic cleanup are filtered
 from published business steps, but their failures can fail a journey.
-Deliberate draft/file deletion, calendar cancellation and call departure are
-business actions. Timed-out attempts fail rather than becoming Unknown.
+Deliberate draft/file and private-series deletion, and call departure, are
+business actions. Timed-out attempts contribute failure rather than becoming
+Unknown; aggregate thresholds determine the resulting entity health.
 
 `measureStep` records a bounded observation and rethrows the failure.
 Dependent actions are skipped; owned cleanup gets an independent ten-second
@@ -129,7 +141,9 @@ See [bulk setup and sizing](../../docs/onedrive-setup.md).
 Exchange send/confirmed-delivery and Teams send/confirmed-publication durations
 remain distinct from total journey time.
 
-Each settled lane publishes only its observed journeys. Every journey/action
+Each complete lane cycle publishes only its observed journeys. An incomplete
+cycle skips aggregate publication and emits `health-report-skipped-incomplete-cycle`
+rather than presenting a partial cohort as complete. Every journey/action
 uses the fixed `synthetic-success-percentage` / `synthetic-mean-duration` signals;
 with more than one tenant in the config each is named `tenant-<tenant id>--<signal>`
 (group signals: `group-<id>--tenant-<tenant id>--<signal>`).
@@ -147,23 +161,30 @@ TTL expiry removes signals; it is not a guaranteed Unhealthy alert.
 ## Optional provider collectors
 
 Providers run independently of synthetic initialization in the same service
-containers. Stable observations for all three services and approved Exchange/Teams
-beta observations report directly to each product's single impact-suppressed
+containers. Root `serviceHealth.enabled` must be true before either stable or beta
+source switches take effect. Stable observations for all three services and approved
+Exchange/Teams beta observations report directly to each product's single impact-suppressed
 Service Health entity. OneDrive has no beta collector. Provider failures,
 counts and thresholds cannot change synthetic success or Experience rollup.
 One rejected source cannot erase sibling observations.
+Usable beta data creates `microsoft-activity-<function>` external signals on that
+existing entity through ingestion; Bicep does not predeclare them or add activity
+nodes. Without explicit thresholds, numeric activity measurements have `Unknown`
+health. Missing, denied, stale or invalid data produces no health report, so an
+enabled collector need not have a visible signal.
 See [permissions, exact endpoints and bounded contracts](../../docs/provider-monitoring.md).
 
 ## Console, OTEL and reliability
 
 Console diagnostics always include labeled mode, opaque test/correlation IDs,
-bounded category, executed/skipped actions and durations; never target addresses,
-message bodies, credentials or raw HTTP failures. Direct reports always accompany
-live result publication. Root OTEL is optional, disabled by default and runs in
+bounded category, optional value-free failure hints, executed/skipped actions and
+durations; never target addresses, message bodies, credentials or raw HTTP failures.
+Direct reports always accompany live result publication. Root OTEL is optional,
+disabled by default and runs in
 the same process, with live-only model queries when Azure export is selected.
-Its step and result records additionally carry the test accounts and reporting group
+Its Exchange/OneDrive step and result records additionally carry the test accounts and user group
 (`monitoring.user`, `monitoring.peer`, `monitoring.group`, `monitoring.group_name`)
-for the administrator searches; see
+for the administrator searches; Teams records have no user/group attributes. See
 [Log Analytics for administrators](../../docs/operations.md#log-analytics-for-administrators).
 Azure export uses Microsoft's OpenTelemetry exporters directly, retaining
 observable export callbacks and bounded flush/shutdown. The distribution would

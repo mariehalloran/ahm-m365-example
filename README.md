@@ -6,16 +6,16 @@ Health Models shows which business step, journey and service that evidence affec
 Microsoft-reported Service Health supplies separate supporting context, not a
 substitute for a successful synthetic test.
 
-![Illustrative Exchange journey and business-step health model.](./docs/images/exchange-health-model.png)
+
 
 ## Supported journeys
 
-Only executable workflows are selectable. Implemented code and passing source
-tests do **not** establish live authorization, successful tenant operations,
+Only executable workflows are selectable. Implemented code and source
+validation do **not** establish live authorization, successful tenant operations,
 ingested health reports or notification delivery. See
 [dated deployment evidence](./docs/deployment.md#deployment-status-and-order).
 
-| Service | Root scenario | Completion evidence | Default cadence |
+| Service | Root scenario | Completion evidence | Checked-in cadence |
 | --- | --- | --- | --- |
 | Exchange | `send-receive-mail` | Send to self and verify own Inbox receipt | Aligned minute |
 | Exchange | `edit-reopen-draft` | Create, read, edit, reopen/verify and delete own draft | Aligned minute |
@@ -28,91 +28,28 @@ ingested health reports or notification delivery. See
 | OneDrive | `app-folder-lifecycle` | Write/read/update/read app data in a new cycle-owned folder, then delete it | 300 seconds |
 | OneDrive | `document-versions` | Update a file and verify actual prior-version bytes; optional downloaded-byte restore | 300 seconds |
 
-These are not browser/desktop, employee sign-in or sync-client tests. Teams
-readback does not prove a second bot received a message; meeting connectivity
-does not prove received audio, bidirectional audio or call quality, and the project
-measures no audio quality.
-SharePoint, P2P audio, Adaptive Card interactions, file
-sharing and search prototypes are not part of this project.
-
 Details: [Exchange](./synthetic-tests/exchange/README.md),
 [Teams](./synthetic-tests/teams/README.md),
 [OneDrive](./synthetic-tests/onedrive/README.md).
 
 ## Set up
 
-Requires Node.js 22 or 24, npm, Git, the Azure CLI and PowerShell 7.4+ with the
-`ExchangeOnlineManagement` module (`Install-Module ExchangeOnlineManagement -Scope CurrentUser`).
-One file holds everything you maintain: [monitoring.config.json](./monitoring.config.json),
-the real configuration of this repository's Consto test tenant, which you edit for your
-own: the Azure destination and health thresholds, your tenants with their services,
-scenarios, test accounts and targets, each service's execution and worker settings,
-deployment settings and the reporting [groups](./docs/monitoring-groups.md). It names
-things (an Azure resource by its name, an account by its address) and holds only the few
-IDs you must supply, never secrets: see
-[what the config holds](./docs/deployment.md#what-the-config-holds). The IDs the setup
-commands look up or generate go to a gitignored `.env` beside it instead. There are no
-per-service, group or deployment files, and a `schemaVersion` `1.0` config must be
-rewritten to `2.0`.
+Follow the separate **[setup guide](./docs/setup.md)** for prerequisites, creating
+and licensing Microsoft 365 test accounts, configuring the project, granting
+access, generating target IDs and deploying.
 
-1. **Edit** the config: `healthModel` subscription and resource group, tenants,
-   accounts and targets, scenarios, cadence and `groups`. All supported services and
-   scenarios are enabled by default.
-2. **Set up Microsoft 365.** Sign in with `az login` as an Exchange and Teams
-   administrator of the Microsoft 365 tenant. Setup works on the config tenant that
-   matches the signed-in tenant, so run it once per tenant:
+The only maintained configuration is
+[monitoring.config.json](./monitoring.config.json): tenants, accounts and targets,
+scenarios, execution settings, deployment and [user groups](./docs/monitoring-groups.md).
+Generated IDs go to a gitignored `.env` beside it; secrets do not belong in either file.
 
-   ```sh
-   cd synthetic-tests
-   npm ci
-   npm run setup -- -Plan   # only reports what would change
-   npm run setup            # idempotent and add-only
-   ```
+**Review before running:** the checked-in configuration belongs to a real test
+tenant and enables live probes, Azure Monitor export, stable Service Health,
+Exchange beta Service Activity and root health alerts. It is not an offline example.
 
-   Setup extends the Exchange worker's mailbox scope,
-   adds each group's accounts to its Teams team and channel, looks up the IDs the config
-   leaves out, and provisions the Exchange reply seeds. It does not cover OneDrive's
-   drives and folders (`npm run onedrive:setup`), the one-time Exchange RBAC approval or
-   Teams meeting creation. Details, limits and the `.env` format:
-   [deployment](./docs/deployment.md#set-up-microsoft-365-with-one-script).
-3. **Deploy.** `npm run deploy -- --plan` previews locally. Then, signed in with
-   `az login` to the subscription in `healthModel.subscriptionId` (its tenant must match
-   `deployment.azureTenantId`, which defaults to the monitored tenant), `npm run deploy`
-   deploys the health models, then the foundation, then the image build and workers,
-   then a rollout check, all from the same config. See
-   [deployment](./docs/deployment.md#deploy-with-one-command).
-
-Then **verify**: confirm fresh journey reports, roll-up and notifications end to end. A
-finished deployment proves only the rollout; see
+After deployment, verify fresh journey reports, roll-up and notifications end to
+end. A finished deployment proves only the rollout; see
 [operations](./docs/operations.md#enterprise-reliability-acceptance-gate).
-
-To try a service without Microsoft 365 operations or Azure ingestion, set its
-`execution.mode` to `"simulation"` and run `npm run exchange -- --once` (also `teams`,
-`onedrive`) from `synthetic-tests/`: it prints labeled results and report previews. Add
-`--tenant <id>` when the config has several tenants; remove `--once` to repeat on that
-service's execution lanes.
-
-### Enable real Microsoft 365 execution
-
-Live execution stays off until you opt in:
-
-- Obtain administrator-approved [access](./docs/cross-tenant-access.md) first.
-  Hosted identities are explicitly selected UAMIs, named in each service's
-  `worker.identity`. Teams participants are bots, never employee tokens; Exchange
-  retains an explicit certificate option.
-- Set `execution.mode: "live"` on the tenant's service and
-  `deployment.enableLiveProbes: true`. Deployment rejects a live worker unless
-  `enableLiveProbes` is true, and that setting also sets `ENABLE_LIVE_M365=true` on
-  hosted workers. The runtime refuses live mode without that variable, so a local
-  live run must set it.
-- SELF-REPLY tests answer a retained received self-addressed message in that target's
-  same mailbox, which `npm run setup` provisions into `.env` before the hosted worker runs
-  ([reply seeds](./synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately)).
-  OneDrive journeys need `npm run onedrive:setup` first
-  ([OneDrive setup](./docs/onedrive-setup.md)).
-- Run one real cycle first; inspect operations, cleanup, accepted reports and
-  service/root propagation. Missing OneDrive folder IDs/grants fail honestly,
-  never by publishing simulated Healthy results.
 
 ## Worker architecture
 
@@ -121,19 +58,20 @@ tenant. Each tenant/service worker has its own Container App and managed identit
 and mounts the same root config. The
 [shared runtime](./synthetic-tests/utils/README.md), including scheduling,
 aggregation and reporting, runs inside each worker, not as a separate service.
-Optional [reporting groups](./docs/monitoring-groups.md) add a named signal
-aggregation group to each journey entity, not extra models or entity branches;
-workers stay centrally hosted.
+[Exchange and OneDrive user groups](./docs/monitoring-groups.md) add named signal
+aggregation groups to their journey entities, not extra models or entity branches.
+Teams targets stay ungrouped; workers stay centrally hosted.
+
 
 ```mermaid
-flowchart TB
+flowchart LR
     config["monitoring.config.json<br/>(single root config)"]
-    m365["Microsoft 365<br/>Microsoft Graph + Teams Bot Connector"]
+    m365["Microsoft 365<br/>Microsoft Graph<br/>Teams Bot Connector"]
 
     subgraph workers["Azure Container Apps"]
-        exchange["Exchange worker<br/>Execution lanes / aggregation / reporter"]
-        teams["Teams worker<br/>Execution lanes / aggregation / reporter"]
-        onedrive["OneDrive worker<br/>Execution lanes / aggregation / reporter"]
+        exchange["Exchange worker<br/>Execution lanes<br/>Aggregation / reporter"]
+        teams["Teams worker<br/>Execution lanes<br/>Aggregation / reporter"]
+        onedrive["OneDrive worker<br/>Execution lanes<br/>Aggregation / reporter"]
     end
 
     config -.-> exchange
@@ -181,21 +119,27 @@ parallel export, not a prerequisite for direct health-report ingestion.
 
 ## How health is reported
 
+![Exchange Experience health model, with Service Health, Mail and Calendar entities and their business steps](./docs/images/exchange-health-model.png)
+
 One Container App per enabled tenant and service (three for the checked-in single
 tenant) runs stateless cycles and publishes aggregated
 journey/action health reports directly. Each attempt contributes success
 **1 or 0** and a measured duration; executed actions are measured separately.
-A timeout is a failed attempt reported Unhealthy: Exchange attempts are cancelled
-at 15 seconds, or 30 for SELF-REPLY (`reply-mail`). A mean duration above 15 seconds is Degraded, so a
-15-30 second success reports Degraded.
+A timeout contributes a failed attempt, not an Unknown sample: Exchange attempts
+are cancelled at 15 seconds, or 30 for SELF-REPLY (`reply-mail`). Entity health
+comes from the aggregate success percentage and mean duration, not a per-attempt
+state. With the checked-in thresholds, a mean duration above 15 seconds is
+Degraded; a small number of failures in a large cohort need not make it Unhealthy.
 Skipped actions are not failed requests. Authentication and compensating cleanup
-remain internal, while deliberate deletion/cancellation/departure are business steps.
+remain internal, while deliberate draft/file/private-series deletion and call
+departure are business steps.
 There are no per-target signal inventories or durable result/outbox state.
 
-The health model shows only your [reporting groups](./docs/monitoring-groups.md):
-each journey entity carries one signal aggregation group per group it serves, named
-after the group's `displayName`. Overall signals publish ungrouped, and stable
-Service Health stays a suppressed supporting entity under each Experience.
+Exchange and OneDrive `targets` are keyed [user groups](./docs/monitoring-groups.md),
+each containing `userGroupName` and `users`. Their journey entities carry one signal
+aggregation group per group they serve, named after `userGroupName`. Teams has no
+user groups. Overall signals publish ungrouped, and stable Service Health stays a
+suppressed supporting entity under each Experience.
 
 The default selection creates **four models**: a root model and one for each
 service. The [shared catalogue](./synthetic-tests/utils/README.md#config) defines
@@ -221,6 +165,10 @@ provider lanes, initially every 300 seconds. Exchange and Teams additionally
 support five approved beta activity functions each; OneDrive has no beta collector.
 Each product's single suppressed Service Health entity cannot change synthetic metrics or
 Experience rollup. Beta collection requires separate explicit approval.
+Usable activity observations create `microsoft-activity-*` external signals on
+that entity, not separate Service Activity nodes. The checked-in config enables
+the five Exchange functions, not Teams beta collection; without configured
+thresholds, their numeric measurements have diagnostic `Unknown` health.
 Unavailable sources publish **no health reports**; collection failures remain
 diagnostic-only. Observed Service Health statuses map to 100/50/0 availability.
 Root-configured [OpenTelemetry](./health-model/README.md#optional-otel-signals)
@@ -233,7 +181,8 @@ which users are affected, and why: see
 ## Guides and acceptance
 
 - [Runtime configuration, validation and local usage](./synthetic-tests/README.md)
-- [What the config holds, setup (`npm run setup`), generated IDs (`.env`), deployment and dated evidence](./docs/deployment.md)
+- [Setup: test accounts, prerequisites and access](./docs/setup.md)
+- [What the config holds, generated IDs (`.env`), deployment and dated evidence](./docs/deployment.md)
 - [Reporting groups](./docs/monitoring-groups.md)
 - [Model topology, report semantics and migration](./health-model/README.md)
 - [Provider permissions, endpoints and mappings](./docs/provider-monitoring.md)

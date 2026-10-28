@@ -72,8 +72,8 @@ async function initializeService(
     dependencies: {
       ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
       ...(service.type === "exchange" && options.project ? {
-        capacityGroups: options.project.groups.map(group => ({
-          id: group.id, displayName: group.displayName, targetIds: group.targetIds.exchange,
+        capacityGroups: options.project.groups.filter(group => group.service === "exchange").map(group => ({
+          id: group.id, displayName: group.displayName, targetIds: group.targetIds,
         })),
       } : {}),
     },
@@ -300,7 +300,8 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
           if (!signal.aborted) {
             await reportInitializationFailure(
               service, laneProbes, reportHealth, telemetry, error, startedAt, results, laneSignal,
-              options.project?.groups.map(group => ({ id: group.id, displayName: group.displayName, targetIds: group.targetIds[service.type] })),
+              options.project?.groups.filter(group => group.service === service.type)
+                .map(group => ({ id: group.id, displayName: group.displayName, targetIds: group.targetIds })),
             );
           }
         };

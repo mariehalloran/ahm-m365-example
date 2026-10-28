@@ -169,8 +169,8 @@ export function aggregateHealthReports(
 
 // Each group re-aggregates only its own results into journey-level signals; groups never publish placeholders.
 export function groupHealthReports(project: ProjectConfig, service: ServiceConfig["type"], cycle: CycleResults): HealthReport[] {
-  return project.groups.flatMap(group => {
-    const members = new Set(group.targetIds[service]);
+  return project.groups.filter(group => group.service === service).flatMap(group => {
+    const members = new Set(group.targetIds);
     const results = cycle.results.filter(result => members.has(result.testId));
     if (!results.length) return [];
     const journeys = new Set<string>(results.map(result => probeServices[result.testType].entityName));

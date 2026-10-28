@@ -25,8 +25,8 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 Do not enable live mode against real-user resources.
 
 1. Obtain dedicated approved targets and an owner. Use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) for Exchange.
-2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, `npm run setup` extends the identity's scope to every configured mailbox, add-only ([setup](./deployment.md#set-up-microsoft-365-with-one-script)).
-3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) (not part of `npm run setup`) to create folders/grants and save real drive/folder IDs to `.env`; runtime has no broad permission or root-discovery fallback.
+2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, [`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access) extends the identity's scope to every configured mailbox, add-only.
+3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) (not part of `npm run setup:ids` or `npm run setup:reply-seeds`) to create folders/grants and save real drive/folder IDs to `.env`; runtime has no broad permission or root-discovery fallback.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
 5. Set `execution.mode: "live"` and independently opt in with `deployment.enableLiveProbes: true`; hosted workers then receive `ENABLE_LIVE_M365=true` and a local run exports it. See the [live gates](./deployment.md#live-execution-gates).
 6. Use `--once` first and inspect operation and cleanup outcomes.
@@ -77,6 +77,13 @@ Each attempt contributes one binary success observation (1 or 0); executed busin
 
 [Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics) explain per-cycle aggregates and reporting gaps. Reports are not a full metrics store, percentile history, or arbitrary logs query interface; cross-cycle weighted statistics cannot be inferred from means alone. Crashes/network failures can lose observations, with no durable outbox or exactly-once guarantee. Alert configuration and notification delivery are separate from report acceptance.
 
+Root-configured `healthModel.alertActionGroupIds` connects existing Azure Monitor
+action groups to the main model's root: Degraded alerts at Sev 2 and Unhealthy at
+Sev 1. Manage recipients in those groups, not in the project configuration.
+See [root health alerts](../health-model/README.md#root-health-alerts) for deployment
+and notification checks. These state-change alerts do not replace independent
+worker/report-freshness monitoring or prove notification delivery.
+
 ## Optional OpenTelemetry
 
 OTEL is disabled by default and configured only at root. If enabled, monitor `telemetry-initialization-failed`, `telemetry-output-failed` and `telemetry-export-failed` separately from journey and direct-report failures. Export flush/shutdown are bounded; failures still allow direct report attempts and make one-shot execution fail. An OTEL diagnostic-recording error does not rewrite an observed provider status as a Graph collection failure. No disk buffer/outbox or replay is added. Azure ingestion acceptance is not proof of query evaluation or model propagation. Verify both paths end to end, approve ingestion authentication and retention/cost, and retain independent stopped/stalled-worker and notification tests. See [optional export semantics](../synthetic-tests/utils/README.md#console-otel-and-reliability).
@@ -98,7 +105,7 @@ A record without a reporting group shows `(no group)` and one without a user `(n
 | `monitoring.tenant` | The tenant alias in the config |
 | `monitoring.user` | The sole configured Exchange mailbox or the OneDrive `userPrincipalName`; never set for Teams, whose participants are bots |
 | `monitoring.peer` | Not populated by single-user Exchange journeys |
-| `monitoring.group`, `monitoring.group_name` | The reporting group's id and display name |
+| `monitoring.group`, `monitoring.group_name` | The Exchange/OneDrive user group's id and `userGroupName`; absent for Teams |
 | `monitoring.group_duplicate` | `"true"` on every record after the first when one target belongs to several groups. The overall model signals skip these so each attempt counts once; the per-group searches keep them |
 | `probe.service`, `probe.journey`, `probe.step`, `probe.step_status`, `probe.diagnostic_category` | What ran, and how the step ended |
 | `probe.detail` | Failed steps only: a short hint from the integration error, truncated to 200 characters, never message or Graph content |

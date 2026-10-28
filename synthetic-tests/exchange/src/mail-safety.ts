@@ -9,7 +9,7 @@ export const messageSchema = z.object({
   conversationId: z.string().optional(),
   internetMessageId: z.string().optional(),
   internetMessageHeaders: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
-  from: address.optional(),
+  from: address.nullish(),
   toRecipients: z.array(address).optional(),
   ccRecipients: z.array(address).optional(),
   bccRecipients: z.array(address).optional(),
@@ -30,7 +30,12 @@ export function selfMessage(message: Message, mailbox: string): boolean {
   return message.from?.emailAddress.address.toLowerCase() === mailbox.toLowerCase() && selfRecipients(message, mailbox);
 }
 
+export function selfDraft(message: Message, mailbox: string): boolean {
+  return selfRecipients(message, mailbox) && (!message.from ||
+    message.from.emailAddress.address.toLowerCase() === mailbox.toLowerCase());
+}
+
 export function ownedMessage(message: Message, mailbox: string, subject: string, marker: string): boolean {
   return message.subject === subject && message.bodyPreview?.includes(marker) === true &&
-    (message.isDraft === true ? selfRecipients(message, mailbox) : selfMessage(message, mailbox));
+    (message.isDraft === true ? selfDraft(message, mailbox) : selfMessage(message, mailbox));
 }

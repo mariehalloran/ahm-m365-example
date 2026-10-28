@@ -4,6 +4,9 @@
     "name": "m365-experience-consto",
     "subscriptionId": "17a37fff-b1ef-4af7-9bd2-70898b286aaf",
     "resourceGroup": "rg-m365-consto",
+    "alertActionGroupIds": [
+      "/subscriptions/17A37FFF-B1EF-4AF7-9BD2-70898B286AAF/resourceGroups/rg-m365-consto/providers/microsoft.insights/actionGroups/ag-m365-experience-consto"
+    ],
     "reportTtlMinutes": 15,
     "successDegradedPercent": 99,
     "successUnhealthyPercent": 95,
@@ -23,6 +26,7 @@
     "id": "consto",
     "displayName": "Consto",
     "tenantId": "5e7897a0-4a38-43f3-914d-195d5355e969",
+    "$comment": "providerClientId: Entra application (client) ID for the shared read-only Microsoft 365 Service Health and optional service activity collector, not the bot identity.",
     "providerClientId": "a0bc7fcd-820f-4873-83b5-c7dd77ddad92",
     "services": {
       "exchange": {
@@ -47,20 +51,22 @@
           "send-receive-mail": true, "edit-reopen-draft": true, "attachment-mail": true,
           "reply-mail": true, "recurring-calendar": true
         },
-        "targets": [
-          {
-            "id": "exchange-probe-001", "mailbox": "test-user-1@constosuites.onmicrosoft.com"
+        "targets": {
+          "united-kingdom-users": {
+            "userGroupName": "United Kingdom Users",
+            "users": [
+              { "id": "exchange-probe-002", "mailbox": "test-user-4@constosuites.onmicrosoft.com" },
+              { "id": "exchange-probe-003", "mailbox": "test-user-5@constosuites.onmicrosoft.com" }
+            ]
           },
-          {
-            "id": "exchange-probe-002", "mailbox": "test-user-4@constosuites.onmicrosoft.com"
-          },
-          {
-            "id": "exchange-probe-003", "mailbox": "test-user-5@constosuites.onmicrosoft.com"
-          },
-          {
-            "id": "exchange-probe-004", "mailbox": "test-user-2@constosuites.onmicrosoft.com"
+          "united-states-users": {
+            "userGroupName": "United States Users",
+            "users": [
+              { "id": "exchange-probe-001", "mailbox": "test-user-1@constosuites.onmicrosoft.com" },
+              { "id": "exchange-probe-004", "mailbox": "test-user-2@constosuites.onmicrosoft.com" }
+            ]
           }
-        ]
+        }
       },
       "teams": {
         "enabled": true,
@@ -98,26 +104,18 @@
           ]
         },
         "worker": { "appName": "m365-ctbcoa-onedrive", "identity": "uami-m365-experience-consto-onedrive" },
+        "setup": { "authentication": "managed-identity", "workerClientId": "a439a969-afe3-454f-850c-5909490ccd31", "setupClientId": "5dddb683-c13d-448a-9a12-fb7db82147a8" },
         "scenarios": { "user-drive-roundtrip": true, "app-folder-lifecycle": true, "document-versions": true },
-        "targets": [
-          { "id": "onedrive-probe-001", "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false },
-          { "id": "onedrive-probe-002", "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false }
-        ]
+        "targets": {
+          "united-states-users": {
+            "userGroupName": "United States Users",
+            "users": [
+              { "id": "onedrive-probe-001", "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false },
+              { "id": "onedrive-probe-002", "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false }
+            ]
+          }
+        }
       }
     }
-  }],
-  "groups": [
-    {
-      "id": "united-kingdom-users",
-      "displayName": "United Kingdom Users",
-      "accounts": ["test-user-4@constosuites.onmicrosoft.com", "test-user-5@constosuites.onmicrosoft.com"],
-      "teams": ["teams-probe-002"]
-    },
-    {
-      "id": "united-states-users",
-      "displayName": "United States Users",
-      "accounts": ["test-user-1@constosuites.onmicrosoft.com", "test-user-2@constosuites.onmicrosoft.com"],
-      "teams": ["teams-probe-001", "teams-bot-meeting-001"]
-    }
-  ]
+  }]
 }

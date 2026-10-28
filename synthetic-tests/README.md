@@ -1,7 +1,7 @@
 # Microsoft 365 synthetic tests
 
-This is the self-contained Node project: source, shared utilities, tests,
-TypeScript/test configuration, dependencies and build output live here. The single
+This is the self-contained Node project: source, shared utilities,
+TypeScript configuration, dependencies and build output live here. The single
 user-owned [monitoring.config.json](../monitoring.config.json) stays at the repository
 root, with the gitignored `.env` that the setup commands write beside it
 ([generated IDs](../docs/deployment.md#generated-ids-in-env)). The three service
@@ -16,12 +16,15 @@ P2P audio, card, sharing or search prototype.
 
 ## Commands
 
-Run from this directory. The first two are the whole user flow after editing the config
-([setup and deploy](../docs/deployment.md)):
+Run from this directory. [`docs/setup.md`](../docs/setup.md) covers administrator
+prerequisites; `setup:ids` and `setup:reply-seeds` turn that access into `.env` values, and
+`deploy` applies models and workers after those and the required OneDrive provisioning
+steps are complete ([setup and deploy](../docs/deployment.md)):
 
 | Command | What it does |
 | --- | --- |
-| `npm run setup` | Microsoft 365 setup and ID lookups: one PowerShell script, [`setup/setup.ps1`](./setup/setup.ps1); `-- -Plan` only reports |
+| `npm run setup:ids` | Looks up or creates the Teams channel, peer bot client ID, Teams calling callback URL, call targets' organizer user IDs and OneDrive accounts' user IDs |
+| `npm run setup:reply-seeds` | Provisions the retained SELF-REPLY message each `reply-mail` mailbox answers; `-- -Reprovision` replaces one that no longer validates |
 | `npm run deploy` | Health models, foundation and workers from the root config; `-- --plan` previews |
 | `npm run onedrive:setup` | OneDrive folders and grants; writes drive and folder IDs to `.env` ([guide](../docs/onedrive-setup.md)) |
 | `npm run exchange:mail-test` | Local reply-seed and attachment/reply diagnostic; `-- --apply` writes seeds to `.env` ([guide](./exchange/README.md#provision-and-test-attachment-and-reply-separately)) |
@@ -30,6 +33,11 @@ Run from this directory. The first two are the whole user flow after editing the
 ## Run locally
 
 Requires Node.js 22 or 24 and npm:
+
+The checked-in services are configured for **live** execution. For an offline
+preview, set the chosen service's `execution.mode` to `"simulation"` and root
+`serviceHealth.enabled` and `otel.enabled` to `false` before these commands.
+Required generated target IDs must still be present in the adjacent `.env`.
 
 ```sh
 cd synthetic-tests
@@ -56,25 +64,29 @@ It names things and holds only the few IDs you must supply, never secrets
 
 | Field | Purpose |
 | --- | --- |
-| `healthModel` | Azure destination, success/duration thresholds and report TTL |
+| `healthModel` | Azure destination, success/duration thresholds, report TTL and optional `alertActionGroupIds`; recipients are managed in those Azure action groups |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins; see the [`deployment` section](../docs/deployment.md#the-deployment-section) |
 | `otel`, `serviceHealth` | Optional console/Azure Monitor export and Service Health context; both disabled by default |
 | `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId` and the three services below |
 | `tenants[].services.<service>.enabled`, `scenarios` | Five single-user Exchange switches (self-mail, draft, self-attachment, SELF-REPLY, private recurrence), only `channel-conversation` and `scheduled-meeting` for Teams, only `user-drive-roundtrip`, `app-folder-lifecycle` and `document-versions` for OneDrive |
-| `….targets` | Approved mailbox/channel/account metadata, never credentials; generated IDs stay out of it (below) |
+| `….exchange.targets`, `….onedrive.targets` | [User groups](../docs/monitoring-groups.md) keyed by group ID, each with `userGroupName` and `users` containing the approved per-user target objects |
+| `….teams.targets` | Ungrouped channel target array; never user groups |
 | `….callTargets` | Teams only: the dedicated meeting and its `organizer`, not human call targets |
 | `….execution` | Mode, cadence/deadlines, `executionLanes`, authentication, cleanup and optional provider settings |
 | `….access` | Nonsecret certificate references and, for Teams, the bot, peer bot and peer identity names |
 | `….worker` | Container App name and managed identity (`identity`, an existing one by name, or `identityName`) |
 | `….setup` | OneDrive only: the explicit privileged credential used by `onedrive:setup` |
-| `groups[]` | Optional [reporting groups](../docs/monitoring-groups.md) |
 
 All supported scenarios default to enabled; obsolete service/scenario keys are
-rejected rather than silently migrated.
+rejected rather than silently migrated. Optional OTEL and provider context default
+off in the schema, but both are enabled in the checked-in tenant configuration.
+There is no root `groups` list. Shared users keep the same target ID and settings
+in each group and execute once per selected journey; generated IDs remain outside
+the user target objects.
 
 Looked-up and generated IDs (reply seeds; Teams channel, organizer, peer-bot and callback
 IDs; OneDrive user, drive and folder IDs) are not config fields you maintain:
-`npm run setup` and the other setup commands write them to the gitignored `.env` next to
+`npm run setup:ids` and the other setup commands write them to the gitignored `.env` next to
 the config, and deploy and every TypeScript command fill them in
 ([format and keys](../docs/deployment.md#generated-ids-in-env)).
 
@@ -83,13 +95,17 @@ the config, and deploy and every TypeScript command fill them in
 service scenario exactly once, even when disabled. Lanes run independently
 and never overlap themselves. Missed slots are skipped, not replayed.
 
-Default lanes:
+Checked-in lanes:
 
 - Exchange: all five journeys for every unique mailbox on one aligned wall-clock minute;
   concurrent independent attempts, sequential dependent steps and global/per-mailbox Graph-request permits.
 - Teams: one lane containing channel conversation and scheduled meeting, every 120 seconds.
 - OneDrive: three independent lanes, each every 300 seconds.
 - Each service's optional providers: a separate lane, default `providerIntervalSeconds: 300`.
+
+Without explicit `executionLanes`, Teams and OneDrive each use one lane containing
+all their journeys, with the service's `intervalSeconds` and `timeoutSeconds`.
+Exchange always uses its single aligned-minute lane.
 
 See [shared configuration details](./utils/README.md#config). `execution` rejects
 `enabled`, `targets`, report-policy and obsolete `telemetry` fields.
@@ -100,17 +116,19 @@ A `schemaVersion` `1.0` config (root `services` with per-service `configFile` fi
 is rejected; rewrite it as `2.0` from the checked-in file. There is no automatic
 migration or compatibility mode. Removing a service, scenario or lane from the config
 does not remove what was deployed; retire only owned obsolete resources under the
-approved procedure (`deployment.retireEntities`, [model migrations](../health-model/README.md#apply-and-migrate)).
+approved [model migration procedure](../health-model/README.md#apply-and-migrate).
+`deployment.retireEntities` accepts obsolete entity IDs, not entities still
+supported by the current catalogue even if their scenarios are disabled.
 
 - Keep exactly the supported scenarios, each assigned to one lane. Do not
   rename deployed `onedrive-planned-*` roots or their `step-1`…`step-4` IDs.
 - Attachment and reply are separate scenarios; reply needs a retained `replySeed`
-  in that same mailbox, which `npm run setup` provisions into `.env` ([reply
+  in that same mailbox, which `npm run setup:reply-seeds` provisions into `.env` ([reply
   seeds](./exchange/README.md#provision-and-test-attachment-and-reply-separately)).
 - Replace old Exchange sender/recipient target pairs with one `{ id, mailbox }`
   target for every unique former participant. Removed journeys/fields are rejected.
   Re-provision incompatible paired fixtures explicitly with
-  `npm run setup -- -ReprovisionReplySeeds`; see the Exchange migration guide.
+  `npm run setup:reply-seeds -- -Reprovision`; see the Exchange migration guide.
 - Teams accepts only bot participants with explicitly selected managed identities;
   there is no bootstrap command or user-token compatibility path.
 - Optional OneDrive stable collection accepts `serviceHealth: true` and inherits the
@@ -121,20 +139,23 @@ approved procedure (`deployment.retireEntities`, [model migrations](../health-mo
 
 1. Approve dedicated resources, identity, cadence and cleanup.
    Follow [access setup](../docs/cross-tenant-access.md) and each service guide.
-2. `npm run deploy` deploys the [health models](../health-model/README.md#apply-and-migrate)
-   before the [worker foundation](./infra/README.md). The root references three
-   independent service models; each worker identity has ingest-only access to its
-   own model.
-3. Grant only required Microsoft 365 access. Exchange uses mailbox-scoped
-   application RBAC (a one-time approval); Teams uses installed managed-identity
-   bots and team-scoped Graph readback; OneDrive uses Selected folder grants and
-   AppFolder. [Bulk OneDrive setup](../docs/onedrive-setup.md) creates/reuses
-   folders, grants scoped write access and writes real bindings to `.env` for every
-   approved account.
-4. Run `npm run setup` ([what it does and does not cover](../docs/deployment.md#set-up-microsoft-365-with-one-script)):
-   it keeps the Exchange scope, Teams membership and channels, and
-   reply seeds current, and looks up the IDs the config leaves out.
-5. Set `execution.mode: "live"` on the service and `deployment.enableLiveProbes: true`.
+2. Follow [`docs/setup.md`](../docs/setup.md) for every access grant — resources,
+   identities, Exchange application RBAC, Graph application roles, federated
+   credentials, bots/channels and the Teams app — with the Azure, Exchange and
+   Entra administrator roles it lists for each step. Use
+   `deployment.foundation.mode: "existing"` and named resources.
+3. Once that access exists, run `npm run setup:ids` and, when `reply-mail` is
+   selected, `npm run setup:reply-seeds`: both are idempotent and only turn
+   existing access into `.env` values, never a new grant. Team installation,
+   Teams app upload and meeting creation remain administrator tasks; existing
+   provider/readback app registrations are required.
+   [Bulk OneDrive setup](../docs/onedrive-setup.md), `npm run onedrive:setup`,
+   separately provisions selected folders/grants and writes drive/folder IDs;
+   configure its privileged OneDrive `setup` credential block first.
+4. `npm run deploy` deploys the [health models](../health-model/README.md#apply-and-migrate)
+   before the [worker foundation](./infra/README.md) and workers. Each worker
+   identity has ingest-only access to its own service model.
+5. Live execution requires `execution.mode: "live"` and `deployment.enableLiveProbes: true`.
    Hosted workers then receive `ENABLE_LIVE_M365=true`; a local live run must export
    it. See the [live gates](../docs/deployment.md#live-execution-gates).
 
@@ -180,10 +201,13 @@ need an independent observer.
 Each attempt contributes binary success 1/0 and total duration. Executed business
 steps contribute their own measurements; skipped steps never enter a request
 denominator. Generic authentication/cleanup stay internal, while deliberate
-deletion/cancellation/departure are business steps. Execution timeouts are failures,
-not Unknown journeys. Reports aggregate by stable journey/action IDs, not targets.
+draft/file/private-series deletion and call departure are business steps.
+Execution timeouts are failures, not Unknown samples. Entity health follows the
+aggregate success and duration thresholds; a failed attempt does not automatically
+make a large cohort Unhealthy.
+Reports aggregate by stable journey/action IDs, not targets.
 
-Every live cycle directly publishes health reports and console diagnostics.
+Completed live cycles directly publish health reports and console diagnostics.
 Optional root OTEL runs in-process and does not replace direct reporting; with Azure
 Monitor export, deployment also creates the administrator saved searches
 ([Log Analytics for administrators](../docs/operations.md#log-analytics-for-administrators)).
@@ -201,17 +225,15 @@ deployment readiness do not prove live success; see
 From this directory:
 
 ```sh
-npm test
 npm run typecheck
 npm run build
+npm run deploy -- --plan
 ```
 
-From the repository root:
-
-```sh
-PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s health-model/tests -v
-PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s synthetic-tests/infra/tests -v
-```
+Typechecking and building also check the generated catalogue. The deploy plan
+validates the root configuration and `.env` bindings locally, without Azure
+changes; it does not verify permissions or live access. There is no unit-test or
+Python template-test suite. See [local Bicep validation](../health-model/README.md#local-validation).
 
 The Docker build context is this directory. The runtime image contains only
 compiled code and production dependencies; workers mount the root config at

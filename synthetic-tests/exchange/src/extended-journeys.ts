@@ -7,7 +7,7 @@ import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
 import { authenticate, createDraft, mailMarker, sendMessage, type MailAttempt } from "./steps.js";
-import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfMessage, selfRecipients } from "./mail-safety.js";
+import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfDraft, selfMessage } from "./mail-safety.js";
 import { readReplySeed } from "./reply-seed.js";
 
 const identified = z.object({ id: z.string().min(1) });
@@ -68,7 +68,7 @@ function ownsMail(a: Attempt, message: z.infer<typeof messageSchema>): boolean {
   if (message.id === a.probe.replySeed?.messageId) return false;
   if (!a.replyConversation) return ownedMessage(message, a.mailbox, a.subject, mailMarker(a.mail));
   return message.conversationId === a.replyConversation && message.bodyPreview?.includes(a.replyMarker!) === true &&
-    (message.isDraft === true ? selfRecipients(message, a.mailbox) : selfMessage(message, a.mailbox));
+    (message.isDraft === true ? selfDraft(message, a.mailbox) : selfMessage(message, a.mailbox));
 }
 
 async function receive(a: Attempt) {
@@ -118,7 +118,7 @@ async function replyMail(a: Attempt): Promise<void> {
     if (reply.id === seed.id) throw new IntegrationError("read-failure");
     a.mail.ownedMessageIds.add(reply.id);
     if (!reply.isDraft || !reply.subject?.endsWith(seed.subject) || reply.conversationId !== seed.conversationId ||
-        !selfRecipients(reply, a.mailbox)) {
+        !selfDraft(reply, a.mailbox)) {
       throw new IntegrationError("configuration-failure", undefined, "self-reply-recipients-required");
     }
     replySubject = reply.subject;
@@ -225,17 +225,23 @@ async function clean(a: Attempt, signal: AbortSignal): Promise<void> {
     catch (error) { failures.push(error); }
   }
   if (a.context.config.EXCHANGE_CLEANUP_ENABLED !== "false" && a.probe.type !== "exchange-recurring-calendar") {
+    const attempted = new Set<string>();
+    const deleteKnown = async () => {
+      for (const id of a.mail.ownedMessageIds) {
+        if (id === a.probe.replySeed?.messageId || attempted.has(id)) continue;
+        attempted.add(id);
+        try { await a.graph.request(item(a.mailbox, "messages", id), signal, "DELETE"); }
+        catch (error) { failures.push(error); }
+      }
+    };
+    await deleteKnown();
     try {
       const query = new URLSearchParams({ "$filter": mailFilter(a), "$top": "100", "$select": messageSelect });
       const copies = await a.graph.json(`${user(a.mailbox)}/messages?${query}`, messagesSchema, signal);
       for (const copy of copies.value) if (ownsMail(a, copy)) a.mail.ownedMessageIds.add(copy.id);
       if (copies["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
     } catch (error) { failures.push(error); }
-    for (const id of a.mail.ownedMessageIds) {
-      if (id === a.probe.replySeed?.messageId) continue;
-      try { await a.graph.request(item(a.mailbox, "messages", id), signal, "DELETE"); }
-      catch (error) { failures.push(error); }
-    }
+    await deleteKnown();
   }
   if (failures.length) throw new IntegrationError("cleanup-failure");
 }

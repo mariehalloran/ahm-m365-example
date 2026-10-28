@@ -16,7 +16,12 @@
    | Provider context | Optional `ServiceHealth.Read.All` on the provider app (the tenant's `providerClientId`) and its federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
    | Health reports | The foundation grants each Azure identity ingest-only access on its own service model |
 
-6. Run `npm run setup` as an Exchange and Teams administrator ([what it does and does not cover](./deployment.md#set-up-microsoft-365-with-one-script)): it keeps the Exchange mailbox scope, Teams membership and single-user SELF-REPLY fixtures current and looks up the IDs the config leaves out, but not OneDrive's drives and folders or the Exchange approval above.
+6. Follow [`docs/setup.md`](./setup.md) as an Exchange and Teams administrator
+   ([what it covers](./deployment.md#set-up-microsoft-365)) to grant, and keep current by hand
+   as targets change, the Exchange mailbox scope and Teams membership. Then run
+   `npm run setup:ids` for the IDs the config leaves out and, when `reply-mail` is selected,
+   `npm run setup:reply-seeds` for the single-user SELF-REPLY fixtures — neither touches
+   OneDrive's drives and folders or the Exchange approval above.
 7. Enable live execution only after allowed/denied access checks: name each approved identity in `worker.identity`, set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove `deployment.stage` (default `workers`) and run `npm run deploy` (see the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)). Verify real journeys and cleanup, then fresh reports and service/root rollup.
 
 **Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Teams uses only `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`; hosted `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the attached UAMI for Bot Connector, with a second explicitly selected UAMI for meetings. Graph read permissions alone do not authorize posting: approve and install the matching bot. No delegated-user sign-in, bootstrap or token cache exists. Provider credentials remain application-only and separate from synthetic access.
@@ -31,14 +36,14 @@ a single-tenant application owned by the M365 tenant**. Generic cross-tenant
 managed-identity federation is not implemented; the Teams readback federation in
 the recommended setup is same-tenant only.
 
-`npm run setup` supports a same-tenant managed identity only. With a live Exchange service
-and a `deployment.azureTenantId` that differs from the tenant's `tenantId` (it defaults to
-that, so only cross-tenant hosting sets it), it stops at the Exchange step and points here,
-before it adds Teams members, looks up IDs or provisions self-addressed reply
-seeds. Do those steps by hand: extend the application's Exchange scope
-(step 3 below), create the lists and memberships, and provision the reply seeds with a local
+`npm run setup:reply-seeds` runs the Exchange worker's own managed identity in a temporary
+job, so it only works with a same-tenant managed identity. Skip it when
+`deployment.azureTenantId` differs from the tenant's `tenantId` (it defaults to that, so only
+cross-tenant hosting sets it); provision the reply seed by hand instead, with a local
 `npm run exchange:mail-test -- --apply` using explicit certificate authentication, which
-writes them to `.env`.
+writes it to `.env`. Teams membership, covered by hand in [`docs/setup.md`](./setup.md), and
+`npm run setup:ids`'s lookups are unaffected: both act as the signed-in administrator, not a
+managed identity.
 
 ### 1. Register the lab application in the M365 tenant
 
@@ -122,9 +127,9 @@ the config, every overall signal a worker publishes is named
 success/duration, the `teams-call` phase signals, and the Service Health
 and activity signals, so tenants never overwrite one another and the shared
 `<service>-service-health` entity carries one set per tenant. With exactly one tenant the names
-stay plain, and [reporting group](./monitoring-groups.md) signals keep
+stay plain, and Exchange/OneDrive [user-group](./monitoring-groups.md) signals keep
 `group-<id>--tenant-<tenant id>--<signal>`, never qualified twice. Adding a second
 tenant renames every overall signal in one step: run `npm run deploy` so the models and
 workers change together; reports under the old plain names expire after the report TTL.
-`npm run setup` works on the one config tenant that matches the signed-in tenant: run it
-once per tenant, signed in to that tenant.
+`npm run setup:ids` and `npm run setup:reply-seeds` each work on the one config tenant that
+matches the signed-in tenant: run them once per tenant, signed in to that tenant.

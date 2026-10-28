@@ -59,7 +59,7 @@ export function deploymentPlan(prepared: PreparedDeployment) {
     event: "monitoring-deployment-plan", cloudChanges: false,
     configFile: canonicalProjectFile, subscriptionConfigured: prepared.document.healthModel.subscriptionId !== placeholderSubscriptionId,
     stage: prepared.settings.stage, location: prepared.settings.location, models: prepared.modelNames,
-    workerCount: prepared.workers.length, reportingGroups: prepared.reportingGroups.map(group => group.id),
+    workerCount: prepared.workers.length, reportingGroups: prepared.reportingGroups.map(({ service, id }) => ({ service, id })),
     workers: prepared.workers.map(worker => ({
       tenant: worker.tenant, service: worker.type, appName: worker.appName, identityResourceId: worker.identityResourceId,
       targetCount: worker.service.targets.length + (worker.service.type === "teams" ? worker.service.callTargets.length : 0),

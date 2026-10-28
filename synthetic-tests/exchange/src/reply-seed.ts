@@ -79,6 +79,7 @@ export async function provisionReplySeed(graph: ReplySeedGraph, target: ReplyTar
   const query = new URLSearchParams({ "$filter": `subject eq '${subject}'`, "$select": messageSelect, "$top": "100" });
   const owned = new Set<string>();
   let retainedId: string | undefined;
+  let cleanupFailed = false;
   try {
     const draft = await graph.json(`${user(mailbox)}/messages`, z.object({ id: z.string().min(1) }), options.signal, "POST", {
       subject, body: { contentType: "Text", content: `${seedMarker(correlationId)}.` },
@@ -100,14 +101,23 @@ export async function provisionReplySeed(graph: ReplySeedGraph, target: ReplyTar
       if (saved) {
         validateSeed(saved, mailbox, correlationId);
         retainedId = saved.id;
-        options.telemetry.emit("exchange-self-reply-seed-ready", { targetId: target.id, created: true, durationMs: now() - started });
-        return { messageId: saved.id, correlationId };
+        break;
       }
       await sleep(2000, options.signal);
     }
   } finally {
     const cleanupSignal = AbortSignal.timeout(5000);
     let failed = false;
+    const attempted = new Set<string>();
+    const deleteKnown = async () => {
+      for (const id of owned) {
+        if (id === retainedId || attempted.has(id)) continue;
+        attempted.add(id);
+        try { await graph.request(`${user(mailbox)}/messages/${encodeURIComponent(id)}`, cleanupSignal, "DELETE"); }
+        catch { failed = true; }
+      }
+    };
+    await deleteKnown();
     try {
       const copies = await graph.json(`${user(mailbox)}/messages?${query}`, messagesSchema, cleanupSignal);
       for (const copy of copies.value) {
@@ -115,11 +125,11 @@ export async function provisionReplySeed(graph: ReplySeedGraph, target: ReplyTar
       }
       if (copies["@odata.nextLink"]) failed = true;
     } catch { failed = true; }
-    for (const id of owned) {
-      if (id === retainedId) continue;
-      try { await graph.request(`${user(mailbox)}/messages/${encodeURIComponent(id)}`, cleanupSignal, "DELETE"); }
-      catch { failed = true; }
-    }
+    await deleteKnown();
+    cleanupFailed = failed;
     if (failed) options.telemetry.emit("exchange-self-reply-seed-cleanup-failed", { targetId: target.id, category: "cleanup-failure" });
   }
+  if (cleanupFailed) throw new IntegrationError("cleanup-failure");
+  options.telemetry.emit("exchange-self-reply-seed-ready", { targetId: target.id, created: true, durationMs: now() - started });
+  return { messageId: retainedId, correlationId };
 }

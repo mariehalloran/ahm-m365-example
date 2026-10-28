@@ -74,6 +74,17 @@ export async function confirmDelivery(
 
 export async function cleanup(graph: GraphClient, attempt: MailAttempt, signal: AbortSignal): Promise<void> {
   const failures: unknown[] = [];
+  const attempted = new Set<string>();
+  const deleteKnown = async () => {
+    for (const id of attempt.ownedMessageIds) {
+      if (attempted.has(id)) continue;
+      attempted.add(id);
+      try { await graph.request(`${paths(attempt).messages}/${encodeURIComponent(id)}`, signal, "DELETE"); }
+      catch (error) { failures.push(error); }
+    }
+  };
+  // A slow discovery request must not prevent deletion of copies already known to this attempt.
+  await deleteKnown();
   // The exact unguessable marker also finds a sent copy whose ID changed after submission.
   try {
     const copies = await graph.json(paths(attempt).copies, messagesSchema, signal);
@@ -82,9 +93,6 @@ export async function cleanup(graph: GraphClient, attempt: MailAttempt, signal: 
     }
     if (copies["@odata.nextLink"]) throw new IntegrationError("cleanup-failure");
   } catch (error) { failures.push(error); }
-  for (const id of attempt.ownedMessageIds) {
-    try { await graph.request(`${paths(attempt).messages}/${encodeURIComponent(id)}`, signal, "DELETE"); }
-    catch (error) { failures.push(error); }
-  }
+  await deleteKnown();
   if (failures.length) throw new IntegrationError("cleanup-failure");
 }

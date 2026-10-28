@@ -8,6 +8,31 @@ planned-entity deployment switch.
 Bicep reads its generated JSON projection; use `npm run catalog:generate` from
 `synthetic-tests/` after changing metadata.
 
+## Root health alerts
+
+Set `healthModel.alertActionGroupIds` in the root configuration to the full Azure
+resource IDs of your Azure Monitor action groups. Up to five unique IDs are
+supported. Create the groups and manage recipients in Azure; notification
+addresses do not belong in the project configuration.
+
+For incident/ticketing integration, see
+[IT Service Management integration](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/itsmc-overview),
+including its secure-webhook guidance and ServiceNow ITSM-action deprecation notice.
+
+`npm run deploy` from `synthetic-tests/` connects those groups to the main model's
+**Microsoft 365 Experience** root entity: **Degraded = Sev 2**, **Unhealthy =
+Sev 1**. Alerts fire when the root enters the corresponding state, not on every
+probe cycle. Nested service and journey entities get no additional alerts.
+See the [native alert behavior](https://learn.microsoft.com/azure/azure-monitor/health-models/alerts).
+
+An omitted or empty list configures no root alerts. The template does not create,
+modify or delete action groups or their receivers.
+After deployment, test action-group delivery and both root-state transitions in a
+non-production model; source validation does not establish email delivery.
+Healthy and Unknown are not alert conditions. Keep the
+[independent execution, freshness and notification safeguards](../docs/operations.md#enterprise-reliability-acceptance-gate);
+missing reports alone do not guarantee a root alert.
+
 ## Selected topology
 
 Every service model contains:
@@ -19,12 +44,13 @@ Every service model contains:
 - Business-step children for every selected journey.
 - Worker-reported signals on each journey and business step, plus optional OTEL
   query signals. The only signal aggregation groups are your
-  [reporting groups](../docs/monitoring-groups.md), on journey entities.
+  [Exchange/OneDrive user groups](../docs/monitoring-groups.md), on their journey entities.
 
-The supporting entity carries the stable overview and issue-count signals, plus that
-product's approved beta activity signals, ungrouped: seven for Exchange and Teams, two
-for OneDrive, which has no approved beta endpoint. There are **no per-API child
-entities or relationships**.
+The supporting entity receives available stable overview and issue-count signals,
+plus enabled beta activity signals, ungrouped: up to seven for Exchange and Teams
+(two stable and five beta), and up to two for OneDrive, which has no approved beta
+endpoint. Disabled or unavailable sources do not get placeholder signals.
+There are **no per-API child entities or relationships**.
 Provider context never supplies synthetic samples or Experience health.
 
 Exchange groups its existing journeys under two parents:
@@ -62,7 +88,7 @@ OneDrive's historical `-planned-` names already receive real reports and **must
 not be renamed or deleted because of that substring**. Its semantic steps map to
 the existing `step-1`…`step-4` child IDs. Other child IDs are
 `<journey-entity>-<semantic-step>`. The optional OneDrive byte-restore step is
-suppressed when no selected target enables `restoreVersion`.
+suppressed when no configured OneDrive target enables `restoreVersion`.
 
 Only journeys and their Mail/Calendar parents use the native `UserFlow` icon.
 Authentication and generic cleanup are internal—not extra entities. Explicit draft/file deletion,
@@ -95,11 +121,12 @@ twice. Adding a second tenant (or dropping back to one) renames every overall si
 at once: `npm run deploy` changes models and workers together, and reports under the
 old names expire after the report TTL.
 
-Default Degraded/Unhealthy rules are below 99%/95% success or above
+The checked-in Degraded/Unhealthy rules are below 99%/95% success or above
 15,000/60,000 ms mean duration; equality does not breach. A timed-out attempt
-contributes success 0 and is Unhealthy, while unexecuted dependent actions remain
-unobserved. Cleanup/credential failures can fail the journey without inventing
-failed business actions.
+contributes success 0, while unexecuted dependent actions remain unobserved.
+Health is evaluated on the aggregate measurements; a single failure in a large
+cohort does not necessarily make the entity Unhealthy. Cleanup/credential failures
+can fail the journey without inventing failed business actions.
 
 The existing `teams-call` entity also has four immediate call-specific signals:
 connection/disconnection success and duration. These measurements do not add
@@ -120,21 +147,26 @@ The ingestion request schema does not support `dataUnit`, and external signal
 definitions are read-only. Native unit labels therefore cannot be written by
 this reporter; optional query-backed signals have native units.
 
-## Optional reporting groups
+## User groups
 
-Root `groups` add native `signalAggregationGroups` to **journey** entities only
+Exchange and OneDrive `targets.<groupId>` entries add native `signalAggregationGroups`
+to their **journey** entities only
 ([ARM contract](https://learn.microsoft.com/azure/templates/microsoft.cloudhealth/2026-10-01-preview/healthmodels/entities#signalaggregationgroup),
 `2026-10-01-preview`): one `reporting-<group id>` group per user group,
-displayed with the group's `displayName` and combined `WorstOf`. They are the only
+displayed with the group's `userGroupName` and combined `WorstOf`. They are the only
 aggregation groups in the model; overall signals publish ungrouped. Each group's `members`
 are its `group-<id>--tenant-<tenant>--<signal>` signal-name strings, one set per tenant
-service the group has member targets in: `synthetic-success-percentage` and
-`synthetic-mean-duration`, plus the four call-phase signals on `teams-call`. Step,
-Service Health and OTEL signals are never included, and no entities,
+service the group has users in: `synthetic-success-percentage` and
+`synthetic-mean-duration`. Teams has no user groups, including on `teams-call`.
+Step, Service Health and OTEL signals are never included, and no entities,
 relationships or models are added. A journey receives a group only when its tenant
 service and scenario are enabled and the group has a member target for it.
-TypeScript resolves membership into the template's `reportingGroups` parameter; Bicep
-applies no membership logic. Group health reaches parents through the normal
+TypeScript derives membership from each group's `users` into the template's
+service-scoped `reportingGroups` parameter. Matching group IDs within one service
+combine tenant views, with consistent `userGroupName`; Exchange and OneDrive IDs
+are independent. Bicep explicitly clears former Teams groups and other removed
+journey groups. Old ingested observations expire after the report TTL.
+Group health reaches parents through the normal
 dependency roll-up. Under native `WorstOf`, Unknown has the lowest severity and
 `ignoreUnknown: false` does not make a missing signal override a known one, so inspect
 individual signals rather than treating a known group state as proof that every member
@@ -162,14 +194,15 @@ single `${service}-service-health` entity carries one set per tenant.
 The stable list collector selects exact product service names: `Exchange Online`,
 `Microsoft Teams`, and `Microsoft OneDrive`. OneDrive additionally requires
 overview ID `OneDriveForBusiness`; it is **not** the `SharePoint Online` service.
-Use the list endpoints, not an individual overview lookup: the verified hosted
-provider identity can list OneDrive while the individual-ID endpoint returns 403.
+The collector uses the list endpoints, never an individual overview lookup;
+the individual-ID endpoint returned 403 in the earlier hosted trial.
 OneDrive issues are filtered by exact `Microsoft OneDrive` service name. Denied
 or missing OneDrive data produces no health report; no beta permission or invented OneDrive
 activity call is introduced.
 
-Ingestion creates these external signals on the existing supporting entity; they are
-not grouped, and the template writes no read-only external signal definitions. Each
+Ingestion of usable observations creates these external signals on the existing
+supporting entity; configuration alone does not make them appear. They are not
+grouped, and the template writes no read-only external signal definitions. Each
 report retains its source and API version in `additionalContext`, so stable status
 stays distinct from beta activity.
 
@@ -250,7 +283,7 @@ OneDrive IDs above.
 ### Splitting attachment delivery and reply delivery
 
 The attachment journey retains its ID and send/verify child IDs. Provision a
-retained received reply seed for each target (`npm run setup` does, into `.env`)
+retained received reply seed for each target (`npm run setup:reply-seeds` does, into `.env`)
 and deploy `exchange-reply` with its two business-step children before updated
 workers send reports there. After old workers stop, explicitly retire only the
 attachment journey's old reply/confirm children and their relationships. See the
@@ -263,7 +296,7 @@ attachment journey's old reply/confirm children and their relationships. See the
    former sender **and recipient**, preserving existing sender IDs and account-based
    reporting-group membership. All five journeys share one aligned minute.
 2. Explicitly re-provision incompatible paired seeds with
-   `npm run setup -- -ReprovisionReplySeeds`. The received self-addressed fixture
+   `npm run setup:reply-seeds -- -Reprovision`. The received self-addressed fixture
    must be in that user's own Inbox, not the old peer mailbox. The command keeps
    old retained seeds; review those artifacts separately under retention policy.
 3. Deploy the matching catalogue/model and worker image from the same root config.
@@ -307,8 +340,8 @@ attachment journey's old reply/confirm children and their relationships. See the
 3. Deactivate every old worker revision/job using the old reporter or template.
    Verify active image digests and actual ingestion to the three parent
    destinations before pruning. Otherwise old images can keep writing retired
-   destinations and an old template can recreate children. Source tests alone
-   do **not** verify live ingestion.
+   destinations and an old template can recreate children. Source validation alone
+   does **not** verify live ingestion.
 4. Compare **paginated** live inventories with deployment outputs
    `rootEntityNames`, `rootRelationshipNames`, and `serviceModelInventories`
    (each includes exact entity and relationship names). Retire only the 14
@@ -355,20 +388,23 @@ their execution lanes from the config. Redeploy source/models/workers
 coherently; do not route reports to an undeployed replacement ID.
 
 When disabling OTEL, explicitly retire owned stale query bindings, permissions,
-settings and telemetry resources after review. A default 15-minute TTL removes
+settings and telemetry resources after review. The checked-in 15-minute TTL removes
 expired reports; it does not guarantee an Unhealthy state or alert.
 Independently monitor execution, ingestion and notifications.
 
 ## Local validation
 
+From the repository root, with the Azure CLI's Bicep tooling available:
+
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s health-model/tests -v
+npm --prefix synthetic-tests run catalog:check
+az bicep build --file health-model/infra/main.bicep --stdout > /dev/null
+az bicep build --file synthetic-tests/infra/main.bicep --stdout > /dev/null
 ```
 
-Contracts compile Bicep locally and compare final catalog metadata with runtime
-root selection, test types, step mappings and actual report aggregation.
-Offline Bicep snapshots verify the Mail/Calendar hierarchy, selected/empty parents,
-native rollup and unchanged Teams/OneDrive topology without deploying resources.
-Snapshot checks require Bicep CLI 0.41.2 or later.
-They reject removed service/planned branches in compiled output.
-These checks prove source consistency, not live cloud acceptance.
+These commands check the generated catalogue and compile/lint the templates
+without deploying resources. There are no Python template tests or unit-test
+suites. After setup supplies required `.env` bindings,
+`npm --prefix synthetic-tests run deploy -- --plan` validates the selected config
+and prints a local plan. Neither compilation nor the plan proves Azure access,
+live report ingestion, model propagation or notification delivery.

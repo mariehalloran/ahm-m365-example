@@ -1,35 +1,44 @@
 # OneDrive API-backed synthetic journeys
 
-One independent Container App runs exactly three real journeys for **every
-selected account**, on independent 300-second lanes. Workers keep no cross-cycle
-state/outbox; completed attempts report aggregated binary success and measured
-journey/action duration directly, with console diagnostics. Root OTEL is optional
-and disabled by default.
+One independent Container App supports three journeys, executing every enabled
+journey for **every configured account** on independent 300-second lanes. Workers
+keep no cross-cycle state/outbox; each cycle publishes aggregated success percentages
+and mean journey/action durations directly, with console diagnostics. Root OTEL is optional
+(schema default off; the checked-in root config enables Azure Monitor export).
 
 These tests exercise Graph, not employee sign-in, browser rendering or sync.
 Sharing/search/browser prototypes and SharePoint are not selectable.
-Source tests do not establish successful live access or ingestion; see
+Local source validation does not establish successful live access or ingestion; see
 [deployment evidence](../../docs/deployment.md#deployment-status-and-order).
 
 ## Primary setup
 
-1. Generate `tenants[].services.onedrive.targets` in `monitoring.config.json` from approved, licensed test accounts.
+Run npm commands from `synthetic-tests/`; maintain only root `monitoring.config.json`.
+Setup requires `deployment.foundation.mode: "existing"` even when creating missing
+bare-name foundation resources.
+
+1. Define [user groups](../../docs/monitoring-groups.md) under
+   `tenants[].services.onedrive.targets` in `monitoring.config.json`, with a
+   `userGroupName` and approved, licensed account targets inside each `users` array.
    Provision their personal OneDrives first; missing personal sites can be queued
    [in administrator batches](../../docs/onedrive-setup.md#provision-personal-onedrives).
-2. Deploy the health model and worker foundation, then select the service UAMI
-   explicitly through `AZURE_CLIENT_ID`. Approve `Files.SelectedOperations.Selected`
-   and, separately, `Files.ReadWrite.AppFolder` for app-folder execution.
-   Bulk setup grants **write on each dedicated folder**; the worker never grants
-   itself access or requests broader permissions.
-3. Run `npm run setup`: it looks up each account's user ID from its `userPrincipalName`
-   into the gitignored `.env` next to `monitoring.config.json`
-   (`<TENANT>__<TARGET>__USER_ID`). Then use
-   [`npm run onedrive:setup`](../../docs/onedrive-setup.md), with a separate, approved
-   administrator identity, to plan and then apply folder creation and scoped grants for
-   **all configured accounts**; `npm run setup` does not do that. It discovers the real
-   drive and folder IDs, writes the verified bindings to the same `.env` (`…__DRIVE_ID`
-   and `…__FOLDER_ID`), and safely resumes partial runs. No manual per-account IDs or
-   grants are required.
+2. Name the service UAMI in `worker.identity`. For an enabled live service, follow
+   [`docs/setup.md`](../../docs/setup.md) as an approved administrator: it creates missing
+   named foundation resources/identities and grants `Files.SelectedOperations.Selected` and,
+   when selected, `Files.ReadWrite.AppFolder`, all by hand. Then run `npm run setup:ids`,
+   which looks up each account's user ID into the gitignored adjacent `.env`
+   (`<TENANT>__<TARGET>__USER_ID`); personal-site provisioning and folder grants remain
+   separate.
+3. [Configure `tenants[].services.onedrive.setup`](../../docs/onedrive-setup.md#plan-apply-and-rerun)
+   in the same root config with a separate, explicitly approved provisioning credential
+   and `workerClientId`. Run `npm run onedrive:setup` for a read-only plan, then
+   `npm run onedrive:setup -- --apply` to create folders and grant **write on each
+   dedicated folder** for all configured accounts; neither `npm run setup:ids` nor
+   `npm run setup:reply-seeds` does that.
+   The folder command requires that `setup` block; the worker never grants itself
+   access. It discovers the real drive and folder IDs, writes the verified bindings
+   to the same `.env` (`…__DRIVE_ID` and `…__FOLDER_ID`), and safely resumes partial
+   runs. No manual per-account IDs or grants are required.
 4. [Size the service's concurrency/cycle budget and report TTL](../../docs/onedrive-setup.md#size-the-worker-for-hundreds-of-accounts)
    in its `execution` block.
 5. Deploy the updated worker with `execution.mode: "live"` and
@@ -46,16 +55,21 @@ Service block example (`tenants[].services.onedrive`; the address is a placehold
     "app-folder-lifecycle": true,
     "document-versions": true
   },
-  "targets": [{
-    "id": "onedrive-probe-001",
-    "userPrincipalName": "dedicated-onedrive@example.invalid",
-    "folderName": "AHM-Synthetic-Tests",
-    "restoreVersion": false
-  }]
+  "targets": {
+    "userGroup1": {
+      "userGroupName": "User Group One",
+      "users": [{
+        "id": "onedrive-probe-001",
+        "userPrincipalName": "dedicated-onedrive@example.invalid",
+        "folderName": "AHM-Synthetic-Tests",
+        "restoreVersion": false
+      }]
+    }
+  }
 }
 ```
 
-`npm run setup` writes `userId`, and the setup command writes `driveId` and `folderId`
+`npm run setup:ids` writes `userId`, and the setup command writes `driveId` and `folderId`
 after verifying the folder grant, all to `.env`; leave them out of the config. Deploy and
 every TypeScript command fill them in by target ID
 ([generated IDs](../../docs/deployment.md#generated-ids-in-env)).
@@ -83,8 +97,9 @@ When `restoreVersion` is false, that action is skipped without a failed request.
 Prior-version polling shares the bounded execution budget (initially 120 seconds);
 current bytes cannot stand in for actual historical-version evidence.
 
-Each attempt owns a random-correlation folder. Deliberate deletion is a measured
-business action; compensating cleanup/token acquisition remain internal.
+Each attempt owns a random-correlation folder. Roundtrip/app-folder deletion is a
+measured business action; the versions journey deletes its folder in internal
+cleanup. Compensating cleanup and token acquisition are not modeled steps.
 Cleanup uses an independent bounded signal and verifies exact owned paths/IDs
 before deletion. Wrong hashes, malformed ownership, denied operations, missing
 history, timeouts and failed cleanup cannot produce successful journeys.
@@ -104,6 +119,13 @@ The checked-in `execution.executionLanes` use these complete lane assignments:
     "journeys": ["document-versions"] }
 ]
 ```
+
+Lanes start immediately and run concurrently. `execution.maxConcurrentProbes`
+(default 3, range 1–20) is **per lane**, not a shared Graph-request limit.
+`cycleTimeoutSeconds` defaults to 170 per lane; live validation rejects budgets too
+small for the selected cohort. Timeouts count as unsuccessful attempts, not Unknown.
+Each lane skips missed slots without overlapping itself. See
+[capacity and TTL sizing](../../docs/onedrive-setup.md#size-the-worker-for-hundreds-of-accounts).
 
 Keep the deployed root IDs
 `onedrive-planned-user-drive-roundtrip`,
@@ -135,11 +157,14 @@ Optional stable Service Health uses the distinct `OneDriveForBusiness` /
 `Microsoft OneDrive` overview and matching issues, never SharePoint status.
 Approve `ServiceHealth.Read.All` separately. The tenant's `providerClientId`, inherited
 once `serviceHealth` is on, selects the approved provider application through
-worker-UAMI federation; it needs its own trust for this service identity. The independent provider lane defaults to
-300 seconds and reports only to suppressed `onedrive-service-health`, without
-changing synthetic success. Simulation keeps `execution.serviceHealth: false`; set it
-to `true` (with root `serviceHealth.enabled`) to collect. OneDrive beta activity
-functions are not supported or approved.
+worker-UAMI federation; setup configures its trust on the existing provider app.
+The independent provider lane defaults to 300 seconds and reports only to
+suppressed `onedrive-service-health`, without changing synthetic success.
+Both root `serviceHealth.enabled` and service
+`execution.serviceHealth` must be true for collection. Observed statuses map to
+100/50/0 availability; issue counts are diagnostic without thresholds. Unavailable
+sources do not refresh health reports. Simulation emits skipped diagnostics, not
+observed provider reports. OneDrive beta activity functions are not supported or approved.
 
 From `synthetic-tests/`:
 
@@ -147,8 +172,11 @@ From `synthetic-tests/`:
 npm run onedrive -- --once
 ```
 
-Add `--tenant <id>` when the config has several tenants. The config accepts only the
+Add `--tenant <alias>` when the config has several tenants. Local live runs need
+`ENABLE_LIVE_M365=true` and explicit Graph/report credentials
+([identity/permissions](../../docs/deployment.md#identity-and-permissions)); no CLI
+credential fallback is used by the worker. The config accepts only the
 three supported scenario keys and no removed sharing/search lane assignments.
-Simulation is explicitly labeled and previews
-reports only. For real acceptance, inspect each account's actions and actual
-aggregated ingestion; configuration/deployment success alone is insufficient.
+Simulation is explicitly labeled and previews reports only. For real acceptance,
+inspect each account's actions and actual aggregated ingestion;
+configuration/deployment success alone is insufficient.

@@ -166,7 +166,7 @@ export async function setupOneDriveTargets(
       !Number.isInteger(options.targetTimeoutSeconds) || options.targetTimeoutSeconds < 30 || options.targetTimeoutSeconds > 3600 ||
       targets.length === 0 || targets.length > maxOneDriveTargets ||
       targets.some(target => !target.userId || !target.userPrincipalName || !target.folderName)) {
-    throw new ConfigurationError("Setup requires approved userId/userPrincipalName/folderName targets (run npm run setup first: it looks each userId up from its userPrincipalName and writes it to .env), a worker client ID, concurrency 1-10 and target timeout 30-3600 seconds");
+    throw new ConfigurationError("Setup requires approved userId/userPrincipalName/folderName targets (run npm run setup:ids first: it looks each userId up from its userPrincipalName and writes it to .env), a worker client ID, concurrency 1-10 and target timeout 30-3600 seconds");
   }
   if (options.apply && !options.checkpoint) {
     throw new ConfigurationError("Applying setup requires a configuration checkpoint for verified account bindings");

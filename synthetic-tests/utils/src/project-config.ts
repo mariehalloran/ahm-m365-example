@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { applyBindings, readBindings } from "./bindings.js";
 import { ConfigurationError, readConfigJson } from "./config.js";
-import { probeSchema, probeServices } from "./contracts.js";
+import { probeServices } from "./contracts.js";
 import { executionLanes } from "./execution-lanes.js";
-import { resolveGroups, tenantGroups, type TenantGroup } from "./groups.js";
+import { resolveGroups, tenantGroups, userGroupTargets, type TenantGroup } from "./groups.js";
 import { expandReferences } from "./references.js";
 import {
   parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema,
@@ -31,10 +31,14 @@ const selection = {
   access: applicationAccessSchema.default({}),
   worker: workerSettingsSchema.optional(),
 };
+const actionGroupResourceId = z.string().trim().regex(
+  /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/resourceGroups\/[a-z0-9_().-]{1,90}\/providers\/Microsoft\.Insights\/actionGroups\/[^\x00-\x1f<>%&\\/?#]{0,259}[^\x00-\x1f<>%&\\/?# .]$/i,
+);
 const healthModelSchema = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,31}[a-zA-Z0-9]$/),
   subscriptionId: z.string().uuid(),
   resourceGroup: z.string().regex(/^[a-zA-Z0-9_().-]{1,90}$/).refine(value => !value.endsWith(".")),
+  alertActionGroupIds: z.array(actionGroupResourceId).max(5).default([]),
   reportTtlMinutes: z.number().int().min(1).max(10080),
   successDegradedPercent: z.number().min(0).max(100),
   successUnhealthyPercent: z.number().min(0).max(100),
@@ -43,11 +47,15 @@ const healthModelSchema = z.object({
 }).strict();
 const slug = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(40);
 const displayName = z.string().trim().min(1).max(260);
+const groupId = z.string().regex(/^[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*$/).max(40);
+function userGroups<T extends z.AnyZodObject>(users: z.ZodArray<T>) {
+  return z.record(groupId, z.object({ userGroupName: displayName, users }).strict());
+}
 const tenantServicesSchema = z.object({
   exchange: z.object({
     ...selection,
     scenarios: scenarioSelection("exchange"),
-    targets: serviceTargetSchemas.exchange,
+    targets: userGroups(serviceTargetSchemas.exchange),
   }).strict(),
   teams: z.object({
     ...selection,
@@ -58,7 +66,7 @@ const tenantServicesSchema = z.object({
   onedrive: z.object({
     ...selection,
     scenarios: scenarioSelection("onedrive"),
-    targets: serviceTargetSchemas.onedrive,
+    targets: userGroups(serviceTargetSchemas.onedrive),
     setup: z.object({
       authentication: z.enum(["azure-cli", "managed-identity", "certificate"]),
       workerClientId: z.string().uuid(),
@@ -68,11 +76,6 @@ const tenantServicesSchema = z.object({
       targetTimeoutSeconds: z.number().int().min(30).max(3600).default(300),
     }).strict().optional(),
   }).strict(),
-}).strict();
-const groupSchema = z.object({
-  id: slug, displayName, description: displayName.optional(),
-  accounts: z.array(z.string().trim().email()).default([]),
-  teams: z.array(probeSchema.shape.id).default([]),
 }).strict();
 export const projectDocumentSchema = z.object({
   schemaVersion: z.literal("2.0"),
@@ -87,24 +90,40 @@ export const projectDocumentSchema = z.object({
   }).strict().default({}),
   tenants: z.array(z.object({
     id: slug, displayName, tenantId: z.string().uuid(), services: tenantServicesSchema,
+    $comment: z.string().optional(),
   }).strict()).min(1),
-  groups: z.array(groupSchema).default([]),
 }).strict();
 export type ProjectDocument = z.infer<typeof projectDocumentSchema>;
 type TenantInventory = ProjectDocument["tenants"][number];
-/** One tenant's view of the document: its inventory plus the groups that have members in it. */
-export type ProjectConfig = Omit<ProjectDocument, "tenants" | "groups"> & {
+type ProjectServices = {
+  [Service in ServiceConfig["type"]]: Omit<TenantInventory["services"][Service], "targets"> & {
+    targets: Extract<ServiceConfig, { type: Service }>["targets"];
+  };
+};
+/** One tenant's runtime view, with user targets flattened once and group membership kept separately. */
+export type ProjectConfig = Omit<ProjectDocument, "tenants"> & {
   tenant: Pick<TenantInventory, "id" | "displayName" | "tenantId">;
   /** True when the document has several tenants; overall signals are then published as tenant-<alias>--<signal>. */
   multiTenant: boolean;
-  services: TenantInventory["services"];
+  services: ProjectServices;
   groups: TenantGroup[];
 };
+
+function runtimeServices(services: TenantInventory["services"]): ProjectServices {
+  return {
+    exchange: { ...services.exchange, targets: userGroupTargets(services.exchange.targets) },
+    teams: services.teams,
+    onedrive: { ...services.onedrive, targets: userGroupTargets(services.onedrive.targets) },
+  };
+}
 
 function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
   if (policy.successUnhealthyPercent > policy.successDegradedPercent ||
       policy.latencyUnhealthyMilliseconds < policy.latencyDegradedMilliseconds) {
     throw new ConfigurationError("Health thresholds must order Degraded before Unhealthy");
+  }
+  if (new Set(policy.alertActionGroupIds.map(id => id.toLowerCase())).size !== policy.alertActionGroupIds.length) {
+    throw new ConfigurationError("healthModel.alertActionGroupIds must contain unique action group resource IDs (case-insensitive)");
   }
 }
 
@@ -146,7 +165,7 @@ function validateTenants(tenants: ProjectDocument["tenants"]): void {
     throw new ConfigurationError("Tenant aliases and tenant UUIDs must be unique in the root inventory");
   }
   for (const tenant of tenants) {
-    validateServiceSelection(tenant.services, tenant.tenantId);
+    validateServiceSelection(runtimeServices(tenant.services), tenant.tenantId);
     for (const type of serviceTypes) parseServiceExecution({ ...tenant.services[type].execution, type });
   }
 }
@@ -158,6 +177,9 @@ export function parseProjectDocument(raw: unknown): ProjectDocument {
   }
   const parsed = projectDocumentSchema.safeParse(document);
   if (!parsed.success) {
+    if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("groups"))) {
+      throw new ConfigurationError("Move user groups into Exchange and OneDrive targets as keyed { userGroupName, users } entries; root groups and Teams user groups are not supported");
+    }
     if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" &&
         issue.keys.some(key => ["recipientMailbox", "distributionList", "distribution-list-mail", "meeting-invitation"].includes(key)))) {
       throw new ConfigurationError("Obsolete Exchange pair/distribution/meeting configuration: use one { id, mailbox } target per unique user and only the five supported single-user journeys; re-provision retained SELF-REPLY seeds");
@@ -187,9 +209,9 @@ export function selectTenant(document: ProjectDocument, alias?: string): Project
   }
   const tenant = document.tenants.find(tenant => alias === undefined || tenant.id === alias);
   if (!tenant) throw new ConfigurationError("Unknown --tenant alias in the root inventory");
-  const { tenants: _tenants, groups: _groups, ...shared } = document;
+  const { tenants: _tenants, ...shared } = document;
   return {
-    ...shared, services: tenant.services, groups: tenantGroups(document, tenant.id),
+    ...shared, services: runtimeServices(tenant.services), groups: tenantGroups(document, tenant.id),
     tenant: { id: tenant.id, displayName: tenant.displayName, tenantId: tenant.tenantId },
     multiTenant: document.tenants.length > 1,
   };

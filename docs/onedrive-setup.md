@@ -6,27 +6,30 @@ grant the worker folder-scoped write access, verify the grant, and save the real
 drive and folder IDs to the gitignored `.env` beside the config
 ([generated IDs](./deployment.md#generated-ids-in-env)). It supports up to 1,000
 configured accounts without per-account commands. The worker remains least-privilege
-and never provisions its own access. This command is separate from `npm run setup`, which
+and never provisions its own access. This command is separate from `npm run setup:ids`, which
 only looks up each account's user ID (`USER_ID` in `.env`) and leaves the drives and
-folders to this command ([setup](./deployment.md#set-up-microsoft-365-with-one-script)).
+folders to this command ([setup](./deployment.md#set-up-microsoft-365)).
 
 ## Prerequisites and account input
 
 Follow the [deployment order](./deployment.md#deploy-with-one-command): `npm run deploy`
 creates the health models and worker foundation/identities first
 (`deployment.stage: "foundation"` stops there until approvals are in place), then
-approve M365 access, run `npm run setup` and then this setup, and deploy the live
-workers. Keep certificates and keys outside Git.
+approve M365 access following [`docs/setup.md`](./setup.md), run `npm run setup:ids` and
+then this setup, and deploy the live workers. Keep certificates and keys outside Git.
 
-Generate `tenants[].services.onedrive.targets` in `monitoring.config.json` from your
-approved account-provisioning output. Each target needs a unique opaque `id` (it also
+Generate [user groups](./monitoring-groups.md) under
+`tenants[].services.onedrive.targets` in `monitoring.config.json`, each keyed by its
+group ID with `userGroupName` and a `users` array from your approved
+account-provisioning output. Each user target needs a stable opaque `id` (it also
 names the target's `.env` keys, `<TENANT>__<TARGET>__USER_ID`, `…__DRIVE_ID` and
 `…__FOLDER_ID`), the account's `userPrincipalName` and a dedicated `folderName`,
 normally `AHM-Synthetic-Tests`. Set `restoreVersion` deliberately. Leave out `userId`,
-`driveId` and `folderId`: `npm run setup` looks up `userId` from the `userPrincipalName`,
+`driveId` and `folderId`: `npm run setup:ids` looks up `userId` from the `userPrincipalName`,
 this command writes the drive and folder IDs, and deploy fills all three in by target ID.
-Run `npm run setup` first, with the OneDrive service in `live` mode (it acts only on live
-services), because this command reads the user IDs. The configured targets are the only
+Run `npm run setup:ids` first, with the OneDrive service in `live` mode (it acts only on live
+services), because this command reads the user IDs. Shared users use identical target IDs/settings and are provisioned only once.
+The configured user targets are the only
 account inventory; neither setup command enumerates the tenant or silently adds users.
 
 The worker application must already have administrator-approved
@@ -68,7 +71,8 @@ accounts in batches of **at most 200**:
 ```powershell
 $root = Get-Content -Raw -LiteralPath './monitoring.config.json' | ConvertFrom-Json
 $tenant = $root.tenants | Where-Object id -eq '<tenant id>'
-$upns = @($tenant.services.onedrive.targets |
+$upns = @($tenant.services.onedrive.targets.PSObject.Properties |
+    ForEach-Object { $_.Value.users } |
     ForEach-Object { $_.userPrincipalName } | Sort-Object -Unique)
 for ($offset = 0; $offset -lt $upns.Count; $offset += 200) {
     $last = [Math]::Min($offset + 199, $upns.Count - 1)
@@ -91,20 +95,64 @@ Select the provisioning credential in the tenant's OneDrive service block of
 
 ```json
 "setup": {
-  "authentication": "certificate",
+  "authentication": "managed-identity",
   "workerClientId": "<worker-client-id>",
-  "setupClientId": "<approved-setup-client-id>",
-  "certificatePath": "/secure/setup.client.pem"
+  "setupClientId": "<dedicated-setup-identity-client-id>"
 }
 ```
 
-`authentication` is `certificate` (requires `setupClientId` and `certificatePath`; a
-relative path resolves against the config file's directory), `managed-identity`
-(requires `setupClientId`, no `certificatePath`) for an approved managed identity on
-the provisioning host, or `azure-cli` (neither) for an already-authorized operator
-session. There is no credential fallback. Managed-identity/certificate setup refuses
-the worker client ID as the setup identity, and `workerClientId` must match
-`worker.identityClientId` when that is set.
+`authentication` is `managed-identity` (requires `setupClientId`, no certificate or
+key material) for an approved managed identity attached to the host running the
+command, `certificate` (requires `setupClientId` and `certificatePath`; avoid this —
+it means a private key file exists on disk and must be stored and rotated securely)
+for environments that cannot attach a managed identity, or `azure-cli` (neither) for
+an already-authorized operator session. There is no credential fallback.
+Managed-identity/certificate setup refuses the worker client ID as the setup
+identity, and `workerClientId` must match `worker.identityClientId` when that is set.
+**Prefer `managed-identity`**: no certificates, keys or passwords ever exist on disk.
+Azure CLI sessions commonly lack delegated `Files.ReadWrite.All` consent and fail
+with Graph 403s unless that consent was separately granted tenant-wide, which is
+broader than this setup needs — use managed-identity instead of widening CLI consent.
+
+### Run with a managed identity
+
+Managed identities only authenticate from Azure-hosted compute that has the identity
+attached, so run the command inside a short-lived
+[Azure Container Apps Job](https://learn.microsoft.com/en-us/azure/container-apps/jobs)
+using the same worker image, rather than from a workstation:
+
+1. Create a dedicated setup identity, separate from the OneDrive worker identity, and
+   grant it `AcrPull` on the registry so it can pull the worker image:
+
+   ```sh
+   az identity create --name <setup-identity-name> --resource-group <approved-resource-group>
+   az role assignment create --assignee-object-id <setup-identity-principal-id> \
+     --assignee-principal-type ServicePrincipal --role AcrPull --scope <registry-resource-id>
+   ```
+
+2. Immediately before provisioning, grant that identity's service principal the Graph
+   application role `Files.ReadWrite.All` (admin consent required):
+
+   ```sh
+   az rest --method post \
+     --url "https://graph.microsoft.com/v1.0/servicePrincipals/<setup-identity-principal-id>/appRoleAssignments" \
+     --body '{"principalId":"<setup-identity-principal-id>","resourceId":"<graph-service-principal-id>","appRoleId":"75359482-378d-4052-8f01-80520e7db3cd"}'
+   ```
+
+3. Run `node dist/onedrive/src/setup-command.js --config monitoring.config.json --tenant <id> --apply`
+   in a Container Apps Job with the setup identity attached
+   (`identity.type: UserAssigned`) and `AZURE_CLIENT_ID` set to its client ID, mounting
+   the config and `.env` text as the job's command input. Review the plan (omit
+   `--apply`) before applying, exactly as in a local run.
+
+4. Delete the job execution and **revoke the `Files.ReadWrite.All` grant** right after
+   a successful apply — delete the app role assignment created in step 2. The setup
+   identity is left with zero standing Graph permissions between runs; only `AcrPull`
+   persists, which is low-risk read-only registry access. Re-grant `Files.ReadWrite.All`
+   only when about to provision again.
+
+This keeps the broad `Files.ReadWrite.All` grant transient and off any
+continuously-running identity, with no certificate or key ever written to disk.
 
 Run from `synthetic-tests/` with its Node dependencies installed. After a normal
 build, production-only installations can invoke

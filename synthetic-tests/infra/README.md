@@ -12,15 +12,20 @@ OneDrive reuses the environment/registry and receives its own UAMI
 It adds no bot, user sign-in, storage account or M365 grants. Its optional stable
 provider uses the distinct Microsoft OneDrive service entry, not SharePoint.
 See the [OneDrive setup and exact permission boundary](../onedrive/README.md).
-After the foundation creates its identity, run
+After granting its identity access ([`docs/setup.md`](../../docs/setup.md)), run
 [bulk OneDrive setup](../../docs/onedrive-setup.md) before enabling live OneDrive
 workers. For hundreds of accounts, size the service concurrency/cycle budget
 and root report TTL; neither additional replicas nor the default deadline solve
 queued-account capacity.
 
-The foundation creates the registry, environment, identities and narrowly scoped
-image-pull/report-ingestion roles. It creates no Microsoft 365 resources, bot
-registrations or permission grants. Start with the [access setup guide](../../docs/cross-tenant-access.md)
+The deployment template can create a registry/environment in `create` mode and
+identities named by `worker.identityName`, or reuse existing resources. It grants
+scoped image-pull/report-ingestion roles but no Microsoft 365 access.
+Azure resources, worker/peer identities, Microsoft 365 roles, federation and bots are
+separately prepared by hand before deployment, following
+[`docs/setup.md`](../../docs/setup.md); `npm run setup:ids` and `npm run setup:reply-seeds`
+then turn that access into `.env` values. Start with the
+[access setup guide](../../docs/cross-tenant-access.md)
 and [Teams bot setup](../teams/README.md#primary-setup-unattended-bot).
 For dated live acceptance, see [deployment status](../../docs/deployment.md#deployment-status-and-order).
 
@@ -44,15 +49,17 @@ It holds names and a few IDs, never private keys or user tokens.
 For selected live Teams meeting calling, the Teams service `access` block must name
 `peerIdentity`, the **existing approved** peer UAMI, plus `bot` and `peerBot`, the two
 existing bot registrations; deployment checks them before changing anything. The peer's
-client ID comes from `.env`, where `npm run setup` looks it up from `peerIdentity`, and
+client ID comes from `.env`, where `npm run setup:ids` looks it up from `peerIdentity`, and
 every call target's `peerBotClientId` (which defaults to it) must match. The worker template
 attaches that identity alongside the unchanged primary reporting/image-pull UAMI and
 supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams, simulation and calling-disabled
 workers receive neither. It creates no peer, Azure Bot or Graph grants. Both bots
 require separately approved `Calls.JoinGroupCall.All` and the same `/api/calls`
-callback (`execution.teamsCallingCallbackUrl`, which setup writes to `.env`), on existing
+callback (`execution.teamsCallingCallbackUrl`, which `npm run setup:ids` writes to `.env`), on existing
 port 8080 with one replica. See
 [meeting setup](../teams/README.md#two-bot-meeting-setup).
+Access grants come from [`docs/setup.md`](../../docs/setup.md), by hand; deployment itself
+only verifies and attaches those already prepared bindings.
 
 A `live` service attempts real
 authentication/operations: incomplete setup produces observed Unhealthy
@@ -66,8 +73,12 @@ From `synthetic-tests/`, preview and then deploy:
 
 ```sh
 npm ci
-npm run deploy -- --plan
 az login
+# Grant every access in docs/setup.md by hand, then:
+npm run setup:ids
+npm run setup:reply-seeds          # only when reply-mail is selected
+npm run onedrive:setup -- --apply  # only when OneDrive is selected; see docs/onedrive-setup.md
+npm run deploy -- --plan
 npm run deploy
 ```
 
@@ -78,16 +89,18 @@ runs `what-if` for each before applying; see its
 admin credentials and anonymous pull. Each UAMI receives AcrPull on that registry and
 ingest-only permission on its own service model, not model administration.
 
-Microsoft 365 access is prepared separately by `npm run setup`
-([what it covers](../../docs/deployment.md#set-up-microsoft-365-with-one-script)). Its
-reply-seed step builds the worker image in this registry and runs a temporary Container
-Apps job in this environment, so it needs Contributor on the resource group and ACR build
-rights.
+Azure resources and Microsoft 365 access — including steps that need Teams app
+upload/team installation or admin consent — are prepared by hand, before the deploy
+command, following [`docs/setup.md`](../../docs/setup.md). `npm run setup:ids` and
+`npm run setup:reply-seeds` then turn that access into `.env` values; `setup:reply-seeds`
+builds the worker image in this registry and runs a temporary Container Apps job in this
+environment, so it needs Contributor on the resource group and ACR build rights.
 
 To reuse an approved environment and registry, set `deployment.foundation` to
 `{ "mode": "existing", "environment": "<name or ID>", "registry": "<name or ID>" }`: a bare
 name is a resource in the health model's resource group, and a full resource ID reaches
-another group or subscription.
+another resource group. Use resources in the configured subscription; registry
+preflight runs against `healthModel.subscriptionId`.
 This leaves their configuration untouched while workers and the scoped identity and
 report assignments update; `{ "mode": "create", ... }` creates them.
 
@@ -107,9 +120,11 @@ An incremental deployment does not delete or stop an app for a service the confi
 no longer enables. After an approved service removal, explicitly deactivate that owned
 app's active revisions with `az containerapp revision deactivate`, then verify
 there are no active revisions or running replicas. Do not delete unrelated apps
-or use complete deployment mode on the shared resource group. The model deploy
-suppresses a service reference with no selected implemented journeys, so retained
-excluded-service entities cannot affect root rollup.
+or use complete deployment mode on the shared resource group. The desired model
+inventory omits a service with no selected journeys, but incremental deployment
+does not remove or suppress its old reference. If no tenant still selects the
+service, explicitly suppress or retire the owned root reference and relationship
+after review so retained stale service health cannot affect root rollup.
 
 ## Separate M365 and Azure credentials
 
@@ -145,6 +160,8 @@ remain managed-identity-only; no bot certificate path exists. It keeps `M365_*`,
 `BOT_*` and Azure reporting's `AZURE_*` separate. There is no credential
 fallback. Deployment preparation, including `--plan`, rejects incomplete or mixed
 references and inconsistent tenants.
+Certificate mode cannot configure `providerClientId`, including tenant inheritance;
+disable that service's provider sources and omit the override when using it.
 
 Each UAMI needs separately approved secret-read access and network reachability
 to its hosting-tenant Key Vault secrets. The template does not create the vault,
@@ -183,18 +200,20 @@ secret-reading/application-modification access.
   rotations may require an explicit restart.
 - Selected live calls expose only the Teams HTTPS callback on `/api/calls`.
   `/healthz` is static readiness, not proof of journey progress.
-- Direct reports and console diagnostics are always active. Platform log forwarding
-  is disabled by default; durable diagnostic retention needs separate configuration.
+- Live workers publish direct reports; all modes emit console diagnostics.
+  Setup-created environments use `--logs-destination none`; reused environments
+  retain their existing logging configuration. Durable platform log retention
+  needs separate configuration from in-process OTEL.
 - Shutdown allows 60 seconds for bounded cleanup/reporting. Workers retain no
   cross-cycle journey history or durable outbox.
 
 Verify every selected journey/action, fresh report timestamps and native service/root
 rollup, not just successful ARM provisioning. The checked-in config selects ten
 active journeys and 38 business steps, plus Exchange's Mail and Calendar
-parents, across four models, 57 entities and 53 relationships by default;
-enabling Service Health adds three entities and
-relationships. There is no proposal catalog. Provider context
-is separate and impact-suppressed. Invalid schemas or unusable report credentials
+parents and all three Service Health supporting entities: four models,
+60 entities and 56 relationships. With Service Health disabled, the same journey
+selection has 57 entities and 53 relationships. There is no proposal catalog.
+Provider context is separate and impact-suppressed. Invalid schemas or unusable report credentials
 can prevent publication and require independent detection.
 
 Each service's optional stable collector also runs an independent provider lane
@@ -221,7 +240,7 @@ For `destination: azure-monitor`, the [model/telemetry resources](../../health-m
 deploy before the workers. The worker template reads `appi-<healthModel.name>` (or the
 matching `deployment.applicationInsightsName`) and passes its connection string as a
 secret reference, not a normal parameter. Verify live ingestion/query evaluation,
-report independence, retention and cost; offline tests do not prove cloud export.
+report independence, retention and cost; source validation does not prove cloud export.
 
 When disabling OTEL, incremental deployment does not remove old query bindings,
 permissions, app settings or telemetry resources. Follow the [model migration
