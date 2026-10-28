@@ -6,6 +6,7 @@ import {
   parseProjectDocument, selectTenant, serviceExecution, serviceModelName, serviceTypes,
   type ProjectConfig, type ProjectDocument,
 } from "./project-config.js";
+import { healthModelResourceId, managedIdentityType } from "./references.js";
 import { validateProjectTenantBinding } from "./runtime.js";
 import { serviceSettings, type ServiceConfig } from "./service-config.js";
 
@@ -37,6 +38,8 @@ export function activeServiceInventory(root: string, type: ServiceConfig["type"]
 }
 
 function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings): void {
+  // The foundation stage deploys no workers and runs before the environment (hence the callback URL) exists.
+  if (settings.stage !== "workers") return;
   const { service, project } = worker;
   const selected = project.services[service.type];
   const access = selected.access;
@@ -44,15 +47,15 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   const calling = live && service.type === "teams" && project.services.teams.scenarios["scheduled-meeting"];
   const peer = access.botPeerClientId || access.botPeerManagedIdentityResourceId;
   if (peer && (service.type !== "teams" || !access.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
-    throw new ConfigurationError("Teams peer access requires both botPeerClientId and botPeerManagedIdentityResourceId");
+    throw new ConfigurationError("Teams peer access requires both access.peerIdentity and its client ID (access.botPeerClientId, which npm run setup writes to .env)");
   }
   if (calling && (!peer || !access.botPeerResourceId || service.teamsCallingPort !== 8080 ||
       !service.teamsCallingCallbackUrl || project.services.teams.callTargets.some(target =>
         target.peerBotClientId.toLowerCase() !== access.botPeerClientId?.toLowerCase()))) {
-    throw new ConfigurationError("Live Teams meetings require port 8080, the existing HTTPS callback, approved matching peer identity and both bot resource references");
+    throw new ConfigurationError("Live Teams meetings require port 8080, the existing HTTPS callback, approved matching peer identity and both bot references (access.bot and access.peerBot)");
   }
   if (live && service.type === "teams" && !access.botResourceId) {
-    throw new ConfigurationError("Live Teams requires access.botResourceId for the existing approved bot endpoint/identity preflight");
+    throw new ConfigurationError("Live Teams requires access.bot for the existing approved bot endpoint/identity preflight");
   }
   const certificate = service.graphAuthentication === "certificate";
   const certificateFields = access.m365ClientId || access.m365TenantId || access.m365CertificateSource ||
@@ -67,9 +70,9 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
       throw new ConfigurationError("Hosted Graph certificates require explicit M365 tenant/client and exactly one complete Key Vault or environment-referenced native certificate source");
     }
   }
-  if (!live || settings.stage !== "workers") return;
+  if (!live) return;
   if (!settings.enableLiveProbes) throw new ConfigurationError("Live execution requires deployment.enableLiveProbes: true");
-  if (!selected.worker?.identityResourceId) throw new ConfigurationError("Live workers must bind an existing approved worker.identityResourceId; deployment never grants Graph access");
+  if (!selected.worker?.identityResourceId) throw new ConfigurationError("Live workers must bind an existing approved worker.identity; deployment never grants Graph access");
   if (service.healthReportAuthentication !== "managed-identity") throw new ConfigurationError("Hosted workers require healthReportAuthentication: managed-identity");
   if (service.serviceActivity.enabled && !settings.enableBetaServiceActivity) {
     throw new ConfigurationError("Beta collection requires deployment.enableBetaServiceActivity: true");
@@ -85,25 +88,25 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   serviceSettings(service, env, selected.scenarios);
   if (service.type === "exchange" && project.services.exchange.scenarios["reply-mail"] &&
       project.services.exchange.targets.some(target => !target.replySeed)) {
-    throw new ConfigurationError("Live reply-mail requires verified retained replySeed bindings for every selected initiating pair; run exchange:mail-test setup without disabling the journey");
+    throw new ConfigurationError("Live reply-mail requires verified retained replySeed bindings for every selected initiating pair; run npm run setup (it writes them to .env)");
   }
   if (service.type === "onedrive" &&
       (project.services.onedrive.scenarios["user-drive-roundtrip"] || project.services.onedrive.scenarios["document-versions"]) &&
       project.services.onedrive.targets.some(target => !target.driveId || !target.folderId)) {
-    throw new ConfigurationError("Live OneDrive selected-folder journeys require approved driveId/folderId bindings; run onedrive:setup without inventing IDs");
+    throw new ConfigurationError("Live OneDrive selected-folder journeys require approved driveId/folderId bindings; run npm run onedrive:setup (it writes them to .env)");
   }
 }
 
 function deploymentWorker(document: ProjectDocument, project: ProjectConfig, type: ServiceConfig["type"]): DeploymentWorker {
   const hosting = project.services[type].worker;
   if (!hosting || Boolean(hosting.identityName) === Boolean(hosting.identityResourceId)) {
-    throw new ConfigurationError("Each deployed tenant/service requires worker.appName and exactly one identityResourceId or identityName");
+    throw new ConfigurationError("Each deployed tenant/service requires worker.appName and exactly one of worker.identity or worker.identityName");
   }
   if (Number(hosting.memory.replace("Gi", "")) !== hosting.cpu * 2) {
     throw new ConfigurationError("Consumption workers require memory in Gi equal to twice cpu");
   }
   const identityResourceId = hosting.identityResourceId ??
-    `/subscriptions/${document.healthModel.subscriptionId}/resourceGroups/${document.healthModel.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${hosting.identityName}`;
+    healthModelResourceId(document.healthModel, managedIdentityType, hosting.identityName!);
   return {
     tenant: project.tenant.id, type, appName: hosting.appName, identityResourceId, project,
     service: serviceExecution(project, type),

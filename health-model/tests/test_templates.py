@@ -1,9 +1,13 @@
 """Contract tests for the health-model Bicep templates.
 
 * Deployment parameters come from the real TypeScript (`prepareProjectDeployment`, as `npm run deploy` builds them).
-* Templates are evaluated offline with `az bicep snapshot`, so entities, signal groups and outputs are checked as deployed.
+* Templates are evaluated offline with `az bicep snapshot`, so entities, signal groups, saved searches and outputs are
+  checked as deployed.
 * The signal names a worker publishes are captured from the real health reporter and compared with what the model
-  declares, so the TypeScript -> Bicep contract is checked end to end.
+  declares, so the TypeScript -> Bicep contract is checked end to end. Entities declare only the configured
+  `reporting-<id>` groups; the overall signals are published ungrouped and checked against an explicit expectation.
+* The log attributes the saved searches and the OTEL-backed signal queries read are captured from the real OTEL
+  emitter, so the TypeScript -> KQL contract is checked the same way.
 """
 import copy
 import json
@@ -21,12 +25,20 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 TYPESCRIPT = ROOT / "synthetic-tests"
 INFRA = ROOT / "health-model/infra"
+QUERIES = ROOT / "health-model/queries"
 SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
 SERVICES = ("exchange", "teams", "onedrive")
 SYNTHETIC_SIGNALS = ["synthetic-success-percentage", "synthetic-mean-duration"]
 OTEL_SIGNALS = ["otel-success-percentage", "otel-mean-duration"]
 FABRIKAM = "22222222-2222-4222-8222-222222222222"
 SNAPSHOT_PREFIX = "model-snapshot-"
+SEARCH_CATEGORY = "M365 Synthetic Monitoring"
+# Saved searches deployed with Azure Monitor OTEL: file name -> display name.
+SAVED_SEARCHES = {
+    "failures-by-group": "Synthetic failures by group and user",
+    "impacted-users-by-group": "Impacted users by group",
+    "success-by-group": "Success rate by group and journey",
+}
 
 # A terminated run unwinds like an interrupted one, so it still removes the snapshot folder it is using.
 signal.signal(signal.SIGTERM, signal.default_int_handler)
@@ -160,6 +172,69 @@ for (const [name, raw] of Object.entries(await readInput())) output[name] = awai
 console.log(JSON.stringify(output));
 """
 
+# The OTEL log records the real emitter writes for a healthy and a failed attempt of every configured target, with the
+# context a worker derives from the configuration, plus a failed attempt of a target that belongs to two groups.
+EMITTED = STDIN + SIMULATION + r"""
+import { ExportResultCode } from '@opentelemetry/core';
+import { AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import { probeServices } from './utils/src/contracts.ts';
+import { resultContext } from './utils/src/groups.ts';
+import { createResultTelemetry } from './utils/src/otel.ts';
+import { parseProjectDocument, selectTenant, serviceExecution, serviceTypes } from './utils/src/project-config.ts';
+
+const records = [];
+const exporters = {
+  logs: {
+    export(batch, done) {
+      records.push(...batch.map(record => ({ message: record.body, attributes: record.attributes })));
+      done({ code: ExportResultCode.SUCCESS });
+    },
+    forceFlush: async () => undefined, shutdown: async () => undefined,
+  },
+  metrics: {
+    export(_, done) { done({ code: ExportResultCode.SUCCESS }); },
+    selectAggregationTemporality: () => AggregationTemporality.DELTA,
+    forceFlush: async () => undefined, shutdown: async () => undefined,
+  },
+};
+const telemetry = createResultTelemetry(exporters, { emit() {} });
+const attempts = {};
+
+// A failed attempt carries what a real failure does: a status and a value-free hint on the failed step.
+const failure = result => resultSchema.parse({
+  ...result,
+  diagnosticContext: { ...result.diagnosticContext, httpStatus: 503 },
+  steps: result.steps.map(step => step.status === 'failed' ? { ...step, detail: 'schema:value(too_big)' } : step),
+});
+async function record(label, probe, scenario, project, context) {
+  const raw = resultSchema.parse(await simulate({ ...probe, scenario }, healthy));
+  const result = scenario === 'failed' ? failure(raw) : raw;
+  attempts[result.correlationId] = { label, service: probeServices[result.testType].service, target: result.testId };
+  telemetry.record(result, 'live', context ? context(result) : resultContext(project, result));
+}
+
+const document = parseProjectDocument(await readInput());
+for (const { id } of document.tenants) {
+  const project = selectTenant(document, id);
+  for (const type of serviceTypes) {
+    const selected = project.services[type];
+    if (!selected.enabled) continue;
+    const probes = serviceProbes(serviceExecution(project, type), selected.scenarios);
+    for (const probe of probes) for (const scenario of ['healthy', 'failed']) await record(scenario, probe, scenario, project);
+    const first = probes[0];
+    if (type === 'exchange' && first) {
+      const groups = [{ id: 'first', displayName: 'First' }, { id: 'second', displayName: 'Second' }];
+      await record('two-groups', first, 'failed', project, result => ({ ...resultContext(project, result), groups }));
+    }
+  }
+}
+await telemetry.forceFlush();
+await telemetry.shutdown();
+console.log(JSON.stringify(records.map(({ message, attributes }) => ({
+  message, attributes, attempt: attempts[attributes['probe.correlation_id']],
+}))));
+"""
+
 
 def run(command, **options):
     done = subprocess.run(command, capture_output=True, text=True, **options)
@@ -231,6 +306,7 @@ class Deployment:
         }
         self.authentications = of_type("/authenticationsettings")
         self.assignments = of_type("roleAssignments")
+        self.searches = {item["name"]: item["properties"] for item in of_type("/savedSearches")}
 
     def entity_names(self, model):
         return {entity for name, entity in self.entities if name == model}
@@ -274,8 +350,8 @@ def reporting_tenants(document, service, journey=None):
     return [tenant["id"] for tenant in document["tenants"] if publishes(tenant)]
 
 
-def external_signals(document, service, journey, signals):
-    """Plain names for one tenant; with several, one `tenant-<alias>--` set per tenant that reports to the entity."""
+def overall_signals(document, service, journey, signals):
+    """The overall names a worker publishes: plain for one tenant; with several, `tenant-<alias>--` per reporting tenant."""
     if len(document["tenants"]) == 1:
         return list(signals)
     return [f"tenant-{tenant}--{signal}" for tenant in reporting_tenants(document, service, journey)
@@ -287,17 +363,45 @@ def group_signals(group, service, journey, signals):
     return [f'group-{group["id"]}--tenant-{scope["tenant"]}--{signal}' for scope in scopes for signal in signals]
 
 
-def without_reporting_groups(properties):
-    properties = copy.deepcopy(properties)
-    groups = [group for group in properties.get("signalAggregationGroups", [])
-              if not group["name"].startswith("reporting-")]
-    properties.pop("signalAggregationGroups", None)
-    return {**properties, **({"signalAggregationGroups": groups} if groups else {})}
+def without_groups(properties):
+    return {key: value for key, value in properties.items() if key != "signalAggregationGroups"}
 
 
-# Raw root-configuration variants; each is a deep copy of the checked-in file with a few edits.
+def log_attributes(text):
+    """The `AppTraces` custom attributes a KQL text reads from `Properties`."""
+    return set(re.findall(r"Properties\['([^']+)'\]", text))
+
+
+# Raw root-configuration variants; each is a deep copy of the checked-in file, simulated and without optional
+# providers, with a few edits.
 def tenant_services(config, index=0):
     return config["tenants"][index]["services"]
+
+
+def fixture_ids(config):
+    """The IDs the checked-in file leaves to `.env` (OneDrive users, the meeting organizer and the peer bot)."""
+    for tenant in config["tenants"]:
+        services = tenant["services"]
+        for index, target in enumerate(services["onedrive"]["targets"]):
+            target.setdefault("userId", f"77777777-7777-4777-8777-00000000000{index}")
+        for call in services["teams"]["callTargets"]:
+            call.setdefault("organizerUserId", "44444444-4444-4444-8444-444444444444")
+            call.setdefault("peerBotClientId", "55555555-5555-4555-8555-555555555555")
+
+
+def baseline(config):
+    """The checked-in tenants, targets and groups, simulated and without optional providers.
+
+    The file itself runs live with Service Health and Azure Monitor OTEL. The templates do not depend on that, and
+    simulation skips the live-only preflight (retained reply seeds, bot and identity bindings), so these tests hold
+    while an administrator is still provisioning the live environment.
+    """
+    fixture_ids(config)
+    config["serviceHealth"] = {"enabled": False}
+    config["otel"] = {"enabled": False}
+    for selected in tenant_services(config).values():
+        selected["execution"]["mode"] = "simulation"
+        selected.pop("access", None)
 
 
 def select(service, names):
@@ -331,20 +435,26 @@ def rich(config):
 def second_tenant(config):
     """Adds Fabrikam with its own accounts, targets and workers, and a group spanning both tenants.
 
-    The tenants run different journeys: Contoso runs everything except recurring calendar events and scheduled
-    meetings; Fabrikam runs only send-receive mail, recurring calendar events and scheduled meetings, with OneDrive off.
+    Fabrikam has two Exchange pairs, one Teams channel and meeting and two OneDrive drives, under its own ids and
+    accounts. The tenants run different journeys: the first runs everything except recurring calendar events and
+    scheduled meetings; Fabrikam runs only send-receive mail, recurring calendar events and scheduled meetings, with
+    OneDrive off.
     """
     providers(config)
-    contoso = config["tenants"][0]
-    fabrikam = copy.deepcopy(contoso)
+    first = config["tenants"][0]
+    config["deployment"]["azureTenantId"] = first["tenantId"]  # required once the config has several tenants
+    fabrikam = copy.deepcopy(first)
     fabrikam.update(id="fabrikam", displayName="Fabrikam", tenantId=FABRIKAM)
     exchange, teams, onedrive = (fabrikam["services"][service] for service in SERVICES)
-    accounts = ["test-user-3@example.invalid", "test-user-4@example.invalid"]
+    accounts = ["test-user-3@fabrikam.example.invalid", "test-user-4@fabrikam.example.invalid"]
+    exchange["targets"] = exchange["targets"][:2]
     for index, target in enumerate(exchange["targets"]):
         target.update(id=f"fabrikam-pair-{index + 1}", mailbox=accounts[index], recipientMailbox=accounts[1 - index])
         target["distributionList"] = {"address": "list@fabrikam.example.invalid", "expectedRecipients": accounts}
+    teams["targets"] = teams["targets"][:1]
     teams["targets"][0].update(id="fabrikam-channel", tenantId=FABRIKAM)
     teams["callTargets"][0].update(id="fabrikam-meeting", tenantId=FABRIKAM)
+    onedrive["targets"] = onedrive["targets"][:2]
     for index, target in enumerate(onedrive["targets"]):
         target.update(id=f"fabrikam-drive-{index + 1}", userPrincipalName=accounts[index],
                       userId=f"77777777-7777-4777-8777-00000000000{index}")
@@ -352,14 +462,15 @@ def second_tenant(config):
     for service, selected in fabrikam["services"].items():
         selected["worker"] = {"appName": f"fabrikam-{service}", "identityName": f"uami-fabrikam-{service}",
                               "cpu": 0.25, "memory": "0.5Gi"}
-    select(contoso["services"]["exchange"], [name for name in exchange["scenarios"] if name != "recurring-calendar"])
-    select(contoso["services"]["teams"], ["channel-conversation"])
+    select(first["services"]["exchange"], [name for name in exchange["scenarios"] if name != "recurring-calendar"])
+    select(first["services"]["teams"], ["channel-conversation"])
     select(exchange, ["send-receive-mail", "recurring-calendar"])
     select(teams, ["scheduled-meeting"])
     config["tenants"].append(fabrikam)
     config["groups"].append({
         "id": "priority", "displayName": "Priority accounts",
-        "accounts": ["test-user-1@example.invalid", accounts[0]], "teams": ["teams-probe-001", "fabrikam-meeting"],
+        "accounts": [first["services"]["exchange"]["targets"][0]["mailbox"], accounts[0]],
+        "teams": [first["services"]["teams"]["targets"][0]["id"], "fabrikam-meeting"],
     })
 
 
@@ -378,6 +489,8 @@ def make_variants(root):
         "two": second_tenant,
         "restore-second-tenant": restore_in_second_tenant,
         "none": disable_everything,
+        "console": lambda config: config.update(otel={"enabled": True, "destination": "console"}),
+        "none-monitored": lambda config: (disable_everything(config), providers(config)),
         "mail-only": lambda config: run_only(config, exchange=["send-receive-mail"]),
         "calendar-only": lambda config: run_only(config, exchange=["recurring-calendar", "meeting-invitation"]),
     }
@@ -390,6 +503,7 @@ def make_variants(root):
     variants = {}
     for name, change in changes.items():
         variants[name] = copy.deepcopy(root)
+        baseline(variants[name])
         change(variants[name])
     return variants
 
@@ -413,6 +527,7 @@ class ModelTemplateContracts(unittest.TestCase):
         cls.prepared = typescript(PREPARE, make_variants(cls.project))
         cls.deployments = {}
         cls.published = {}
+        cls.emitted = None
 
     def parameters(self, name):
         prepared = self.prepared[name]
@@ -445,6 +560,26 @@ class ModelTemplateContracts(unittest.TestCase):
             self.published[name] = signals
         return self.published[name]
 
+    def published_overall(self, name):
+        """The posted overall signals by (model, entity): everything that is not a `group-` signal."""
+        overall = {key: {signal for signal in signals if not signal.startswith("group-")}
+                   for key, signals in self.published_signals(name).items()}
+        return {key: signals for key, signals in overall.items() if signals}
+
+    def published_grouped(self, name):
+        """The posted `group-<id>--tenant-<alias>--` signals by (model, entity)."""
+        grouped = {key: {signal for signal in signals if signal.startswith("group-")}
+                   for key, signals in self.published_signals(name).items()}
+        return {key: signals for key, signals in grouped.items() if signals}
+
+    def emitted_records(self):
+        """The OTEL log records the real emitter writes for the checked-in configuration."""
+        if self.emitted is None:
+            project = copy.deepcopy(self.project)
+            fixture_ids(project)
+            type(self).emitted = typescript(EMITTED, project)
+        return self.emitted
+
     def selected_services(self, document):
         """The catalogue restricted to the journeys some tenant runs: the shape the model is expected to take."""
         selected = []
@@ -458,45 +593,60 @@ class ModelTemplateContracts(unittest.TestCase):
                 selected.append(service)
         return selected
 
-    def expected_groups(self, name):
-        """The aggregation groups each entity must declare, derived from the contract alone."""
+    def expected_overall(self, name):
+        """The overall signals each entity must receive from the workers, derived from the catalogue and the tenants.
+
+        The model declares none of them: they are published ungrouped and contribute to each entity directly.
+        """
         document = self.document(name)
-        otel = document["otel"]["enabled"] and document["otel"]["destination"] == "azure-monitor"
         expected = {}
-
-        def declare(model, entity, service, journey, signals, reporting=False):
-            declared = {"external-reports": external_signals(document, service, journey, signals)}
-            if otel and journey:
-                declared["otel"] = OTEL_SIGNALS
-            for group in self.reporting_groups(name) if reporting else []:
-                members = group_signals(group, service, journey, signals)
-                if members:
-                    declared[f'reporting-{group["id"]}'] = members
-            expected[model, entity] = declared
-
         for service in self.selected_services(document):
             kind, model = service["service"], f'{self.name}-{service["service"]}'
             for journey in service["journeys"]:
                 calls = self.runtime["teamsCallSignals"] if journey["entityName"] == "teams-call" else []
-                declare(model, journey["entityName"], kind, journey["name"], [*SYNTHETIC_SIGNALS, *calls], reporting=True)
+                expected[model, journey["entityName"]] = set(
+                    overall_signals(document, kind, journey["name"], [*SYNTHETIC_SIGNALS, *calls]))
                 for step in journey["steps"]:
-                    declare(model, f'{journey["entityName"]}-{step["name"]}', kind, journey["name"], SYNTHETIC_SIGNALS)
+                    expected[model, f'{journey["entityName"]}-{step["name"]}'] = set(
+                        overall_signals(document, kind, journey["name"], SYNTHETIC_SIGNALS))
             if document["serviceHealth"]["enabled"]:
                 provider = ["microsoft-reported-service-status", "microsoft-reported-issue-count",
-                            *(f"microsoft-activity-{function}" for function in self.projection["providerActivityFunctions"][kind])]
-                declare(model, f"{kind}-service-health", kind, None, provider)
+                            *(f"microsoft-activity-{function}" for function in self.runtime["activityFunctions"][kind])]
+                expected[model, f"{kind}-service-health"] = set(overall_signals(document, kind, None, provider))
+        return expected
+
+    def expected_groups(self, name):
+        """The aggregation groups each journey entity must declare, derived from the TypeScript plan alone.
+
+        One `reporting-<id>` group per planned group with members for the journey, in plan order, as
+        (name, displayName, members). No other entity declares any group.
+        """
+        expected = {}
+        for service in self.selected_services(self.document(name)):
+            kind, model = service["service"], f'{self.name}-{service["service"]}'
+            for journey in service["journeys"]:
+                calls = self.runtime["teamsCallSignals"] if journey["entityName"] == "teams-call" else []
+                declared = [(f'reporting-{group["id"]}', group["displayName"], members)
+                            for group in self.reporting_groups(name)
+                            if (members := group_signals(group, kind, journey["name"], [*SYNTHETIC_SIGNALS, *calls]))]
+                if declared:
+                    expected[model, journey["entityName"]] = declared
         return expected
 
     def assert_signal_groups(self, name):
-        """Every entity declares exactly the contract's groups, in order; parents and the root model declare none."""
+        """Journey entities declare exactly the planned groups, in order, under the configured display names and the
+        roll-up policy. Every other entity, and every entity of the root model, carries no aggregation group at all."""
         deployment, expected = self.deployment(name), self.expected_groups(name)
         self.assertLessEqual(set(expected), set(deployment.entities))
-        for (model, entity), properties in deployment.entities.items():
-            if model == self.name:
-                self.assertNotIn("signalAggregationGroups", properties, entity)
-            else:
-                self.assertEqual(list(deployment.groups(model, entity).items()),
-                                 list(expected.get((model, entity), {}).items()), (model, entity))
+        for key, properties in deployment.entities.items():
+            declared = properties.get("signalAggregationGroups")
+            if key not in expected:
+                self.assertIsNone(declared, key)
+                continue
+            self.assertEqual(
+                [(group["name"], group["displayName"], group["aggregationType"], group["ignoreUnknown"], group["members"])
+                 for group in declared],
+                [(group, display, "WorstOf", False, members) for group, display, members in expected[key]], key)
 
     # ---- deployment parameters and shared catalogue --------------------------------------------------------------
 
@@ -507,7 +657,8 @@ class ModelTemplateContracts(unittest.TestCase):
         default = resolve_literals(self.template["parameters"]["projectConfig"]["defaultValue"], self.template)
         self.assertEqual(default, self.project)
         self.assertEqual(self.template["parameters"]["reportingGroups"]["defaultValue"], [])
-        self.assertEqual([group["id"] for group in self.reporting_groups("root")], ["centralus", "uksouth"])
+        self.assertEqual([(group["id"], group["displayName"]) for group in self.reporting_groups("root")],
+                         [(group["id"], group["displayName"]) for group in self.project["groups"]])
         self.assertEqual(self.reporting_groups("nogroups"), [])
         self.assertEqual(self.document("root")["tenants"][0]["id"], self.tenant["id"])
         for name in ("projectConfig", "reportingGroups"):
@@ -517,10 +668,6 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertEqual(self.projection, self.runtime["catalog"],
                          "Run npm run catalog:generate in synthetic-tests after editing the catalogue")
         self.assertEqual(self.catalog, self.projection["serviceDefinitions"])
-        self.assertEqual(
-            resolve_literals(self.service_template["variables"]["providerActivityFunctions"], self.service_template),
-            self.projection["providerActivityFunctions"],
-        )
 
     def test_the_root_config_models_every_catalog_journey_and_step(self):
         self.assertEqual({service["service"] for service in self.catalog}, set(self.tenant["services"]))
@@ -533,7 +680,7 @@ class ModelTemplateContracts(unittest.TestCase):
         steps = sum(len(journey["steps"]) for journey in journeys)
         groups = len({journey["group"]["entityName"] for journey in journeys if "group" in journey})
         self.assertEqual({service["service"] for service in selected}, {"exchange", "teams", "onedrive"})
-        self.assertFalse(self.project["serviceHealth"]["enabled"])
+        self.assertFalse(self.document("root")["serviceHealth"]["enabled"])
         self.assertEqual((len(selected) + 1, 1 + len(selected) * 2 + groups + len(journeys) + steps,
                           len(selected) + groups + len(journeys) + steps), (4, 67, 63))
         self.assertEqual((len(journeys), steps), (12, 46))
@@ -548,7 +695,7 @@ class ModelTemplateContracts(unittest.TestCase):
     def test_service_and_scenario_selection_contract(self):
         self.assertIn("variables('selectedServices')", self.template["variables"]["enabledServices"])
         for resource in self.resources:
-            if "copy" in resource:
+            if "copy" in resource and resource["copy"]["name"] != "savedSearches":
                 self.assertEqual(resource["copy"]["count"], "[length(variables('enabledServices'))]")
         root = self.deployment("root")
         for service in SERVICES:
@@ -580,10 +727,10 @@ class ModelTemplateContracts(unittest.TestCase):
 
     def test_a_journey_is_modeled_when_any_tenant_runs_it(self):
         document, deployment = self.document("two"), self.deployment("two")
-        contoso, fabrikam = document["tenants"]
-        self.assertFalse(runs(contoso, "exchange", "recurring-calendar"))
+        first, fabrikam = document["tenants"]
+        self.assertFalse(runs(first, "exchange", "recurring-calendar"))
         self.assertFalse(runs(fabrikam, "exchange", "edit-reopen-draft"))
-        self.assertFalse(runs(contoso, "teams", "scheduled-meeting"))
+        self.assertFalse(runs(first, "teams", "scheduled-meeting"))
         self.assertFalse(runs(fabrikam, "onedrive", "user-drive-roundtrip"))
         selected = {service["service"]: service for service in self.selected_services(document)}
         for service in self.catalog:
@@ -610,7 +757,7 @@ class ModelTemplateContracts(unittest.TestCase):
                          ["place-call", "wait-for-answer", "verify-meeting-metadata", "verify-participants",
                           "end-call"])
         self.assertEqual(len(self.tenant["services"]["teams"]["callTargets"]), 1)
-        self.assertEqual(len(self.tenant["services"]["teams"]["targets"]), 1)
+        self.assertGreaterEqual(len(self.tenant["services"]["teams"]["targets"]), 1)
         self.assertEqual((1 + len(call["steps"])) * 2, 12)
 
     def test_exchange_seven_journeys_and_all_business_steps(self):
@@ -650,8 +797,11 @@ class ModelTemplateContracts(unittest.TestCase):
             "[Planned / unimplemented]", "answered-audio", "recipient-file-sharing", "adaptive-card",
             "recipient-sharing", "search-retrieve", "two-bot-conversation", "browser-upload",
             "external-inbound", "external-outbound", "search-organize-mail", "outlook-web",
+            "External Reports", "OpenTelemetry", "external-reports", "externalReportTenants", "externalSignals",
+            "tenantJourneys", "__bicep.sourceGroup", "providerSignalNames", "providerActivityFunctions",
         ):
             self.assertNotIn(removed, compiled)
+        self.assertNotIn("'otel'", json.dumps(self.service_template), "no OpenTelemetry aggregation group")
         self.assertNotIn("quality", compiled.lower(), "the model has no call-quality signals or thresholds")
         self.assertFalse((INFRA / "planned-catalog.bicep").exists())
         self.assertFalse((INFRA / "project-groups.bicep").exists())
@@ -725,7 +875,7 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertEqual(entities["exchange-service-health"]["impact"], "Suppressed")
         for journey in exchange["journeys"]:
             names = list(deployment.groups(model, journey["entityName"]))
-            self.assertEqual([name for name in names if not name.startswith("reporting-")], ["external-reports", "otel"])
+            self.assertTrue(all(name.startswith("reporting-") for name in names), names)
         published = {entity for _, entity in self.published_signals("rich")}
         self.assertFalse(set(expected) & published, "group parents never receive placeholder reports")
         self.assertFalse({"exchange-mail", "exchange-calendar"} &
@@ -845,32 +995,23 @@ class ModelTemplateContracts(unittest.TestCase):
 
     def test_stable_and_beta_reports_share_one_suppressed_context_entity_per_product(self):
         compiled = json.dumps(self.service_template)
-        for function in [
+        functions = self.runtime["activityFunctions"]
+        self.assertEqual({name for names in functions.values() for name in names}, {
             "getConnectivityMetricsForExchange", "getMessageVolumeMetricsForEmailDelivery",
             "getActiveUserMetricsForOutlookWebByReadEmail", "getActiveUserMetricsForOutlookWebByAppOpening",
             "getActiveUserMetricsForEmailByModernAuthentication", "getUsageMetricsForTeamsByMeetingsJoined",
             "getUsageMetricsForTeamsByLaunch", "getMessageVolumeMetricsForTeamsChat",
             "getAudioStreamQoEMetricsForTeams", "getAudioStreamsOverUdpMetricsForTeams",
-        ]:
-            self.assertIn(function, compiled)
-        self.assertIn("microsoft-activity-", compiled)
-        self.assertIn("microsoft-reported-service-status", compiled)
+        })
         self.assertNotIn("serviceActivity", self.service_template["parameters"])
-        self.assertIn("microsoft-reported-issue-count", compiled)
-        provider_signals = self.service_template["variables"]["providerSignalNames"]
-        self.assertIn("microsoft-reported-service-status", provider_signals)
-        self.assertIn("microsoft-reported-issue-count", provider_signals)
-        self.assertIn("variables('providerActivityFunctions')[parameters('service').service]", provider_signals)
         self.assertIn("variables('contextName')", self.service_template["variables"]["relationships"])
         self.assertNotIn("providerCalls", compiled)
         self.assertNotIn("provider-call", compiled)
         self.assertNotIn("providerCallCount", self.template["outputs"]["entityCount"]["value"])
         self.assertNotIn("providerCallCount", self.template["outputs"]["relationshipCount"]["value"])
-        functions = resolve_literals(self.service_template["variables"]["providerActivityFunctions"], self.service_template)
-        self.assertEqual(functions, self.runtime["activityFunctions"])
         self.assertEqual({service: len(names) for service, names in functions.items()},
                          {"exchange": 5, "teams": 5, "onedrive": 0})
-        deployment = self.deployment("rich")
+        deployment, published = self.deployment("rich"), self.published_overall("rich")
         for service, names in functions.items():
             reports = self.runtime["providerReports"][service]
             self.assertEqual({report["entityName"] for report in reports}, {f"{service}-service-health"})
@@ -892,9 +1033,8 @@ class ModelTemplateContracts(unittest.TestCase):
             model, context = f"{self.name}-{service}", f"{service}-service-health"
             entity = deployment.entities[model, context]
             self.assertEqual((entity["impact"], entity["signalGroups"]), ("Suppressed", {}))
-            self.assertEqual(list(deployment.groups(model, context)), ["external-reports"])
-            self.assertEqual(set(deployment.groups(model, context)["external-reports"]),
-                             {report["body"]["signalName"] for report in reports})
+            self.assertNotIn("signalAggregationGroups", entity)
+            self.assertEqual(published[model, context], {report["body"]["signalName"] for report in reports})
 
     def test_service_health_entity_and_relationship_require_explicit_root_opt_in(self):
         self.assertFalse(self.service_template["parameters"]["enableServiceHealth"]["defaultValue"])
@@ -920,7 +1060,7 @@ class ModelTemplateContracts(unittest.TestCase):
     def test_workspace_dependencies_are_optional_and_only_for_azure_export(self):
         self.assertEqual(set(self.service_template["parameters"]), {
             "modelName", "location", "service", "policy", "enableOtel", "workspaceName", "applicationInsightsResourceId",
-            "suppressOneDriveRestore", "enableServiceHealth", "externalReportTenants", "reportingGroups",
+            "suppressOneDriveRestore", "enableServiceHealth", "reportingGroups",
         })
         self.assertEqual({resource["type"] for resource in self.service_resources}, {
             "Microsoft.CloudHealth/healthmodels",
@@ -934,8 +1074,10 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertIn("azure-monitor", enabled)
         self.assertIn("enabledServices", enabled)
         self.assertIn("otel", enabled)
+        workspace = {"Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components",
+                     "Microsoft.OperationalInsights/workspaces/savedSearches"}
         for resource in self.resources:
-            if resource["type"] in {"Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components"}:
+            if resource["type"] in workspace:
                 self.assertEqual(resource["condition"], "[variables('useOtel')]")
         for resource in self.service_resources:
             if resource["type"] in {"Microsoft.CloudHealth/healthmodels/authenticationsettings", "Microsoft.Authorization/roleAssignments"}:
@@ -943,25 +1085,52 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertFalse(self.service_template["parameters"]["enableOtel"]["defaultValue"])
         self.assertEqual(self.module["properties"]["parameters"]["enableOtel"]["value"], "[variables('useOtel')]")
         plain, exporting = self.deployment("root"), self.deployment("rich")
-        workspace = {"Microsoft.OperationalInsights/workspaces", "Microsoft.Insights/components"}
         self.assertFalse(workspace & plain.types)
         self.assertLessEqual(workspace, exporting.types)
         self.assertEqual((len(plain.authentications), len(plain.assignments)), (1, 3))
         self.assertEqual((len(exporting.authentications), len(exporting.assignments)), (1 + 3, 3 + 3))
 
-    def test_external_source_group_preserves_rollup_policy(self):
-        self.assertEqual(self.functions["sourceGroup"]["output"]["value"], {
-            "name": "[parameters('name')]",
-            "displayName": "[parameters('displayName')]",
-            "aggregationType": "WorstOf",
-            "ignoreUnknown": False,
-            "members": "[parameters('members')]",
-        })
-        for groups in self.deployment("two").entities.values():
-            for group in groups.get("signalAggregationGroups", []):
-                self.assertEqual((group["aggregationType"], group["ignoreUnknown"]), ("WorstOf", False), group["name"])
+    def test_saved_searches_exist_only_when_otel_exports_to_azure_monitor(self):
+        searches = next(item for item in self.resources if item["type"] == "Microsoft.OperationalInsights/workspaces/savedSearches")
+        self.assertEqual(searches["copy"]["count"], "[length(variables('adminSearches'))]")
+        self.assertEqual(self.document("rich")["otel"], {"enabled": True, "destination": "azure-monitor"})
+        for name in ("root", "nogroups", "console", "none", "none-monitored"):
+            with self.subTest(variant=name):
+                self.assertEqual(self.deployment(name).searches, {}, "no workspace, no saved searches")
+        for name in ("rich", "two"):
+            with self.subTest(variant=name):
+                workspace = self.parameters(name)["workspaceName"]["value"]
+                searches = self.deployment(name).searches
+                self.assertEqual(list(searches), [f"{workspace}/{search}" for search in SAVED_SEARCHES])
+                for (resource, properties), (search, display) in zip(searches.items(), SAVED_SEARCHES.items()):
+                    text = (QUERIES / "admin" / f"{search}.kql").read_text()
+                    self.assertEqual(properties, {
+                        "category": SEARCH_CATEGORY, "displayName": display, "query": text, "version": 2,
+                    }, resource)
+        self.assertEqual(self.deployment("rich").searches, self.deployment("restore-second-tenant").searches)
 
-    def test_call_measurements_share_the_existing_journey_external_reports(self):
+    def test_saved_search_queries_keep_every_record_and_say_what_they_show(self):
+        for search in SAVED_SEARCHES:
+            with self.subTest(search=search):
+                text = (QUERIES / "admin" / f"{search}.kql").read_text()
+                self.assertTrue(text.startswith("// "), "one comment line says what the search shows")
+                self.assertEqual(len([line for line in text.splitlines() if line.startswith("//")]), 1)
+                self.assertTrue(text.splitlines()[1].startswith("AppTraces"))
+                self.assertIn("(no group)", text)
+                self.assertNotIn("monitoring.group_duplicate", text, "the per-group view keeps every record")
+                self.assertNotIn("__", text, "saved searches are loaded verbatim, with nothing to bind")
+        for search in ("failures-by-group", "impacted-users-by-group"):
+            self.assertIn("(n/a)", (QUERIES / "admin" / f"{search}.kql").read_text(), "Teams participants are bots")
+
+    def test_reporting_groups_preserve_rollup_policy(self):
+        entries = self.functions["reportingGroupEntries"]["output"]["value"]
+        self.assertIn("'aggregationType', 'WorstOf', 'ignoreUnknown', false()", entries)
+        for name in ("root", "two"):
+            for properties in self.deployment(name).entities.values():
+                for group in properties.get("signalAggregationGroups", []):
+                    self.assertEqual((group["aggregationType"], group["ignoreUnknown"]), ("WorstOf", False), group["name"])
+
+    def test_call_measurements_join_the_teams_call_journey_signals(self):
         signals = self.service_template["variables"]["teamsCallSignals"]
         reported_signals = {
             report["body"]["signalName"] for report in self.runtime["reports"]["teams"]
@@ -972,11 +1141,17 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertEqual(len(signals), 4)
         self.assertFalse(any("playback" in signal for signal in signals))
         model = f"{self.name}-teams"
+        overall = self.published_overall("root")
+        self.assertEqual(overall[model, "teams-call"], {*SYNTHETIC_SIGNALS, *signals})
+        self.assertEqual(overall[model, "teams-global"], set(SYNTHETIC_SIGNALS))
+        self.assertEqual(overall[model, "teams-call-end-call"], set(SYNTHETIC_SIGNALS))
         for variant in ("root", "rich"):
-            self.assertEqual(self.deployment(variant).groups(model, "teams-call")["external-reports"],
-                             [*SYNTHETIC_SIGNALS, *signals])
-        self.assertEqual(self.deployment("root").groups(model, "teams-global")["external-reports"], SYNTHETIC_SIGNALS)
-        self.assertEqual(self.deployment("root").groups(model, "teams-call-end-call")["external-reports"], SYNTHETIC_SIGNALS)
+            deployment = self.deployment(variant)
+            for entity, expected in (("teams-call", [*SYNTHETIC_SIGNALS, *signals]), ("teams-global", SYNTHETIC_SIGNALS)):
+                groups = deployment.groups(model, entity)
+                self.assertTrue(groups, (variant, entity))
+                for group, members in groups.items():
+                    self.assertEqual([member.rsplit("--", 1)[1] for member in members], expected, (variant, entity, group))
 
     def test_onedrive_preserves_root_and_step_ids_with_stable_only_provider_mapping(self):
         service = next(service for service in self.catalog if service["service"] == "onedrive")
@@ -987,8 +1162,7 @@ class ModelTemplateContracts(unittest.TestCase):
         for journey in service["journeys"]:
             self.assertEqual([step["name"] for step in journey["steps"]], ["step-1", "step-2", "step-3", "step-4"])
         self.assertIn("telemetryName", self.service_template["variables"]["nodes"])
-        functions = resolve_literals(self.service_template["variables"]["providerActivityFunctions"], self.service_template)
-        self.assertEqual(functions["onedrive"], [])
+        self.assertEqual(self.runtime["activityFunctions"]["onedrive"], [])
         self.assertEqual(self.runtime["serviceHealthNames"]["onedrive"], "Microsoft OneDrive")
         self.assertEqual(len(self.runtime["providerReports"]["onedrive"]), 2)
         self.assertIn("restoreVersion", self.module["properties"]["parameters"]["suppressOneDriveRestore"]["value"])
@@ -1006,21 +1180,20 @@ class ModelTemplateContracts(unittest.TestCase):
                   if model == restore[0] and name != restore[1] and properties["impact"] == "Suppressed"]
         self.assertEqual(others, [], "only the restore step is ever suppressed")
 
-    def test_external_reports_remain_with_optional_journey_and_step_otel(self):
+    def test_otel_signals_are_ungrouped_on_journeys_and_steps_only_when_exporting(self):
         entity = next(item for item in self.service_resources if item["type"].endswith("/entities"))
         self.assertEqual(entity["apiVersion"], "2026-10-01-preview")
-        groups = entity["properties"]
-        self.assertIn("External Reports", groups)
-        self.assertIn("OpenTelemetry", groups)
-        self.assertIn("azureLogAnalytics", groups)
-        self.assertIn("parameters('enableOtel')", groups)
-        self.assertIn("__bicep.journeySignals", groups)
+        properties = entity["properties"]
+        self.assertIn("azureLogAnalytics", properties)
+        self.assertIn("parameters('enableOtel')", properties)
+        for removed in ("External Reports", "OpenTelemetry", "'otel'", "'external-reports'", "providerSignalNames"):
+            self.assertNotIn(removed, properties)
+        self.assertIn("if(equals(variables('nodes')[copyIndex()].kind, 'journey'), "
+                      "__bicep.aggregationGroupsProperty(__bicep.reportingGroupEntries(", properties)
+        self.assertIn("__bicep.journeySignals", properties)
         journey_signals = self.functions["journeySignals"]["output"]["value"]
         for signal in SYNTHETIC_SIGNALS:
             self.assertIn(signal, journey_signals)
-        self.assertIn("variables('providerSignalNames')", groups)
-        self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'root')", groups)
-        self.assertIn("equals(variables('nodes')[copyIndex()].kind, 'context')", groups)
         exporting = self.deployment("rich")
         for service in self.selected_services(self.document("rich")):
             model = f'{self.name}-{service["service"]}'
@@ -1030,14 +1203,12 @@ class ModelTemplateContracts(unittest.TestCase):
                 monitored = name in journeys | steps
                 properties = exporting.entities[model, name]
                 self.assertEqual("azureLogAnalytics" in properties["signalGroups"], monitored, name)
-                self.assertEqual("otel" in exporting.groups(model, name), monitored, name)
                 if monitored:
                     signals = properties["signalGroups"]["azureLogAnalytics"]["signals"]
                     self.assertEqual([signal["name"] for signal in signals], OTEL_SIGNALS)
-                    self.assertEqual(exporting.groups(model, name)["otel"], OTEL_SIGNALS)
+                    self.assertFalse({"otel", "external-reports"} & set(exporting.groups(model, name)), name)
         for (model, name), properties in self.deployment("root").entities.items():
             self.assertNotIn("azureLogAnalytics", properties.get("signalGroups", {}), name)
-            self.assertNotIn("otel", self.deployment("root").groups(model, name), name)
 
     def test_queries_bind_service_journey_and_step_without_provider_or_simulated_evidence(self):
         query = self.service_template["variables"]["telemetryQuery"]
@@ -1048,6 +1219,11 @@ class ModelTemplateContracts(unittest.TestCase):
         self.assertNotIn("m365-service-health", query)
         self.assertNotIn("serviceActivity", query)
         self.assertNotIn("probe.id", query)
+        self.assertEqual(query, (QUERIES / "synthetic.kql").read_text())
+        # A target in several groups logs one record per group; the later ones are marked and not counted again.
+        duplicates = "tostring(Properties['monitoring.group_duplicate']) != 'true'"
+        self.assertIn(duplicates, query)
+        self.assertLess(query.index(duplicates), query.index("summarize"))
         metrics = self.service_template["variables"]["telemetryMetrics"]
         self.assertEqual([metric["aggregation"] for metric in metrics], ["avg(100.0 * Success)", "avg(Duration)"])
         self.assertEqual([metric["name"] for metric in metrics], ["otel-success-percentage", "otel-mean-duration"])
@@ -1064,124 +1240,210 @@ class ModelTemplateContracts(unittest.TestCase):
             self.assertIn(f"== '{journey}'", text)
             self.assertIn(f"'{step}' == ''", text)
             self.assertNotRegex(text, r"__[A-Z_]+__")
-
-    # ---- reporting groups and tenants (the new behaviour) -------------------------------------------------------
-
-    def test_reporting_groups_exist_only_on_journey_entities_with_exactly_the_contract_members(self):
-        deployment = self.deployment("root")
-        model = f"{self.name}-exchange"
-        centralus = "group-centralus--tenant-contoso--"
-        uksouth = "group-uksouth--tenant-contoso--"
-        self.assertEqual(deployment.groups(model, "exchange-global"), {
-            "external-reports": SYNTHETIC_SIGNALS,
-            "reporting-centralus": [centralus + signal for signal in SYNTHETIC_SIGNALS],
-            "reporting-uksouth": [uksouth + signal for signal in SYNTHETIC_SIGNALS],
-        })
-        calls = self.runtime["teamsCallSignals"]
-        self.assertEqual(deployment.groups(f"{self.name}-teams", "teams-call"), {
-            "external-reports": [*SYNTHETIC_SIGNALS, *calls],
-            "reporting-centralus": [centralus + signal for signal in [*SYNTHETIC_SIGNALS, *calls]],
-        })
-        self.assertEqual(set(deployment.groups(f"{self.name}-onedrive", "onedrive-planned-user-drive-roundtrip")),
-                         {"external-reports", "reporting-centralus", "reporting-uksouth"})
-        journeys = {journey["entityName"] for service in self.catalog for journey in service["journeys"]}
-        carriers = {entity for (model, entity), properties in deployment.entities.items()
-                    if any(group["name"].startswith("reporting-") for group in properties.get("signalAggregationGroups", []))}
-        self.assertEqual(carriers, journeys)
         for (model, entity), properties in deployment.entities.items():
-            if entity not in journeys:
-                self.assertFalse([group for group in properties.get("signalAggregationGroups", [])
-                                  if group["name"].startswith("reporting-")], (model, entity))
-        for name in ("root", "rich"):
+            for signal in properties.get("signalGroups", {}).get("azureLogAnalytics", {}).get("signals", []):
+                self.assertIn(duplicates, signal["queryText"], (model, entity, signal["name"]))
+
+    # ---- reporting groups and tenants -------------------------------------------------------------------------
+
+    def test_entities_show_only_the_configured_reporting_groups(self):
+        """The user-defined groups are the only aggregation groups anywhere: no External Reports, no OpenTelemetry."""
+        journeys = {journey["entityName"] for service in self.catalog for journey in service["journeys"]}
+        for name in ("root", "rich", "two", "nogroups"):
             with self.subTest(variant=name):
+                deployment = self.deployment(name)
+                shown = {group["displayName"] for properties in deployment.entities.values()
+                         for group in properties.get("signalAggregationGroups", [])}
+                self.assertEqual(shown, {group["displayName"] for group in self.document(name)["groups"]})
+                carriers = {entity for (model, entity), properties in deployment.entities.items()
+                            if "signalAggregationGroups" in properties}
+                self.assertLessEqual(carriers, journeys, "only journey entities carry aggregation groups")
+                self.assertEqual(bool(carriers), bool(self.document(name)["groups"]))
                 self.assert_signal_groups(name)
 
-    def test_without_groups_the_model_has_no_reporting_groups_and_is_otherwise_identical(self):
+    def test_reporting_group_members_are_named_after_group_tenant_and_signal(self):
+        group = next(group for group in self.reporting_groups("root")
+                     if group_signals(group, "exchange", "send-receive-mail", SYNTHETIC_SIGNALS))
+        self.assertEqual(self.deployment("root").groups(f"{self.name}-exchange", "exchange-global")[f'reporting-{group["id"]}'],
+                         [f'group-{group["id"]}--tenant-{self.tenant["id"]}--{signal}' for signal in SYNTHETIC_SIGNALS])
+
+    def test_without_groups_the_model_has_no_aggregation_groups_and_is_otherwise_identical(self):
         plain, grouped = self.deployment("nogroups"), self.deployment("root")
         self.assertEqual(self.reporting_groups("nogroups"), [])
         for key, properties in plain.entities.items():
-            self.assertFalse([group for group in properties.get("signalAggregationGroups", [])
-                              if group["name"].startswith("reporting-")], key)
-        self.assertEqual(plain.entities, {key: without_reporting_groups(properties)
-                                          for key, properties in grouped.entities.items()})
+            self.assertNotIn("signalAggregationGroups", properties, key)
+        self.assertEqual(plain.entities, {key: without_groups(properties) for key, properties in grouped.entities.items()})
         self.assertEqual(plain.relationships, grouped.relationships)
         self.assertEqual(plain.outputs, grouped.outputs)
         self.assertEqual(plain.types, grouped.types)
-        self.assertEqual(plain.groups(f"{self.name}-exchange", "exchange-global"), {"external-reports": SYNTHETIC_SIGNALS})
         self.assert_signal_groups("nogroups")
 
-    def test_one_tenant_keeps_plain_signal_names_and_two_tenants_qualify_them(self):
+    def test_one_tenant_publishes_plain_overall_names_and_two_tenants_qualify_them(self):
+        """Overall signals are published ungrouped and the model declares none, so the TypeScript reporter's names are
+        checked against explicit expectations."""
         self.assertEqual(len(self.document("root")["tenants"]), 1)
-        for (model, entity), properties in self.deployment("root").entities.items():
-            for group in properties.get("signalAggregationGroups", []):
-                if group["name"] == "external-reports":
-                    self.assertFalse([member for member in group["members"] if member.startswith("tenant-")], entity)
-        deployment = self.deployment("two")
-        model = f"{self.name}-exchange"
-        both = [f"tenant-{tenant}--{signal}" for tenant in ("contoso", "fabrikam") for signal in SYNTHETIC_SIGNALS]
-        contoso = [f"tenant-contoso--{signal}" for signal in SYNTHETIC_SIGNALS]
-        fabrikam = [f"tenant-fabrikam--{signal}" for signal in SYNTHETIC_SIGNALS]
-        # Only tenants that run a journey publish to it, so only they are declared (no member would stay Unknown).
-        self.assertEqual(deployment.groups(model, "exchange-global")["external-reports"], both)
-        self.assertEqual(deployment.groups(model, "exchange-global-send")["external-reports"], both)
-        self.assertEqual(deployment.groups(model, "exchange-draft")["external-reports"], contoso)
-        self.assertEqual(deployment.groups(model, "exchange-recurring")["external-reports"], fabrikam)
-        self.assertEqual(deployment.groups(model, "exchange-recurring-create-event")["external-reports"], fabrikam)
-        teams = f"{self.name}-teams"
-        self.assertEqual(deployment.groups(teams, "teams-global")["external-reports"], contoso)
-        calls = [f"tenant-fabrikam--{signal}" for signal in [*SYNTHETIC_SIGNALS, *self.runtime["teamsCallSignals"]]]
-        self.assertEqual(deployment.groups(teams, "teams-call")["external-reports"], calls)
-        # Service Health context entities list every tenant that hosts the service.
+        for name in ("root", "rich"):
+            names = {signal for signals in self.published_overall(name).values() for signal in signals}
+            self.assertTrue(names)
+            self.assertFalse([signal for signal in names if signal.startswith("tenant-")], name)
+        published, alias = self.published_overall("two"), self.tenant["id"]
+        model, teams = f"{self.name}-exchange", f"{self.name}-teams"
+        both = {f"tenant-{tenant}--{signal}" for tenant in (alias, "fabrikam") for signal in SYNTHETIC_SIGNALS}
+        first = {f"tenant-{alias}--{signal}" for signal in SYNTHETIC_SIGNALS}
+        fabrikam = {f"tenant-fabrikam--{signal}" for signal in SYNTHETIC_SIGNALS}
+        # Only tenants that run a journey publish to it.
+        self.assertEqual(published[model, "exchange-global"], both)
+        self.assertEqual(published[model, "exchange-global-send"], both)
+        self.assertEqual(published[model, "exchange-draft"], first)
+        self.assertEqual(published[model, "exchange-recurring"], fabrikam)
+        self.assertEqual(published[model, "exchange-recurring-create-event"], fabrikam)
+        self.assertEqual(published[teams, "teams-global"], first)
+        calls = {f"tenant-fabrikam--{signal}" for signal in [*SYNTHETIC_SIGNALS, *self.runtime["teamsCallSignals"]]}
+        self.assertEqual(published[teams, "teams-call"], calls)
+        # Service Health context entities receive from every tenant that hosts the service.
         provider = ["microsoft-reported-service-status", "microsoft-reported-issue-count"]
-        functions = self.projection["providerActivityFunctions"]
-        for service, tenants in (("exchange", ("contoso", "fabrikam")), ("teams", ("contoso", "fabrikam")), ("onedrive", ("contoso",))):
+        functions = self.runtime["activityFunctions"]
+        for service, tenants in (("exchange", (alias, "fabrikam")), ("teams", (alias, "fabrikam")), ("onedrive", (alias,))):
             names = [*provider, *(f"microsoft-activity-{function}" for function in functions[service])]
-            expected = [f"tenant-{tenant}--{name}" for tenant in tenants for name in names]
-            self.assertEqual(deployment.groups(f"{self.name}-{service}", f"{service}-service-health")["external-reports"], expected)
+            self.assertEqual(published[f"{self.name}-{service}", f"{service}-service-health"],
+                             {f"tenant-{tenant}--{name}" for tenant in tenants for name in names})
         self.assert_signal_groups("two")
 
     def test_a_group_spanning_two_tenants_lists_both_tenants_signals(self):
-        self.assertEqual([group["id"] for group in self.reporting_groups("two")], ["centralus", "uksouth", "priority"])
-        deployment = self.deployment("two")
+        configured = [group["id"] for group in self.project["groups"]]
+        self.assertEqual([group["id"] for group in self.reporting_groups("two")], [*configured, "priority"])
+        deployment, alias = self.deployment("two"), self.tenant["id"]
         model = f"{self.name}-exchange"
-        both = [f"group-priority--tenant-{tenant}--{signal}" for tenant in ("contoso", "fabrikam") for signal in SYNTHETIC_SIGNALS]
-        contoso = [f"group-priority--tenant-contoso--{signal}" for signal in SYNTHETIC_SIGNALS]
+        both = [f"group-priority--tenant-{tenant}--{signal}" for tenant in (alias, "fabrikam") for signal in SYNTHETIC_SIGNALS]
+        first = [f"group-priority--tenant-{alias}--{signal}" for signal in SYNTHETIC_SIGNALS]
         fabrikam = [f"group-priority--tenant-fabrikam--{signal}" for signal in SYNTHETIC_SIGNALS]
         self.assertEqual(deployment.groups(model, "exchange-global")["reporting-priority"], both)
-        self.assertEqual(deployment.groups(model, "exchange-draft")["reporting-priority"], contoso)
+        self.assertEqual(deployment.groups(model, "exchange-draft")["reporting-priority"], first)
         self.assertEqual(deployment.groups(model, "exchange-recurring")["reporting-priority"], fabrikam)
         calls = [f"group-priority--tenant-fabrikam--{signal}" for signal in [*SYNTHETIC_SIGNALS, *self.runtime["teamsCallSignals"]]]
         self.assertEqual(deployment.groups(f"{self.name}-teams", "teams-call")["reporting-priority"], calls)
         self.assertEqual(deployment.groups(f"{self.name}-teams", "teams-global")["reporting-priority"],
-                         [f"group-priority--tenant-contoso--{signal}" for signal in SYNTHETIC_SIGNALS])
+                         [f"group-priority--tenant-{alias}--{signal}" for signal in SYNTHETIC_SIGNALS])
         # Groups confined to one tenant keep the same names, and never double-qualify the overall signals.
-        self.assertEqual(deployment.groups(model, "exchange-global")["reporting-centralus"],
-                         [f"group-centralus--tenant-contoso--{signal}" for signal in SYNTHETIC_SIGNALS])
+        self.assertEqual(deployment.groups(model, "exchange-global")[f"reporting-{configured[0]}"],
+                         [f"group-{configured[0]}--tenant-{alias}--{signal}" for signal in SYNTHETIC_SIGNALS])
         for properties in deployment.entities.values():
             for group in properties.get("signalAggregationGroups", []):
-                if group["name"].startswith("reporting-"):
-                    self.assertEqual({member.count("--tenant-") for member in group["members"]}, {1}, group["name"])
+                self.assertEqual({member.count("--tenant-") for member in group["members"]}, {1}, group["name"])
 
-    def test_every_published_signal_is_declared_and_every_declared_signal_is_published(self):
-        """The TypeScript reporter and the model agree on every overall and group signal name.
+    def test_every_published_signal_is_expected_and_every_group_signal_is_declared(self):
+        """The TypeScript reporter and the model agree on every signal name.
 
-        Only the `otel` group is outside the comparison: those are the model's own log queries, not reports. Service
-        Health reports are included by forcing provider collection on every worker.
+        Group signals are compared with the model's `reporting-` members in both directions. Overall signals are
+        published ungrouped, so they are compared with an explicit expectation instead. Service Health reports are
+        included by forcing provider collection on every worker.
         """
         for name in ("root", "rich", "two"):
             with self.subTest(variant=name):
                 deployment, published = self.deployment(name), self.published_signals(name)
-                declared = {}
-                for (model, entity) in deployment.entities:
-                    if model != self.name:
-                        groups = deployment.groups(model, entity)
-                        declared[model, entity] = {member for group, members in groups.items()
-                                                   if group == "external-reports" or group.startswith("reporting-")
-                                                   for member in members}
-                self.assertLessEqual(set(published), set(declared), "reports sent to an entity the model does not have")
-                for key in sorted(declared):
-                    self.assertEqual(published.get(key, set()), declared[key], key)
-                self.assertTrue(any(signal.startswith("group-") for signals in published.values() for signal in signals))
+                self.assertLessEqual(set(published), set(deployment.entities), "reports sent to an entity the model does not have")
+                self.assertEqual(self.published_overall(name), self.expected_overall(name))
+                declared = {(model, entity): {member for members in deployment.groups(model, entity).values() for member in members}
+                            for model, entity in deployment.entities if model != self.name}
+                self.assertEqual(self.published_grouped(name), {key: members for key, members in declared.items() if members})
+                self.assertTrue(self.published_grouped(name))
+
+    # ---- OTEL log records and the queries that read them --------------------------------------------------------
+
+    def test_queries_read_only_attributes_the_real_otel_emitter_writes(self):
+        emitted = {}
+        for record in self.emitted_records():
+            emitted.setdefault(record["message"], set()).update(record["attributes"])
+        self.assertEqual(set(emitted), {"synthetic-step", "synthetic-result"})
+        contract = {
+            "failures-by-group": ("synthetic-step", {
+                "probe.mode", "probe.step_status", "monitoring.group_name", "monitoring.user", "monitoring.peer",
+                "probe.service", "probe.journey", "probe.step", "probe.diagnostic_category", "probe.detail",
+                "probe.id", "probe.correlation_id",
+            }),
+            "impacted-users-by-group": ("synthetic-step", {
+                "probe.mode", "probe.step_status", "monitoring.group_name", "monitoring.group", "monitoring.user",
+                "probe.journey", "probe.diagnostic_category",
+            }),
+            "success-by-group": ("synthetic-result", {
+                "probe.mode", "probe.success", "monitoring.group_name", "monitoring.group", "probe.service", "probe.journey",
+            }),
+        }
+        self.assertEqual(set(contract), set(SAVED_SEARCHES))
+        for search, (message, attributes) in contract.items():
+            text = (QUERIES / "admin" / f"{search}.kql").read_text()
+            self.assertIn(f"Message == '{message}'", text)
+            self.assertEqual(log_attributes(text), attributes, search)
+            self.assertLessEqual(attributes, emitted[message], search)
+        read = log_attributes((QUERIES / "synthetic.kql").read_text())
+        self.assertLessEqual(read - {"probe.success"}, emitted["synthetic-step"])
+        self.assertLessEqual(read - {"probe.step", "probe.step_status"}, emitted["synthetic-result"])
+        self.assertIn("monitoring.group_duplicate", read)
+
+    def test_log_records_say_who_was_impacted_and_which_group_they_belong_to(self):
+        records = self.emitted_records()
+        accounts = {target["id"]: (target["mailbox"], target["recipientMailbox"])
+                    for target in self.tenant["services"]["exchange"]["targets"]}
+        drives = {target["id"]: target["userPrincipalName"] for target in self.tenant["services"]["onedrive"]["targets"]}
+        names = {group["id"]: group["displayName"] for group in self.project["groups"]}
+        for record in records:
+            attributes, attempt = record["attributes"], record["attempt"]
+            where = (record["message"], attempt)
+            self.assertEqual(attributes["probe.mode"], "live", where)
+            self.assertEqual(attributes["probe.schema_version"], "2.0", where)
+            self.assertEqual(attributes["monitoring.tenant"], self.tenant["id"], where)
+            if attempt["service"] == "exchange":
+                user, peer = accounts[attempt["target"]]
+                self.assertEqual((attributes["monitoring.user"], attributes["monitoring.peer"]), (user, peer), where)
+            elif attempt["service"] == "onedrive":
+                self.assertEqual(attributes["monitoring.user"], drives[attempt["target"]], where)
+                self.assertNotIn("monitoring.peer", attributes, where)
+            else:
+                self.assertFalse({"monitoring.user", "monitoring.peer"} & set(attributes), f"Teams participants are bots: {where}")
+            if "monitoring.group" in attributes and attempt["label"] != "two-groups":
+                self.assertEqual(attributes["monitoring.group_name"], names[attributes["monitoring.group"]], where)
+        configured = {record["attributes"]["monitoring.group_name"] for record in records
+                      if "monitoring.group_name" in record["attributes"] and record["attempt"]["label"] != "two-groups"}
+        shown = {group["displayName"] for properties in self.deployment("root").entities.values()
+                 for group in properties.get("signalAggregationGroups", [])}
+        self.assertEqual(configured, shown, "the group names in the logs are the ones the entities show")
+        failures = [record["attributes"] for record in records if record["message"] == "synthetic-step"
+                    and record["attributes"]["probe.step_status"] == "failed"]
+        self.assertTrue(failures)
+        for attributes in failures:
+            self.assertEqual(attributes["probe.detail"], "schema:value(too_big)")
+            self.assertTrue(attributes["probe.diagnostic_category"])
+
+    def test_a_target_in_several_groups_logs_one_record_per_group_and_totals_count_it_once(self):
+        records = self.emitted_records()
+        attempts = {}
+        for record in records:
+            attributes = record["attributes"]
+            key = attributes["probe.correlation_id"], record["message"], attributes.get("probe.step")
+            attempts.setdefault(key, []).append(record)
+        for key, group in attempts.items():
+            counted = [record for record in group if record["attributes"].get("monitoring.group_duplicate") != "true"]
+            self.assertEqual(len(counted), 1, f"the signal queries count each attempt once: {key}")
+            if group[0]["attempt"]["label"] == "two-groups":
+                self.assertEqual(len(group), 2, key)
+        two = [group for group in attempts.values() if group[0]["attempt"]["label"] == "two-groups"]
+        self.assertTrue(two)
+        for group in two:
+            self.assertEqual([record["attributes"].get("monitoring.group") for record in group], ["first", "second"])
+            self.assertEqual([record["attributes"].get("monitoring.group_duplicate") for record in group], [None, "true"])
+
+    def test_a_target_in_no_group_logs_one_record_without_group_attributes(self):
+        records = [record for record in typescript(EMITTED, self.document("nogroups"))
+                   if record["attempt"]["label"] != "two-groups"]
+        self.assertTrue(records)
+        counts = {}
+        for record in records:
+            attributes = record["attributes"]
+            self.assertFalse([name for name in attributes if name.startswith("monitoring.group")], record["attempt"])
+            self.assertEqual(attributes["monitoring.tenant"], self.tenant["id"])
+            key = attributes["probe.correlation_id"], record["message"], attributes.get("probe.step")
+            counts[key] = counts.get(key, 0) + 1
+        self.assertEqual(set(counts.values()), {1}, "one record per step and result")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,12 @@ const graphScope = `${graphOrigin}/.default`;
 export const graphBase = `${graphOrigin}/v1.0`;
 export type GraphApiVersion = "v1.0" | "beta";
 
+// Names the offending fields and Zod issue codes only, never the response content.
+function schemaDetail(error: z.ZodError): string {
+  const issues = [...new Set(error.issues.map(issue => `${issue.path.join(".") || "(root)"}(${issue.code})`))];
+  return `schema:${issues.slice(0, 3).join(",")}${issues.length > 3 ? `,+${issues.length - 3}` : ""}`;
+}
+
 export interface GraphOptions extends HttpOptions {
   downloadFetch?: typeof fetch;
 }
@@ -39,7 +45,7 @@ async function readBody(response: Response, maxBytes: number, signal: AbortSigna
       signal.throwIfAborted();
       if (chunk.done) { finished = true; break; }
       size += chunk.value.byteLength;
-      if (size > maxBytes) throw new IntegrationError(category);
+      if (size > maxBytes) throw new IntegrationError(category, undefined, "response-too-large");
       chunks.push(chunk.value);
     }
     return Buffer.concat(chunks);
@@ -155,13 +161,13 @@ export class GraphClient {
     let raw: unknown;
     try {
       raw = JSON.parse((await readBody(response, maxResponseBytes ?? 2 * 1024 * 1024, bounded, "malformed-response")).toString("utf8"));
-    } catch {
+    } catch (error) {
       bounded.throwIfAborted();
-      throw new IntegrationError("malformed-response");
+      throw error instanceof IntegrationError && error.detail ? error : new IntegrationError("malformed-response", undefined, "invalid-json");
     }
     const parsed = schema.safeParse(raw);
     bounded.throwIfAborted();
-    if (!parsed.success) throw new IntegrationError("malformed-response");
+    if (!parsed.success) throw new IntegrationError("malformed-response", undefined, schemaDetail(parsed.error));
     return parsed.data;
   }
 

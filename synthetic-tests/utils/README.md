@@ -17,7 +17,9 @@ npm run onedrive -- --once
 ```
 
 Each entry reads the repository-root `monitoring.config.json` (`--config <file>`
-reads another file) and runs the selected tenant's service. Pass `--tenant <id>`
+reads another file) and the `.env` beside it, whose looked-up and generated IDs fill the
+matching fields ([generated IDs](../../docs/deployment.md#generated-ids-in-env)),
+and runs the selected tenant's service. Pass `--tenant <id>`
 when the config has several tenants; it is optional only when there is exactly one.
 Every target of that tenant's service runs; [reporting groups](../../docs/monitoring-groups.md)
 only add group-named journey signals and need no flag. `--once` settles selected
@@ -27,8 +29,12 @@ command; see [deployment](../../docs/deployment.md#deploy-with-one-command).
 
 ## Config
 
-`project-config.ts` reads the single root document and validates each
-`tenants[].services.<service>.execution` block with `service-config.ts`:
+`project-config.ts` reads the single root document. `bindings.ts` fills in the `.env`
+IDs, then `references.ts` (`expandReferences`) expands resource names to resource IDs and
+applies the defaults ([names and defaults](../../docs/deployment.md#what-the-config-holds)).
+The expanded document is what deploy mounts into workers, and expanding it again changes
+nothing. Each `tenants[].services.<service>.execution` block is then validated with
+`service-config.ts`:
 
 | `execution` field | Contract |
 | --- | --- |
@@ -42,10 +48,10 @@ command; see [deployment](../../docs/deployment.md#deploy-with-one-command).
 | `healthReportAuthentication` | Independent UAMI by default; explicit local certificate uses `AZURE_*` |
 | `teamsAuthentication` / `botAuthentication` | Only `bot` / `managed-identity`; obsolete user/certificate participant modes are rejected |
 | `teamsReadbackClientId` | Teams Graph readback application using worker-UAMI federation; requires managed-identity Graph |
-| `providerClientId` | Optional independently federated provider application; not a synthetic identity override |
+| `providerClientId` | Optional per-service override of the tenant's `providerClientId`, the independently federated provider application that every service with `serviceHealth` or `serviceActivity` inherits; not a synthetic identity override |
 | `exchangeCleanupEnabled` | Default true; false retains mail/drafts, but calendar cancellation/deletion remain mandatory |
 | `teamsCleanupEnabled` | Default true; false retains owned channel posts/replies, never calls |
-| `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`; default port 8080 |
+| `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`, written to `.env` by `npm run setup`; default port 8080 |
 | `teamsCallingAnswerTimeoutSeconds` | Default 20, bounded 1–30; execution budget must allow this plus five seconds |
 | `serviceHealth` / `providerIntervalSeconds` | Optional stable collection for each service, simulation default off / independent 300-second lane |
 | `serviceActivity` | Optional separately gated five-function Exchange/Teams beta collection and explicit customer thresholds |
@@ -56,8 +62,8 @@ strict; removed workloads/modes cannot reappear via compatibility defaults.
 Scenario switches derive from the shared catalogue, and typed execution settings pass
 directly into runtime validation without serializing probe inventories or numeric
 settings through environment variables. Beside `execution`, each service block has
-`access` (nonsecret certificate and bot references), `worker` (Container App name,
-identity and size) and, for OneDrive, `setup`.
+`access` (nonsecret certificate references and, for Teams, bot, peer bot and peer
+identity names), `worker` (Container App name, identity and size) and, for OneDrive, `setup`.
 The scheduled meeting is connectivity-only with five measured business steps and
 needs no audio upload, playback or recording.
 OneDrive stable collection matches its distinct `OneDriveForBusiness` /
@@ -148,6 +154,10 @@ bounded category, executed/skipped actions and durations; never target addresses
 message bodies, credentials or raw HTTP failures. Direct reports always accompany
 live result publication. Root OTEL is optional, disabled by default and runs in
 the same process, with live-only model queries when Azure export is selected.
+Its step and result records additionally carry the test accounts and reporting group
+(`monitoring.user`, `monitoring.peer`, `monitoring.group`, `monitoring.group_name`)
+for the administrator searches; see
+[Log Analytics for administrators](../../docs/operations.md#log-analytics-for-administrators).
 Azure export uses Microsoft's OpenTelemetry exporters directly, retaining
 observable export callbacks and bounded flush/shutdown. The distribution would
 hide these failures behind its own processors. No automatic instrumentation,

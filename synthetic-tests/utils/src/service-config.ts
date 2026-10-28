@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { maxServiceTargets, probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
+import { exchangePollIntervalMilliseconds, maxServiceTargets, probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
 import { ConfigurationError, createRuntimeConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 export { activityFunctions } from "./provider-catalog.js";
@@ -67,6 +67,8 @@ export const serviceTargetSchemas = {
     tenantId: probeSchema.shape.tenantId,
     teamId: probeSchema.shape.teamId,
     channelId: probeSchema.shape.channelId,
+    // Read only by the one-time setup tooling, which finds or creates this channel and writes `channelId` to the adjacent .env.
+    channelName: z.string().trim().min(1).max(50).optional(),
     serviceUrl: probeSchema.shape.serviceUrl,
   }).strict()).max(maxServiceTargets),
 };
@@ -163,7 +165,11 @@ export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readon
     ? supported.filter(type => selectedScenarios[probeServices[type].journey])
     : supported.slice(0, 1);
   return selected.flatMap(type => (type === "teams-call" && service.type === "teams" ? service.callTargets : service.targets)
-    .map(item => ({ ...item, cohort: service.cohort, type })));
+    .map(item => {
+      // Teams `channelName` is read only by the setup tooling; the strict probe schema must never receive it.
+      const { channelName: _setupOnly, ...target } = item as typeof item & { channelName?: string };
+      return { ...target, cohort: service.cohort, type };
+    }));
 }
 
 export function serviceSettings(
@@ -184,6 +190,7 @@ export function serviceSettings(
     EXCHANGE_CLEANUP_ENABLED: service.exchangeCleanupEnabled ? "true" : "false",
     SYNTHETIC_SCENARIO: service.scenario,
     PROBE_TIMEOUT_MS: service.timeoutSeconds * 1000,
+    ...(service.type === "exchange" ? { POLL_INTERVAL_MS: exchangePollIntervalMilliseconds } : {}),
     MAX_CONCURRENT_PROBES: service.maxConcurrentProbes,
     CYCLE_TIMEOUT_MS: service.cycleTimeoutSeconds * 1000,
     probes: serviceProbes(service, selectedScenarios),

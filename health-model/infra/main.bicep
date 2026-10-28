@@ -23,19 +23,6 @@ func runsJourney(tenant object, service string, journey string) bool =>
 func isJourneySelected(tenants array, service string, journey string) bool =>
   !empty(filter(tenants, tenant => runsJourney(tenant, service, journey)))
 
-// The journeys of a service that each tenant runs; tenants that run none are left out.
-func tenantJourneys(tenants array, service ServiceDefinition) array =>
-  filter(
-    map(tenants, tenant => {
-      tenant: tenant.id
-      journeys: map(
-        filter(service.journeys, journey => runsJourney(tenant, service.service, journey.name)),
-        journey => journey.name
-      )
-    }),
-    entry => !empty(entry.journeys)
-  )
-
 var modelName = projectConfig.healthModel.name
 var enableServiceHealth = projectConfig.?serviceHealth.?enabled ?? false
 var selectedServices ServiceDefinition[] = map(
@@ -55,6 +42,25 @@ var stepCount = length(flatten(map(journeys, journey => journey.steps)))
 var serviceHealthCount = enableServiceHealth ? length(enabledServices) : 0
 var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(enabledServices)
 
+// Saved searches that show administrators which users, in which reporting group, hit which errors.
+var adminSearches = [
+  {
+    name: 'failures-by-group'
+    displayName: 'Synthetic failures by group and user'
+    query: loadTextContent('../queries/admin/failures-by-group.kql')
+  }
+  {
+    name: 'impacted-users-by-group'
+    displayName: 'Impacted users by group'
+    query: loadTextContent('../queries/admin/impacted-users-by-group.kql')
+  }
+  {
+    name: 'success-by-group'
+    displayName: 'Success rate by group and journey'
+    query: loadTextContent('../queries/admin/success-by-group.kql')
+  }
+]
+
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
   name: workspaceName
   location: location
@@ -69,6 +75,19 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (u
     publicNetworkAccessForQuery: 'Enabled'
   }
 }
+
+resource savedSearches 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = [
+  for search in adminSearches: if (useOtel) {
+    parent: workspace
+    name: search.name
+    properties: {
+      category: 'M365 Synthetic Monitoring'
+      displayName: search.displayName
+      query: search.query
+      version: 2
+    }
+  }
+]
 
 resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = if (useOtel) {
   name: applicationInsightsName
@@ -113,7 +132,6 @@ module serviceModels './service.bicep' = [
       enableOtel: useOtel
       workspaceName: workspaceName
       applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
-      externalReportTenants: length(projectConfig.tenants) > 1 ? tenantJourneys(projectConfig.tenants, service) : []
       reportingGroups: filter(
         reportingGroups,
         group => !empty(filter(group.scopes, scope => scope.service == service.service))

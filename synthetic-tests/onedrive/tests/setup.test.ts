@@ -1,9 +1,10 @@
 import type { TokenCredential } from "@azure/identity";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { readBindings } from "../../utils/src/bindings.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import { canonicalProjectFile } from "../../utils/src/paths.js";
 import { parseProjectDocument, readProjectDocument, selectTenant, type ProjectConfig } from "../../utils/src/project-config.js";
@@ -136,10 +137,10 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 
-async function privateProfile(targets: Target[], concurrency = 4) {
+async function configWorkspace(targets: Target[], concurrency = 4) {
   const directory = await mkdtemp(join(tmpdir(), "ahm-onedrive-setup-"));
   directories.push(directory);
-  const file = join(directory, "monitoring.private.json");
+  const file = join(directory, "monitoring.config.json");
   const { serviceHealth: _serviceHealth, ...root } = structuredClone(sample);
   const tenant = root.tenants[0]!;
   tenant.tenantId = tenantId;
@@ -149,14 +150,24 @@ async function privateProfile(targets: Target[], concurrency = 4) {
   const original = root;
   await writeFile(file, `${JSON.stringify(original, null, 2)}\n`, { mode: 0o600 });
   const args = ["--config", file];
-  return { directory, file, original, args };
+  return { directory, file, env: join(directory, ".env"), original, args };
 }
+const listing = async (directory: string) => (await readdir(directory)).sort();
 
 describe("bulk dedicated-folder setup", () => {
   it("refuses apply without a binding checkpoint before authentication or mutations", async () => {
     const f = fixture();
     const { checkpoint: _checkpoint, ...options } = f.options;
     await expect(setupOneDriveTargets(f.targets, f.graph, options)).rejects.toThrow("configuration checkpoint");
+    expect(f.authenticate).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
+  });
+  it("tells an account without a userId to run npm run setup first, before authentication or any Graph request", async () => {
+    const f = fixture();
+    delete f.targets[1]!.userId;
+    await expect(setupOneDriveTargets(f.targets, f.graph, f.options)).rejects.toThrow(
+      "run npm run setup first: it looks each userId up from its userPrincipalName and writes it to .env",
+    );
     expect(f.authenticate).not.toHaveBeenCalled();
     expect(f.calls).toEqual([]);
   });
@@ -259,105 +270,115 @@ describe("bulk dedicated-folder setup", () => {
   });
 });
 
-describe("private root configuration checkpoints", () => {
-  it("writes bindings only into the selected tenant of a multi-tenant document and preserves everything else", async () => {
+describe("bindings saved to the .env next to the config", () => {
+  it("saves the selected tenant's bindings to the .env and never rewrites the config", async () => {
     const f = fixture();
-    const profile = await privateProfile(f.targets);
+    const workspace = await configWorkspace(f.targets);
     const document = multiTenantFixture();
     document.tenants[0]!.services.onedrive.targets = f.targets;
     document.tenants[0]!.services.onedrive.setup = { authentication: "azure-cli", workerClientId, concurrency: 4, targetTimeoutSeconds: 300 };
-    await writeFile(profile.file, JSON.stringify(document));
-    const args = ["--config", profile.file, "--tenant", "contoso", "--apply"];
+    await writeFile(workspace.file, JSON.stringify(document));
+    const configText = await readFile(workspace.file, "utf8");
+    const args = ["--config", workspace.file, "--tenant", "contoso", "--apply"];
     expect(await runSetupCommand(parseSetupArguments(args), f.graph, f.telemetry, f.options.signal))
       .toMatchObject({ ready: 2, total: 2, failed: 0 });
-    const written = JSON.parse(await readFile(profile.file, "utf8"));
-    expect(written.tenants[0].services.onedrive.targets).toMatchObject([
+    const saved = {
+      CONTOSO__ACCOUNT_0__DRIVE_ID: "drive-0", CONTOSO__ACCOUNT_0__FOLDER_ID: "folder-account-0",
+      CONTOSO__ACCOUNT_1__DRIVE_ID: "drive-1", CONTOSO__ACCOUNT_1__FOLDER_ID: "folder-account-1",
+    };
+    expect(await readBindings(workspace.file)).toEqual(saved);
+    expect(await readFile(workspace.file, "utf8")).toBe(configText);
+    expect(await listing(workspace.directory)).toEqual([".env", "monitoring.config.json"]);
+    expect((await stat(workspace.env)).mode & 0o777).toBe(0o600);
+    expect(selectTenant(await readProjectDocument(workspace.file), "contoso").services.onedrive.targets).toMatchObject([
       { driveId: "drive-0", folderId: "folder-account-0" }, { driveId: "drive-1", folderId: "folder-account-1" },
     ]);
-    expect(written.tenants[0].services.exchange).toEqual(document.tenants[0]!.services.exchange);
-    expect(written.tenants[0].services.teams).toEqual(document.tenants[0]!.services.teams);
-    expect(written.tenants[1]).toEqual(document.tenants[1]);
-    expect(written.groups).toEqual(document.groups);
-    expect(written.healthModel).toEqual(document.healthModel);
-    expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
     f.authenticate.mockClear();
-    const unselected = parseSetupArguments(["--config", profile.file, "--apply"]);
+    const unselected = parseSetupArguments(["--config", workspace.file, "--apply"]);
     await expect(runSetupCommand(unselected, f.graph, f.telemetry, f.options.signal)).rejects.toThrow("Select one tenant");
     await expect(runSetupCommand({ ...unselected, tenant: "missing" }, f.graph, f.telemetry, f.options.signal))
       .rejects.toThrow("Unknown --tenant");
     expect(f.authenticate).not.toHaveBeenCalled();
-    expect(JSON.parse(await readFile(profile.file, "utf8"))).toEqual(written);
+    expect(await readBindings(workspace.file)).toEqual(saved);
   });
 
-  it("persists only verified bindings, preserves unrelated settings/default omissions, and cleans its lock", async () => {
+  it("saves only verified bindings, keeps the other .env lines and completes the rest on a rerun", async () => {
     const f = fixture();
     f.accounts[1]!.denied = true;
-    const profile = await privateProfile(f.targets);
-    const options = parseSetupArguments([...profile.args, "--apply"]);
+    const workspace = await configWorkspace(f.targets);
+    await writeFile(workspace.env, "# my notes\nOTHER=2\n");
+    const configText = await readFile(workspace.file, "utf8");
+    const options = parseSetupArguments([...workspace.args, "--apply"]);
     expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({ ready: 1, failed: 1 });
-    const written = selectTenant(await readProjectDocument(profile.file));
+    expect(await readFile(workspace.env, "utf8")).toBe(
+      "# my notes\nOTHER=2\nCONTOSO__ACCOUNT_0__DRIVE_ID=drive-0\nCONTOSO__ACCOUNT_0__FOLDER_ID=folder-account-0\n",
+    );
+    const written = selectTenant(await readProjectDocument(workspace.file));
     expect(written.services.onedrive.targets[0]).toMatchObject({ driveId: "drive-0", folderId: "folder-account-0" });
     expect(written.services.onedrive.targets[1]).not.toHaveProperty("folderId");
-    const raw = JSON.parse(await readFile(profile.file, "utf8"));
-    expect(raw.tenants[0].services.exchange).toEqual(profile.original.tenants[0]!.services.exchange);
-    expect(raw.tenants[0].services.teams).toEqual(profile.original.tenants[0]!.services.teams);
-    expect(raw.groups).toEqual(profile.original.groups);
-    expect(raw.healthModel).toEqual(profile.original.healthModel);
-    expect(raw).not.toHaveProperty("serviceHealth");
-    expect((await stat(profile.file)).mode & 0o777).toBe(0o600);
-    expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
+    expect(await readFile(workspace.file, "utf8")).toBe(configText);
     f.accounts[1]!.denied = false;
     expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({ ready: 2, failed: 0 });
-    expect(selectTenant(await readProjectDocument(profile.file)).services.onedrive.targets.every(target => target.folderId)).toBe(true);
+    expect(selectTenant(await readProjectDocument(workspace.file)).services.onedrive.targets.every(target => target.folderId)).toBe(true);
+    expect((await readFile(workspace.env, "utf8")).startsWith("# my notes\nOTHER=2\n")).toBe(true);
+    expect(await readFile(workspace.file, "utf8")).toBe(configText);
   });
-  it("does not rewrite the profile in plan mode", async () => {
+  it("never creates or changes the .env in plan mode", async () => {
     const f = fixture();
-    const profile = await privateProfile(f.targets);
-    const before = await readFile(profile.file, "utf8");
-    await runSetupCommand(parseSetupArguments(profile.args), f.graph, f.telemetry, f.options.signal);
-    expect(await readFile(profile.file, "utf8")).toBe(before);
-    expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
+    const workspace = await configWorkspace(f.targets);
+    await runSetupCommand(parseSetupArguments(workspace.args), f.graph, f.telemetry, f.options.signal);
+    expect(await listing(workspace.directory)).toEqual(["monitoring.config.json"]);
+    await writeFile(workspace.env, "OTHER=2\n");
+    await runSetupCommand(parseSetupArguments(workspace.args), f.graph, f.telemetry, f.options.signal);
+    expect(await readFile(workspace.env, "utf8")).toBe("OTHER=2\n");
   });
-  it("refuses a second apply against a locked profile before authentication or mutations", async () => {
+  it("keeps the bindings of accounts that finish at the same time", async () => {
+    const f = fixture(24);
+    const workspace = await configWorkspace(f.targets, 8);
+    const options = parseSetupArguments([...workspace.args, "--apply"]);
+    expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({ ready: 24, failed: 0 });
+    const saved = await readBindings(workspace.file);
+    expect(Object.keys(saved)).toHaveLength(48);
+    for (const index of [0, 11, 23]) {
+      expect(saved[`CONTOSO__ACCOUNT_${index}__DRIVE_ID`]).toBe(`drive-${index}`);
+      expect(saved[`CONTOSO__ACCOUNT_${index}__FOLDER_ID`]).toBe(`folder-account-${index}`);
+    }
+  });
+  it("stops before any Graph request when a saved binding conflicts with the config", async () => {
     const f = fixture();
-    const profile = await privateProfile(f.targets);
-    await writeFile(`${profile.file}.monitoring-setup.lock`, "other process");
-    await expect(runSetupCommand(parseSetupArguments([...profile.args, "--apply"]), f.graph, f.telemetry, f.options.signal))
-      .rejects.toThrow("Another setup holds");
+    const workspace = await configWorkspace(f.targets.map((target, index) => index ? target : { ...target, driveId: "configured-drive" }));
+    await writeFile(workspace.env, "CONTOSO__ACCOUNT_0__DRIVE_ID=another-drive\n");
+    await expect(runSetupCommand(parseSetupArguments([...workspace.args, "--apply"]), f.graph, f.telemetry, f.options.signal))
+      .rejects.toThrow("CONTOSO__ACCOUNT_0__DRIVE_ID");
     expect(f.authenticate).not.toHaveBeenCalled();
     expect(f.calls).toEqual([]);
-    expect(await readFile(`${profile.file}.monitoring-setup.lock`, "utf8")).toBe("other process");
+    expect(await readFile(workspace.env, "utf8")).toBe("CONTOSO__ACCOUNT_0__DRIVE_ID=another-drive\n");
   });
-  it("stops scheduling on an external config edit without overwriting it or rolling back verified cloud resources", async () => {
+  it("stops scheduling accounts when a binding cannot be saved, without rolling back verified cloud resources", async () => {
     const f = fixture(3);
-    const profile = await privateProfile(f.targets, 1);
-    const external = `${JSON.stringify({ ...profile.original, healthModel: {
-      ...profile.original.healthModel, reportTtlMinutes: 45,
-    } }, null, 2)}\n`;
-    f.hooks.afterMutation = async () => { await writeFile(profile.file, external); };
-    const options = parseSetupArguments([...profile.args, "--apply"]);
-    expect(await runSetupCommand(options, f.graph, f.telemetry, f.options.signal)).toMatchObject({
-      ready: 0, failed: 1, notStarted: 2,
-    });
-    expect(await readFile(profile.file, "utf8")).toBe(external);
+    const workspace = await configWorkspace(f.targets, 1);
+    f.hooks.afterMutation = async () => { await mkdir(workspace.env, { recursive: true }); };
+    const options = parseSetupArguments([...workspace.args, "--apply"]);
+    const summary = await runSetupCommand(options, f.graph, f.telemetry, f.options.signal);
+    expect(summary).toMatchObject({ ready: 0, failed: 1, notStarted: 2 });
+    expect(summary.outcomes[0]).toMatchObject({ status: "failed", stage: "configuration", category: "configuration-failure" });
     expect(f.accounts[0]!.folder).toBeDefined();
     expect(f.accounts[0]!.permissions).toHaveLength(1);
-    expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
   });
-  it("retains completed checkpoints on cancellation and starts no more accounts", async () => {
+  it("retains completed bindings on cancellation and starts no more accounts", async () => {
     const f = fixture(3);
-    const profile = await privateProfile(f.targets, 1);
+    const workspace = await configWorkspace(f.targets, 1);
     const stop = new AbortController();
     f.telemetry.emit.mockImplementation((event, data) => {
       if (event === "onedrive-setup-target" && data.status === "ready") stop.abort();
     });
-    const options = parseSetupArguments([...profile.args, "--apply"]);
+    const options = parseSetupArguments([...workspace.args, "--apply"]);
     expect(await runSetupCommand(options, f.graph, f.telemetry, stop.signal)).toMatchObject({
       ready: 1, failed: 0, notStarted: 2,
     });
-    const written = selectTenant(await readProjectDocument(profile.file));
+    const written = selectTenant(await readProjectDocument(workspace.file));
     expect(written.services.onedrive.targets.filter(target => target.folderId)).toHaveLength(1);
-    expect(await readdir(profile.directory)).toEqual(["monitoring.private.json"]);
+    expect(await listing(workspace.directory)).toEqual([".env", "monitoring.config.json"]);
   });
 });
 
@@ -372,15 +393,15 @@ describe("explicit setup authentication", () => {
   });
 
   it("requires explicit credentials and refuses the worker as the privileged setup application", async () => {
-    const profile = await privateProfile(fixture().targets);
-    const project = selectTenant(parseProjectDocument(profile.original));
+    const workspace = await configWorkspace(fixture().targets);
+    const project = selectTenant(parseProjectDocument(workspace.original));
     delete project.services.onedrive.setup;
-    expect(() => selectedSetupOptions(parseSetupArguments(profile.args), project)).toThrow("explicit privileged");
-    expect(() => parseSetupArguments([...profile.args, "--concurrency", "11"])).toThrow("Usage");
+    expect(() => selectedSetupOptions(parseSetupArguments(workspace.args), project)).toThrow("explicit privileged");
+    expect(() => parseSetupArguments([...workspace.args, "--concurrency", "11"])).toThrow("Usage");
     project.services.onedrive.setup = {
       authentication: "managed-identity", workerClientId, setupClientId: workerClientId, concurrency: 4, targetTimeoutSeconds: 300,
     };
-    expect(() => selectedSetupOptions(parseSetupArguments(profile.args), project)).toThrow("separate from");
+    expect(() => selectedSetupOptions(parseSetupArguments(workspace.args), project)).toThrow("separate from");
   });
   it("shares one credential request across a large batch and refreshes before expiry without inspecting opaque tokens", async () => {
     vi.useFakeTimers();

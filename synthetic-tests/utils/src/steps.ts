@@ -1,5 +1,5 @@
 import {
-  probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
+  maxStepDetailLength, probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
 } from "./contracts.js";
 import { categoryOf, IntegrationError } from "./http.js";
 
@@ -22,6 +22,7 @@ export async function measureStep<T>(
     result.steps.push({
       name, status: "failed", observedAt: new Date(finished).toISOString(),
       durationMs: Math.max(0, finished - started), diagnosticCategory: classify(error),
+      ...(error instanceof IntegrationError && error.detail ? { detail: error.detail.slice(0, maxStepDetailLength) } : {}),
     });
     throw error;
   }
@@ -35,6 +36,7 @@ export function journeyFailure(result: SyntheticResult, error: unknown, telemetr
   telemetry.emit("probe-stage-failed", {
     testId: result.testId, correlationId: result.correlationId,
     step: failed?.name, category: result.diagnosticCategory,
+    ...(error instanceof IntegrationError && error.detail ? { detail: error.detail } : {}),
   });
 }
 

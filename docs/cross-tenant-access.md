@@ -4,19 +4,20 @@
 
 1. Use a customer-approved Azure subscription **associated with the same Entra tenant as Microsoft 365**. The subscription owner's email does not determine its tenant. Use the organization's approved subscription provisioning and billing process.
 2. Approve dedicated test mailboxes, a Teams team/standard channel and bot-only meeting, and provisioned OneDrive accounts with dedicated test folders. Existing licensed mailboxes work; shared mailboxes are optional and do not simplify application authentication. Confirm ownership, cadence and cleanup limits.
-3. Edit [monitoring.config.json](../monitoring.config.json) with approved targets and the Azure model destination. Keep both `graphAuthentication` and `healthReportAuthentication` set to `managed-identity` in each service's `execution` block.
+3. Edit [monitoring.config.json](../monitoring.config.json) with approved targets and the Azure model destination. Keep both `graphAuthentication` and `healthReportAuthentication` set to `managed-identity` in each service's `execution` block. Leave `deployment.azureTenantId` out: it defaults to the single tenant's `tenantId` ([what the config holds](./deployment.md#what-the-config-holds)).
 4. Run `npm run deploy` with `deployment.stage: "foundation"` to deploy the [health models](../health-model/README.md#apply-and-migrate) and the [worker foundation](../synthetic-tests/infra/README.md#provision-and-publish) without workers. The foundation creates a separate user-assigned managed identity per service (`worker.identityName`).
 5. Have the customer's administrators grant:
 
    | Service | Required access |
    | --- | --- |
-   | Exchange | Mailbox-scoped `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` through [Exchange application RBAC](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), **not tenant-wide Graph mail/calendar permissions** |
+   | Exchange | Mailbox-scoped `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` through [Exchange application RBAC](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), **not tenant-wide Graph mail/calendar permissions**. This is the one-time approval; step 6 then keeps its scope current |
    | Teams | [Managed-identity bots](../synthetic-tests/teams/README.md#primary-setup-unattended-bot), installed Teams app and separate Entra readback registration with team-scoped RSC and worker-UAMI federation; meeting access requires separate application-permission approval |
-   | OneDrive | [Bulk Selected-folder setup](./onedrive-setup.md) with a separate approved provisioning identity; saves real drive/folder IDs and scoped worker write grants. Approve AppFolder separately; no broad runtime file-permission fallback |
-   | Provider context | Optional `ServiceHealth.Read.All` and provider-app federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
+   | OneDrive | [Bulk Selected-folder setup](./onedrive-setup.md) with a separate approved provisioning identity; writes real drive/folder IDs to `.env` and scoped worker write grants. Approve AppFolder separately; no broad runtime file-permission fallback |
+   | Provider context | Optional `ServiceHealth.Read.All` on the provider app (the tenant's `providerClientId`) and its federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
    | Health reports | The foundation grants each Azure identity ingest-only access on its own service model |
 
-6. Enable live execution only after allowed/denied access checks: reference each approved identity in `worker.identityResourceId`, set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove `deployment.stage` (default `workers`) and run `npm run deploy` (see the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)). Verify real journeys and cleanup, then fresh reports and service/root rollup.
+6. Run `npm run setup` as an Exchange and Teams administrator ([what it does and does not cover](./deployment.md#set-up-microsoft-365-with-one-script)): it keeps the Exchange scope, distribution lists, Teams membership and reply seeds current and looks up the IDs the config leaves out, but not OneDrive's drives and folders or the Exchange approval above.
+7. Enable live execution only after allowed/denied access checks: name each approved identity in `worker.identity`, set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove `deployment.stage` (default `workers`) and run `npm run deploy` (see the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)). Verify real journeys and cleanup, then fresh reports and service/root rollup.
 
 **Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Teams uses only `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`; hosted `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the attached UAMI for Bot Connector, with a second explicitly selected UAMI for meetings. Graph read permissions alone do not authorize posting: approve and install the matching bot. No delegated-user sign-in, bootstrap or token cache exists. Provider credentials remain application-only and separate from synthetic access.
 
@@ -29,6 +30,15 @@ is explicitly approved, the implemented option is **certificate authentication w
 a single-tenant application owned by the M365 tenant**. Generic cross-tenant
 managed-identity federation is not implemented; the Teams readback federation in
 the recommended setup is same-tenant only.
+
+`npm run setup` supports a same-tenant managed identity only. With a live Exchange service
+and a `deployment.azureTenantId` that differs from the tenant's `tenantId` (it defaults to
+that, so only cross-tenant hosting sets it), it stops at the Exchange step and points here,
+before it creates distribution lists, adds Teams members, looks up IDs or provisions reply
+seeds. Do those steps by hand: extend the application's Exchange scope
+(step 3 below), create the lists and memberships, and provision the reply seeds with a local
+`npm run exchange:mail-test -- --apply` using explicit certificate authentication, which
+writes them to `.env`.
 
 ### 1. Register the lab application in the M365 tenant
 
@@ -100,8 +110,10 @@ for Exchange and OneDrive may target a different tenant while Azure reporting ke
 own identity. The direct managed-identity/federated and Teams bot/readback guards
 require the actual identity tenants to match the entry's `tenantId`, and unsupported
 bindings fail before credential use; never relabel a hosting UAMI's `AZURE_TENANT_ID`.
-An enabled federated `providerClientId` must also match that tenant; a certificate
-Graph binding does not rebind it.
+A tenant's `providerClientId`, used by every service of it that collects provider data,
+must also match that tenant; a certificate Graph binding does not rebind it. With several
+tenants, set `deployment.azureTenantId` to the tenant that hosts the Azure resources; with
+one it defaults to that tenant's `tenantId`.
 
 Each service has one health model shared by all tenants. With more than one tenant in
 the config, every overall signal a worker publishes is named
@@ -109,9 +121,10 @@ the config, every overall signal a worker publishes is named
 `tenant-contoso--synthetic-success-percentage`. That covers journey and step
 success/duration, the `teams-call` phase signals, and the Service Health
 and activity signals, so tenants never overwrite one another and the shared
-`<service>-service-health` entity carries one set per tenant. Each entity's External
-Reports group lists one set per tenant that runs it. With exactly one tenant the names
+`<service>-service-health` entity carries one set per tenant. With exactly one tenant the names
 stay plain, and [reporting group](./monitoring-groups.md) signals keep
 `group-<id>--tenant-<tenant id>--<signal>`, never qualified twice. Adding a second
 tenant renames every overall signal in one step: run `npm run deploy` so the models and
 workers change together; reports under the old plain names expire after the report TTL.
+`npm run setup` works on the one config tenant that matches the signed-in tenant: run it
+once per tenant, signed in to that tenant.

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
-import { maxExchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
+import { exchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
 import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError } from "./http.js";
@@ -68,7 +68,7 @@ async function runSingleProbe(
 ): Promise<SyntheticResult> {
   const liveExchange = config.EXECUTION_MODE === "live" && probeServices[probe.type].service === "exchange";
   if (liveExchange) {
-    config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, maxExchangeJourneyMilliseconds) };
+    config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, exchangeJourneyMilliseconds(probe.type)) };
   }
   const { telemetry, now = Date.now } = dependencies;
   const execution = new AbortController();

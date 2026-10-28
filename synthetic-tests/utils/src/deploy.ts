@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { ConfigurationError } from "./config.js";
+import { applyBindings, parseBindings, readBindingsText } from "./bindings.js";
 import {
   beginMutations, buildBicep, createStateDirectory, deployFoundation, deployModels, deployWorkers, deploysWorkers, hash, nativeCertificates,
   parseJson, pinImage, preflight, previewChanges, removeSecureParameters, retireObsoleteEntities, saveProvenance, sourceFingerprint,
@@ -76,7 +77,10 @@ export function deploymentPlan(prepared: PreparedDeployment) {
 export async function deployMonitoring(options: DeploymentOptions = {}) {
   const file = resolve(options.file ?? canonicalProjectFile);
   const configText = await readFile(file, "utf8");
-  const prepared = prepareProjectDeployment(parseJson<unknown>(configText, "monitoring.config.json"));
+  const bindingsText = await readBindingsText(file);
+  const prepared = prepareProjectDeployment(
+    applyBindings(parseJson<unknown>(configText, "monitoring.config.json"), parseBindings(bindingsText)),
+  );
   if (options.plan) {
     const plan = { ...deploymentPlan(prepared), configFile: file };
     (options.emit ?? printEvent)(plan);
@@ -85,7 +89,7 @@ export async function deployMonitoring(options: DeploymentOptions = {}) {
   if (prepared.document.healthModel.subscriptionId === placeholderSubscriptionId) {
     throw new ConfigurationError("Configure an approved healthModel.subscriptionId before Azure deployment; --plan remains local");
   }
-  const run = await createRun(file, configText, prepared, options);
+  const run = await createRun({ file, configText, bindingsText }, prepared, options);
   try {
     await saveProvenance(run);
     const { registry, retirements } = await preflight(run);
@@ -110,7 +114,10 @@ export async function deployMonitoring(options: DeploymentOptions = {}) {
   }
 }
 
-async function createRun(file: string, configText: string, prepared: PreparedDeployment, options: DeploymentOptions): Promise<DeploymentRun> {
+async function createRun(
+  source: { file: string; configText: string; bindingsText: string }, prepared: PreparedDeployment, options: DeploymentOptions,
+): Promise<DeploymentRun> {
+  const { file, configText, bindingsText } = source;
   const env = options.env ?? process.env;
   const certificates = nativeCertificates(prepared, env);
   const sourceHash = await sourceFingerprint();
@@ -122,10 +129,10 @@ async function createRun(file: string, configText: string, prepared: PreparedDep
   const directory = await createStateDirectory(prepared.settings.stateDirectory, runId);
   const { subscriptionId, resourceGroup } = prepared.document.healthModel;
   return {
-    prepared, configFile: file, configText, sourceHash, certificates, runId, directory,
+    prepared, configFile: file, configText, bindingsText, sourceHash, certificates, runId, directory,
     subscription: ["--subscription", subscriptionId],
     provenance: {
-      runId, status: "preflight", configSha256: hash(configText), sourceSha256: sourceHash,
+      runId, status: "preflight", configSha256: hash(configText), bindingsSha256: hash(bindingsText), sourceSha256: sourceHash,
       subscriptionId, resourceGroup, models: prepared.modelNames, startedAt: new Date(now()).toISOString(),
     },
     phase: "preflight", mutated: false, env, now,

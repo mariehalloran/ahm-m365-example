@@ -3,23 +3,31 @@
 One administrator command prepares every approved account in
 `monitoring.config.json`: discover its drive, create/reuse the named dedicated folder,
 grant the worker folder-scoped write access, verify the grant, and save the real
-drive and folder IDs. It supports up to 1,000 configured accounts without per-account
-commands. The worker remains least-privilege and never provisions its own access.
+drive and folder IDs to the gitignored `.env` beside the config
+([generated IDs](./deployment.md#generated-ids-in-env)). It supports up to 1,000
+configured accounts without per-account commands. The worker remains least-privilege
+and never provisions its own access. This command is separate from `npm run setup`, which
+only looks up each account's user ID (`USER_ID` in `.env`) and leaves the drives and
+folders to this command ([setup](./deployment.md#set-up-microsoft-365-with-one-script)).
 
 ## Prerequisites and account input
 
 Follow the [deployment order](./deployment.md#deploy-with-one-command): `npm run deploy`
 creates the health models and worker foundation/identities first
 (`deployment.stage: "foundation"` stops there until approvals are in place), then
-approve M365 access, run this setup, and deploy the live workers. Keep certificates
-and keys outside Git.
+approve M365 access, run `npm run setup` and then this setup, and deploy the live
+workers. Keep certificates and keys outside Git.
 
 Generate `tenants[].services.onedrive.targets` in `monitoring.config.json` from your
-approved account-provisioning output. Each target needs a unique opaque `id`,
-real Entra `userId`, `userPrincipalName`, and dedicated `folderName`, normally
-`AHM-Synthetic-Tests`. Set `restoreVersion` deliberately. Omit unknown `driveId`
-and `folderId`; setup fills them. The configured targets are the only account
-inventory; setup never enumerates the tenant or silently adds users.
+approved account-provisioning output. Each target needs a unique opaque `id` (it also
+names the target's `.env` keys, `<TENANT>__<TARGET>__USER_ID`, `…__DRIVE_ID` and
+`…__FOLDER_ID`), the account's `userPrincipalName` and a dedicated `folderName`,
+normally `AHM-Synthetic-Tests`. Set `restoreVersion` deliberately. Leave out `userId`,
+`driveId` and `folderId`: `npm run setup` looks up `userId` from the `userPrincipalName`,
+this command writes the drive and folder IDs, and deploy fills all three in by target ID.
+Run `npm run setup` first, with the OneDrive service in `live` mode (it acts only on live
+services), because this command reads the user IDs. The configured targets are the only
+account inventory; neither setup command enumerates the tenant or silently adds users.
 
 The worker application must already have administrator-approved
 `Files.SelectedOperations.Selected` and, for the app-folder journey,
@@ -122,10 +130,10 @@ delays fail explicitly for a later rerun. Ambiguous writes are reconciled by rea
 actual resources, not blindly resending mutations. Short bounded polling verifies
 grant propagation; an unobserved grant is never checkpointed as ready.
 
-Successful accounts are atomically checkpointed into **`monitoring.config.json`
-itself** (rewritten as 2-space JSON, mode 0600); omitted defaults and unrelated
-settings remain unchanged. Other accounts continue after ordinary
-permission/provisioning failures. Authentication or checkpoint failures stop new
+Each successful account is checkpointed into the gitignored `.env` beside the config
+(`<TENANT>__<TARGET>__DRIVE_ID` and `…__FOLDER_ID`, merged and replaced atomically with
+mode 0600); `monitoring.config.json` is never rewritten. Other accounts continue after
+ordinary permission/provisioning failures. Authentication or checkpoint failures stop new
 scheduling. The summary includes `ready`,
 `planned`, `failed`, and `notStarted`; failure, interruption or incomplete work
 returns a nonzero exit status. Logs contain opaque target IDs/categories, not
@@ -137,16 +145,12 @@ setup does not patch unrelated or inherited permission entries.
 [Selected resource grants break permission inheritance](https://learn.microsoft.com/en-us/graph/permissions-selected-overview#how-selected-scopes-work-with-sharepoint-and-onedrive-permissions),
 so use dedicated folders and account for unique-permission limits.
 Setup never deletes resources to roll back a partial run.
-A stale configured folder ID or mismatched drive/name
+A stale folder ID (from `.env`) or mismatched drive/name
 requires explicit review rather than silently rebinding a different resource.
 
-Apply holds a lock file next to the config (its name plus `.monitoring-setup.lock`)
-and rejects another apply against the same file. Do not edit the config during setup:
-detected external edits stop checkpointing rather than being overwritten.
-SIGINT/SIGTERM retain completed checkpoints. After a hard crash, remove a stale lock
-only after confirming its recorded process/run has stopped; rerun to reconcile any
-uncheckpointed grants. Use one provisioning job per target set; a local file lock is
-not a distributed lock across copies of the config.
+There is no lock file: run one provisioning job per target set and one apply at a time
+against the same `.env`. SIGINT/SIGTERM retain completed checkpoints; rerun to
+reconcile any uncheckpointed grants.
 
 ## Size the worker for hundreds of accounts
 
@@ -192,8 +196,8 @@ Additional Container App replicas duplicate work; they do not shard this invento
 ## Deploy and verify the actual health flow
 
 Setup does not deploy, restart workers, run journeys or publish health. Preview with
-`npm run deploy -- --plan`, then run `npm run deploy` again: it mounts the updated
-config with the saved bindings in a new worker revision, rebuilding the image when
+`npm run deploy -- --plan`, then run `npm run deploy` again: it fills the saved `.env`
+bindings into the config it mounts in a new worker revision, rebuilding the image when
 `deployment.image.mode` is `build`
 ([worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)).
 Confirm the ready revision uses the expected immutable image and account bindings.

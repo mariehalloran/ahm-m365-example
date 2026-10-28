@@ -1,0 +1,16 @@
+// Failed live steps with the impacted group and user, the error and the target, newest first.
+AppTraces
+| where Message == 'synthetic-step' and tostring(Properties['probe.mode']) == 'live'
+| where tostring(Properties['probe.step_status']) == 'failed'
+| project TimeGenerated,
+    Group = coalesce(tostring(Properties['monitoring.group_name']), '(no group)'),
+    User = coalesce(tostring(Properties['monitoring.user']), '(n/a)'),
+    Peer = tostring(Properties['monitoring.peer']),
+    Service = tostring(Properties['probe.service']),
+    Journey = tostring(Properties['probe.journey']),
+    Step = tostring(Properties['probe.step']),
+    Error = tostring(Properties['probe.diagnostic_category']),
+    Detail = tostring(Properties['probe.detail']),
+    Target = tostring(Properties['probe.id']),
+    CorrelationId = tostring(Properties['probe.correlation_id'])
+| order by TimeGenerated desc

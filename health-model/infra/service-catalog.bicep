@@ -1,7 +1,4 @@
 // Metadata is authored in synthetic-tests/utils/src/catalog.ts.
-@export()
-var providerActivityFunctions = loadJsonContent('../../synthetic-tests/utils/src/catalog.json', '$.providerActivityFunctions')
-
 type ServiceStep = {
   name: string
   displayName: string

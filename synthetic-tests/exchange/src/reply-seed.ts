@@ -7,6 +7,10 @@ import { IntegrationError } from "../../utils/src/http.js";
 
 type ReplyTarget = Pick<Probe, "id" | "mailbox" | "recipientMailbox" | "replySeed">;
 export type ReplySeedGraph = Pick<GraphClient, "authenticate" | "json" | "request">;
+export interface ReplySeedOptions {
+  signal: AbortSignal; telemetry: Telemetry;
+  now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
 const seedMessage = z.object({
   id: z.string().min(1), subject: z.string(), isDraft: z.boolean(),
   conversationId: z.string().min(1), internetMessageId: z.string().min(1),
@@ -45,13 +49,7 @@ export async function readReplySeed(graph: ReplySeedGraph, target: ReplyTarget, 
   return validateSeed(saved, sender, target.replySeed.correlationId);
 }
 
-export async function provisionReplySeed(
-  graph: ReplySeedGraph, target: ReplyTarget,
-  options: {
-    signal: AbortSignal; telemetry: Telemetry;
-    now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
-  },
-) {
+export async function provisionReplySeed(graph: ReplySeedGraph, target: ReplyTarget, options: ReplySeedOptions) {
   const { sender, recipient } = requireParticipants(target);
   const now = options.now ?? Date.now;
   const started = now();

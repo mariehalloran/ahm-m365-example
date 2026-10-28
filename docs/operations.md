@@ -2,16 +2,16 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports through **External Reports**, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Twelve journeys reuse three Container Apps (one per enabled tenant and service); the default family has four models, 67 entities, 63 relationships and 46 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
+Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports directly, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Twelve journeys reuse three Container Apps (one per enabled tenant and service); the default family has four models, 67 entities, 63 relationships and 46 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
 
 Exchange, Teams, and OneDrive use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
-Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey and tests; shared code and Node tooling also live in that project, while the single root [monitoring.config.json](../monitoring.config.json) holds all configuration. The checked-in config uses simulation: console diagnostics and report previews make no live mutations or Azure calls.
+Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey and tests; shared code and Node tooling also live in that project, while the single root [monitoring.config.json](../monitoring.config.json) holds all configuration, apart from the IDs that setup looks up or generates in the gitignored `.env` beside it ([details](./deployment.md#generated-ids-in-env)). In `simulation` mode, console diagnostics and report previews make no live mutations or Azure calls.
 
 ## Scheduling and shutdown
 
 - First run is immediate; reusable independent lanes follow fixed-rate cadence within each worker. Exchange mail defaults to 60 seconds and other Exchange journeys to 300 seconds.
-- Live Exchange attempts have a hard 15-second execution ceiling, including custom lanes. Timeouts report Unhealthy; bounded cleanup can finish afterward and elapsed durations are not clamped. Other services retain their configured deadlines.
+- Live Exchange attempts are cancelled at a per-journey deadline, including in custom lanes: 30 seconds for `reply-mail` and `meeting-invitation` (two or three sequential mailbox hops), 15 seconds for every other Exchange journey. A lane's `timeoutSeconds` can only shorten it (the Exchange [lane example](../synthetic-tests/exchange/README.md#journeys-and-scheduling) sets 15 on `mail` and 30 on `extended`). A timeout is a failure reported Unhealthy; bounded cleanup can finish afterward and elapsed durations are not clamped. Latency thresholds are unchanged (a mean duration above 15000 ms is Degraded), so a 15-30 second success reports Degraded. Other services retain their configured deadlines.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane reports update only observed journeys, not empty/Unknown reports for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
@@ -24,8 +24,8 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 Do not enable live mode against real-user resources.
 
 1. Obtain dedicated approved targets and an owner. Use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) for Exchange.
-2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access.
-3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) to create folders/grants and save real drive/folder IDs; runtime has no broad permission or root-discovery fallback.
+2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, `npm run setup` extends the identity's scope to every configured mailbox, add-only ([setup](./deployment.md#set-up-microsoft-365-with-one-script)).
+3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) (not part of `npm run setup`) to create folders/grants and save real drive/folder IDs to `.env`; runtime has no broad permission or root-discovery fallback.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
 5. Set `execution.mode: "live"` and independently opt in with `deployment.enableLiveProbes: true`; hosted workers then receive `ENABLE_LIVE_M365=true` and a local run exports it. See the [live gates](./deployment.md#live-execution-gates).
 6. Use `--once` first and inspect operation and cleanup outcomes.
@@ -38,14 +38,15 @@ worker-UAMI federation. The manifest's `webApplicationInfo.id` references this
 application, not the UAMI. See [bot setup](../synthetic-tests/teams/README.md#primary-setup-unattended-bot).
 No runtime user MFA/cache or certificate is needed. Bot-only meeting calls require
 two distinct explicit UAMIs with approved `Calls.JoinGroupCall.All` and root-owned
-`{ id, tenantId, meetingThreadId, organizerUserId, peerBotClientId }` targets.
+`{ id, meetingThreadId, organizer }` call targets (setup looks up the organizer's user ID
+and the peer bot's client ID).
 The organizer is owner metadata, never a participant/token identity. Success requires
 both established legs, matching meeting metadata, both identities in both
 rosters and both verified departures. No audio upload, playback or recording is
 required, and connectivity does not prove received audio, bidirectional audio or
 call quality.
 The existing Teams app attaches the approved peer through
-`tenants[].services.teams.access.{botPeerClientId,botPeerManagedIdentityResourceId}`; no runtime
+`tenants[].services.teams.access.peerIdentity`; no runtime
 grants or extra app/host are created.
 
 Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). Default bot/mail/file journeys need no user password, interactive sign-in or Blob access. Calling's tenant-wide application permission is a separate approved exception, not a scoped recipient grant. Optional provider collection requires separately approved read-only application permissions; it never grants them.
@@ -79,9 +80,35 @@ Each attempt contributes one binary success observation (1 or 0); executed busin
 
 OTEL is disabled by default and configured only at root. If enabled, monitor `telemetry-initialization-failed`, `telemetry-output-failed` and `telemetry-export-failed` separately from journey and direct-report failures. Export flush/shutdown are bounded; failures still allow direct report attempts and make one-shot execution fail. An OTEL diagnostic-recording error does not rewrite an observed provider status as a Graph collection failure. No disk buffer/outbox or replay is added. Azure ingestion acceptance is not proof of query evaluation or model propagation. Verify both paths end to end, approve ingestion authentication and retention/cost, and retain independent stopped/stalled-worker and notification tests. See [optional export semantics](../synthetic-tests/utils/README.md#console-otel-and-reliability).
 
+## Log Analytics for administrators
+
+With `otel.enabled: true` and `destination: "azure-monitor"`, `npm run deploy` creates the workspace `law-<model>`, Application Insights `appi-<model>` (`<model>` is `healthModel.name`) and three saved searches in the category **M365 Synthetic Monitoring**. Their KQL is in [`health-model/queries/admin/`](../health-model/queries/admin/). Administrators need Log Analytics Reader on the workspace.
+
+| Saved search | File | Output columns, live records only |
+| --- | --- | --- |
+| Synthetic failures by group and user | `failures-by-group.kql` | `TimeGenerated`, `Group`, `User`, `Peer`, `Service`, `Journey`, `Step`, `Error`, `Detail`, `Target`, `CorrelationId`: every failed step, newest first |
+| Impacted users by group | `impacted-users-by-group.kql` | `Group`, `User`, `Failures`, `Journeys`, `Errors`, `FirstFailure`, `LastFailure`: most affected first |
+| Success rate by group and journey | `success-by-group.kql` | `Group`, `Service`, `Journey`, `Attempts`, `Failures`, `SuccessPercent`: weakest first |
+
+A record without a reporting group shows `(no group)` and one without a user `(n/a)`. The rows are in `AppTraces`, with their attributes in `Properties`, where `Message` is `synthetic-step` or `synthetic-result`:
+
+| Attribute | Meaning |
+| --- | --- |
+| `monitoring.tenant` | The tenant alias in the config |
+| `monitoring.user` | The Exchange initiating mailbox or the OneDrive `userPrincipalName`; never set for Teams, whose participants are bots |
+| `monitoring.peer` | The Exchange recipient mailbox |
+| `monitoring.group`, `monitoring.group_name` | The reporting group's id and display name |
+| `monitoring.group_duplicate` | `"true"` on every record after the first when one target belongs to several groups. The overall model signals skip these so each attempt counts once; the per-group searches keep them |
+| `probe.service`, `probe.journey`, `probe.step`, `probe.step_status`, `probe.diagnostic_category` | What ran, and how the step ended |
+| `probe.detail` | Failed steps only: a short hint from the integration error, truncated to 200 characters, never message or Graph content |
+| `probe.http_status`, `probe.failed_step` | Result rows only |
+| `probe.correlation_id`, `probe.id`, `probe.mode`, `probe.success`, `probe.duration_ms` | Correlation, target, mode and outcome |
+
+Ingestion takes a few minutes. The model's own OTEL-backed signals average a 15-minute window, so one failure can hold an entity below Healthy for up to 15 minutes. The records contain test-account UPNs, so use dedicated test accounts only. They describe live API-backed attempts, not employee experience.
+
 ## Optional Microsoft provider context
 
-Simulation keeps providers off; live examples enable stable Service Health, with beta still separately gated. `serviceHealth: true` requires `ServiceHealth.Read.All` and reads v1.0 health overviews/issues. Its independent provider lane runs despite missing synthetic targets/bot credentials. Approved operational/degradation/interruption states report directly to the product's single suppressed `${service}-service-health` entity: **100 healthy, 50 degraded, 0 interruption**. Stable status, issues and approved beta members share its native External Reports group; there are no per-API child entities. OneDrive matches its distinct `OneDriveForBusiness` / `Microsoft OneDrive` entry, not SharePoint. Failed/missing/stale/unapproved states produce Unknown without a value; diagnostic counts without thresholds stay Unknown even when numeric. Supporting context never changes journey evidence or Experience rollup. See [destinations and units](./provider-monitoring.md).
+Simulation keeps providers off; live examples enable stable Service Health, with beta still separately gated. `serviceHealth: true` requires `ServiceHealth.Read.All` and reads v1.0 health overviews/issues. Its independent provider lane runs despite missing synthetic targets/bot credentials. Approved operational/degradation/interruption states report directly to the product's single suppressed `${service}-service-health` entity: **100 healthy, 50 degraded, 0 interruption**. Stable status, issues and approved beta signals are all reported on that one entity, ungrouped; there are no per-API child entities. OneDrive matches its distinct `OneDriveForBusiness` / `Microsoft OneDrive` entry, not SharePoint. Failed/missing/stale/unapproved states produce Unknown without a value; diagnostic counts without thresholds stay Unknown even when numeric. Supporting context never changes journey evidence or Experience rollup. See [destinations and units](./provider-monitoring.md).
 
 Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_SERVICE_ACTIVITY=true` and approved `ServiceActivity-Exchange.Read.All`/`ServiceActivity-Teams.Read.All`. Each supports five functions. Explicit customer thresholds report latest fresh buckets directly on suppressed Service Health; raw counts/QoE-coverage/UDP otherwise remain diagnostic, never automatic call quality or Experience/journey evidence. Beta remains unsupported for production; OneDrive has no beta collector. See [provider setup and deployment approval](./provider-monitoring.md).
 
@@ -107,7 +134,7 @@ See the [strict schema, limits, diagnostics and first-party references](../synth
 
 ## Privacy, retention, and costs
 
-Console result/step diagnostics contain opaque configured/correlation IDs, mode, timings, and bounded diagnostics. Reports aggregate by fixed service/journey/business-step destinations, not target inventories. No raw mailbox address, message body/subject/ID, token, Graph response, or private key belongs in diagnostics or reports.
+Console result/step diagnostics contain opaque configured/correlation IDs, mode, timings, and bounded diagnostics. Reports aggregate by fixed service/journey/business-step destinations, not target inventories. No raw mailbox address, message body/subject/ID, token, Graph response, or private key belongs in diagnostics or reports. The one exception is the optional OTEL export to Log Analytics: its step and result records carry the test accounts' UPNs (`monitoring.user`, `monitoring.peer`) so administrators can see who is impacted. Use dedicated test accounts only, and apply workspace access and retention accordingly ([details](#log-analytics-for-administrators)).
 
 Synthetic content is fixed boilerplate or a generated correlation ID. Protect dedicated mailbox/channel/file artifacts under their own retention rules. Normal deletion can leave Deleted Items/recycle-bin or compliance-retained copies.
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { probeSchema } from "../src/contracts.js";
 import { parseServiceConfig, parseServiceExecution, serviceSettings } from "../src/service-config.js";
 import { executionFixture } from "./fixtures.js";
 import { canonicalProjectFile } from "../src/paths.js";
@@ -17,6 +18,13 @@ describe("strict config-first service settings", () => {
     });
     expect(service).not.toHaveProperty("telemetry");
     expect(serviceSettings(service, {}).probes).toHaveLength(1);
+  });
+  it("polls Exchange journeys finely inside their deadlines and leaves other services at the 2-second default", () => {
+    const exchange = parseServiceConfig(raw);
+    expect(serviceSettings(exchange, {})).toMatchObject({ POLL_INTERVAL_MS: 500 });
+    expect(serviceSettings(exchange, { POLL_INTERVAL_MS: "9000" })).toMatchObject({ POLL_INTERVAL_MS: 500 });
+    const onedrive = parseServiceConfig({ ...raw, type: "onedrive", cohort: "onedrive-global", targets: [{ id: "onedrive-001" }] });
+    expect(serviceSettings(onedrive, {})).toMatchObject({ POLL_INTERVAL_MS: 2000 });
   });
   it.each(["cli", "default", "", null, true])("rejects unsupported bot authentication %s", botAuthentication => {
     expect(() => parseServiceConfig({ ...raw, botAuthentication })).toThrow("botAuthentication");
@@ -92,9 +100,35 @@ describe("strict config-first service settings", () => {
   it.each([
     { id: "probe-001", type: "exchange-mail-flow" }, { id: "probe-001", cohort: "other-cohort" },
     { id: "probe-001", siteId: "wrong-service" }, { id: "probe-001", extra: true },
-    { id: "../escape" }, { id: "probe-001", scenario: "invalid" },
+    { id: "../escape" }, { id: "probe-001", scenario: "invalid" }, { id: "probe-001", channelName: "General" },
   ])("rejects derived, unknown or wrong-service target fields", target => {
     expect(() => parseServiceConfig({ ...raw, targets: [target] })).toThrow("targets");
+  });
+  it("accepts an optional trimmed Teams channelName for setup tooling and never hands it to probes", () => {
+    const teams = parseServiceConfig({
+      ...raw, type: "teams", cohort: "teams-global",
+      targets: [{ id: "channel-001", channelName: "  United Kingdom Users  " }, { id: "channel-002" }],
+    });
+    expect(teams.targets).toEqual([{ id: "channel-001", channelName: "United Kingdom Users" }, { id: "channel-002" }]);
+    const probes = serviceSettings(teams, {}).probes;
+    expect(probes.map(probe => probe.id)).toEqual(["channel-001", "channel-002"]);
+    for (const probe of probes) expect(probe).not.toHaveProperty("channelName");
+    expect(probeSchema.safeParse({ ...probes[0], channelName: "General" }).success).toBe(false);
+  });
+  it("accepts a 50-character Teams channelName and rejects blank, longer or non-string values and other targets", () => {
+    const teams = { ...raw, type: "teams", cohort: "teams-global" };
+    expect(parseServiceConfig({ ...teams, targets: [{ id: "channel-001", channelName: "x".repeat(50) }] }).enabled).toBe(true);
+    for (const channelName of ["", "   ", "x".repeat(51), 7, null]) {
+      expect(() => parseServiceConfig({ ...teams, targets: [{ id: "channel-001", channelName }] })).toThrow("targets");
+    }
+    expect(() => parseServiceConfig({ ...raw, type: "onedrive", targets: [{ id: "od-001", channelName: "General" }] })).toThrow("targets");
+    expect(() => parseServiceConfig({
+      ...teams, callTargets: [{
+        id: "call-001", tenantId: "11111111-1111-4111-8111-111111111111", meetingThreadId: "19:meeting_test@thread.v2",
+        organizerUserId: "22222222-2222-4222-8222-222222222222", peerBotClientId: "33333333-3333-4333-8333-333333333333",
+        channelName: "General",
+      }],
+    })).toThrow("callTargets");
   });
   it("rejects Exchange fields on OneDrive and accepts its selected account metadata", () => {
     expect(() => parseServiceConfig({ ...raw, type: "onedrive", targets: [{ id: "od-001", mailbox: "test@example.invalid" }] })).toThrow("targets");

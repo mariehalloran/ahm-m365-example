@@ -249,6 +249,22 @@ describe("Graph SDK transport", () => {
       .rejects.toMatchObject({ category: "malformed-response" });
   });
 
+  it("explains a malformed Graph response with field paths and issue codes, never its content", async () => {
+    const schema = z.object({ value: z.array(z.object({ id: z.string(), body: z.object({ content: z.string() }) })) });
+    const secret = "response-content-that-must-not-leak";
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ value: [{ id: "a", body: { content: "x" } }, { id: secret, body: { content: null } }] }))
+      .mockResolvedValueOnce(new Response("not json"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ value: [] }).padEnd(64, " ")));
+    const graph = new GraphClient(credential, { fetch: fetcher });
+    const schemaFailure = await graph.json("/users", schema, signal()).catch(error => error);
+    expect(schemaFailure).toMatchObject({ category: "malformed-response", detail: "schema:value.1.body.content(invalid_type)" });
+    expect(JSON.stringify(schemaFailure.detail)).not.toContain(secret);
+    await expect(graph.json("/users", schema, signal())).rejects.toMatchObject({ category: "malformed-response", detail: "invalid-json" });
+    await expect(graph.json("/users", schema, signal(), "GET", undefined, true, "v1.0", 32))
+      .rejects.toMatchObject({ category: "malformed-response", detail: "response-too-large" });
+  });
+
   it.each([
     ["//untrusted.invalid/users", "v1.0"], ["/../beta/users", "v1.0"], ["/%2e%2e/beta/users", "v1.0"],
     ["/users\\other", "v1.0"], ["/users#fragment", "v1.0"], ["/users\r\n", "v1.0"], ["/users", "v2"],

@@ -1,9 +1,49 @@
+import { readFile } from "node:fs/promises";
+import { applyBindings, bindingKey, type Bindings } from "../src/bindings.js";
+import { canonicalProjectFile } from "../src/paths.js";
 import { parseProjectDocument, selectTenant, type ProjectConfig, type ProjectDocument } from "../src/project-config.js";
+import { at, records } from "../src/raw-config.js";
 import { parseServiceExecution, type ServiceConfig } from "../src/service-config.js";
 
 export const fixtureTenantId = "11111111-1111-4111-8111-111111111111";
 /** Live workers must bind the Azure identity and bot tenants to the selected project's tenant. */
 export const liveTenantEnv = { AZURE_TENANT_ID: fixtureTenantId, BOT_TENANT_ID: fixtureTenantId };
+
+const fixtureUserId = (index: number) => `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`;
+const withoutField = (tenant: Record<string, unknown>, path: string[], field: string) =>
+  records(at(tenant, ...path)).filter(target => target[field] === undefined).map(target => String(target.id));
+
+/** Fixture user IDs for the OneDrive accounts and Teams meeting organizers a raw config leaves to `.env`, as `npm run setup` writes them. */
+export function fixtureBindings(raw: unknown): Bindings {
+  const keys = records(at(raw, "tenants")).flatMap(tenant => [
+    ...withoutField(tenant, ["services", "onedrive", "targets"], "userId")
+      .map(id => bindingKey(String(tenant.id), id, "USER_ID")),
+    ...withoutField(tenant, ["services", "teams", "callTargets"], "organizerUserId")
+      .map(id => bindingKey(String(tenant.id), id, "ORGANIZER_USER_ID")),
+  ]);
+  return Object.fromEntries(keys.map((key, index) => [key, fixtureUserId(index)]));
+}
+
+/** Everything `.env` supplies to the checked-in config: those user IDs plus each tenant's Teams peer bot and calling callback. */
+export function checkedInBindings(raw: unknown): Bindings {
+  const bindings = fixtureBindings(raw);
+  for (const tenant of records(at(raw, "tenants"))) {
+    const alias = String(tenant.id);
+    if (at(tenant, "services", "teams", "access", "botPeerClientId") === undefined) {
+      bindings[bindingKey(alias, "teams", "BOT_PEER_CLIENT_ID")] = "22222222-2222-4222-8222-222222222222";
+    }
+    if (at(tenant, "services", "teams", "execution", "teamsCallingCallbackUrl") === undefined) {
+      bindings[bindingKey(alias, "teams", "CALLING_CALLBACK_URL")] = "https://m365-example-teams.approved.invalid/api/calls";
+    }
+  }
+  return bindings;
+}
+
+/** The repository-root monitoring.config.json as checked in, with fixture IDs for what its `.env` supplies; that `.env` is deliberately not read. */
+export async function checkedInDocument(): Promise<ProjectDocument> {
+  const raw: unknown = JSON.parse(await readFile(canonicalProjectFile, "utf8"));
+  return parseProjectDocument(applyBindings(raw, checkedInBindings(raw)));
+}
 
 /** One tenant mirroring the checked-in root config: two mailbox/drive accounts, one channel, one meeting, two groups. */
 export function documentFixture(): ProjectDocument {
@@ -29,10 +69,10 @@ export function documentFixture(): ProjectDocument {
       services: {
         exchange: {
           execution: {
-            ...execution, cohort: "exchange-global", intervalSeconds: 60, timeoutSeconds: 15,
+            ...execution, cohort: "exchange-global", intervalSeconds: 60, timeoutSeconds: 15, maxConcurrentProbes: 6,
             executionLanes: [
               { name: "mail", intervalSeconds: 60, timeoutSeconds: 15, journeys: ["send-receive-mail"] },
-              { name: "extended", intervalSeconds: 300, timeoutSeconds: 15, journeys: [
+              { name: "extended", intervalSeconds: 300, timeoutSeconds: 30, journeys: [
                 "edit-reopen-draft", "attachment-mail", "reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation",
               ] },
             ],

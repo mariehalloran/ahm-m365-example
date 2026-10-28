@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { reportingGroups } from "../src/groups.js";
 import { prepareProjectDeployment } from "../src/prepare-deployment.js";
 import { parseProjectDocument } from "../src/project-config.js";
-import { documentFixture, multiTenantFixture } from "./fixtures.js";
+import { serviceProbes } from "../src/service-config.js";
+import { documentFixture, fixtureTenantId, multiTenantFixture } from "./fixtures.js";
 
 const digest = `approved.azurecr.io/synthetic@sha256:${"a".repeat(64)}`;
+const providers = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-m365-demo/providers";
+const identities = `${providers}/Microsoft.ManagedIdentity/userAssignedIdentities`;
 
 describe("single-document deployment preparation", () => {
   it("derives one worker per tenant and service, each over its tenant's whole inventory", () => {
@@ -24,6 +27,7 @@ describe("single-document deployment preparation", () => {
     }
     const fabrikamExchange = prepared.workers.find(worker => worker.tenant === "fabrikam" && worker.type === "exchange")!;
     expect(fabrikamExchange.service.targets.map(target => target.id)).toEqual(["pair-a", "pair-b"]);
+    expect(fabrikamExchange.identityResourceId).toBe(`${identities}/uami-fabrikam-exchange`);
   });
 
   it("passes the whole normalized document and the flat reporting groups to the Bicep parameters", () => {
@@ -48,6 +52,20 @@ describe("single-document deployment preparation", () => {
     expect(prepared.healthParameters.parameters.reportingGroups!.value).toEqual([]);
     expect((prepared.workerParameters.parameters.projectConfig!.value as typeof prepared.document).tenants[0]!.services.teams.worker)
       .toMatchObject({ cpu: 0.25, memory: "0.5Gi" });
+  });
+
+  it("keeps a Teams channelName, read only by the setup tooling, in the normalized document and both parameter sets", () => {
+    const document = documentFixture();
+    document.tenants[0]!.services.teams.targets[0]!.channelName = "  United Kingdom Users  ";
+    const prepared = prepareProjectDeployment(document);
+    const channelName = (value: unknown) => (value as typeof prepared.document).tenants[0]!.services.teams.targets[0]!.channelName;
+    expect(channelName(prepared.document)).toBe("United Kingdom Users");
+    expect(channelName(prepared.healthParameters.parameters.projectConfig!.value)).toBe("United Kingdom Users");
+    expect(channelName(prepared.workerParameters.parameters.projectConfig!.value)).toBe("United Kingdom Users");
+    const teams = prepared.workers.find(worker => worker.type === "teams")!;
+    const probes = serviceProbes(teams.service, teams.project.services.teams.scenarios);
+    expect(probes.map(probe => probe.id)).toEqual(["teams-probe-001", "teams-meeting-001"]);
+    for (const probe of probes) expect(probe).not.toHaveProperty("channelName");
   });
 
   it("keeps all reporting groups on one existing tenant/service worker and Teams callback owner", () => {
@@ -116,13 +134,13 @@ describe("single-document deployment preparation", () => {
     document.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
     document.deployment!.enableLiveProbes = true;
     document.tenants[0]!.services.exchange.execution.mode = "live";
-    expect(() => prepareProjectDeployment(document)).toThrow("retained replySeed");
+    expect(() => prepareProjectDeployment(document)).toThrow("retained replySeed bindings for every selected initiating pair; run npm run setup (it writes them to .env)");
     for (const target of document.tenants[0]!.services.exchange.targets) {
       target.replySeed = { messageId: `received-${target.id}`, correlationId: "33333333-3333-4333-8333-333333333333" };
     }
     expect(prepareProjectDeployment(document).workers.find(worker => worker.type === "exchange")!.service.mode).toBe("live");
     document.tenants[0]!.services.onedrive.execution.mode = "live";
-    expect(() => prepareProjectDeployment(document)).toThrow("approved driveId/folderId");
+    expect(() => prepareProjectDeployment(document)).toThrow("approved driveId/folderId bindings; run npm run onedrive:setup (it writes them to .env)");
     expect(document.tenants[0]!.services.onedrive.scenarios["user-drive-roundtrip"]).toBe(true);
   });
 
@@ -144,6 +162,73 @@ describe("single-document deployment preparation", () => {
       "user-drive-roundtrip": false, "app-folder-lifecycle": false, "document-versions": false,
     });
     expect(prepareProjectDeployment(document).workers.map(worker => worker.type)).toEqual(["exchange", "teams"]);
+  });
+
+  it("accepts resource names for the foundation and worker.identity, and explains the choice between worker.identity and worker.identityName", () => {
+    const raw = structuredClone(documentFixture()) as Record<string, any>;
+    const { exchange } = raw.tenants[0].services;
+    exchange.worker = { appName: "contoso-exchange", identity: "uami-existing" };
+    raw.deployment.foundation = { mode: "existing", environment: "cae-existing", registry: "crexisting01" };
+    delete raw.deployment.azureTenantId;
+    const prepared = prepareProjectDeployment(raw);
+    const exchangeWorker = () => prepareProjectDeployment(raw).workers.find(worker => worker.type === "exchange")!;
+    expect(prepared.settings.foundation).toEqual({
+      mode: "existing",
+      environmentResourceId: `${providers}/Microsoft.App/managedEnvironments/cae-existing`,
+      registryResourceId: `${providers}/Microsoft.ContainerRegistry/registries/crexisting01`,
+    });
+    expect(prepared.settings.azureTenantId).toBe(fixtureTenantId);
+    expect(exchangeWorker().identityResourceId).toBe(`${identities}/uami-existing`);
+    exchange.worker.identityName = "uami-created";
+    expect(() => prepareProjectDeployment(raw)).toThrow("exactly one of worker.identity or worker.identityName");
+    delete exchange.worker.identity;
+    expect(exchangeWorker().identityResourceId).toBe(`${identities}/uami-created`);
+  });
+
+  it("names the keys a user sets when live Teams access or the worker identity is missing", () => {
+    const document = documentFixture();
+    document.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
+    document.deployment!.enableLiveProbes = true;
+    const teams = document.tenants[0]!.services.teams;
+    teams.execution.mode = "live";
+    expect(() => prepareProjectDeployment(document)).toThrow("both bot references (access.bot and access.peerBot)");
+    teams.scenarios["scheduled-meeting"] = false;
+    expect(() => prepareProjectDeployment(document)).toThrow("Live Teams requires access.bot for");
+    teams.access = { botPeerClientId: teams.callTargets[0]!.peerBotClientId };
+    expect(() => prepareProjectDeployment(document)).toThrow("requires both access.peerIdentity and its client ID");
+    teams.access = {
+      botResourceId: "/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-m365-demo/providers/Microsoft.BotService/botServices/primary-bot",
+    };
+    delete teams.worker!.identityResourceId;
+    teams.worker!.identityName = "uami-teams";
+    expect(() => prepareProjectDeployment(document)).toThrow("approved worker.identity;");
+  });
+
+  it("prepares the foundation stage of live Teams meetings before the peer client ID and callback URL exist, which the workers stage still requires", () => {
+    const document = documentFixture();
+    document.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
+    document.deployment!.enableLiveProbes = true;
+    const { teams } = document.tenants[0]!.services;
+    teams.execution.mode = "live";
+    expect(teams.access.botPeerClientId).toBeUndefined();
+    expect(teams.execution.teamsCallingCallbackUrl).toBeUndefined();
+    document.deployment!.stage = "foundation";
+    expect(prepareProjectDeployment(document).workers.find(worker => worker.type === "teams")!.service.mode).toBe("live");
+    document.deployment!.stage = "workers";
+    expect(() => prepareProjectDeployment(document)).toThrow("Live Teams meetings require port 8080");
+  });
+
+  it("prepares the foundation stage of a live certificate worker without its certificate source, which the workers stage still requires", () => {
+    const document = documentFixture();
+    document.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
+    document.deployment!.enableLiveProbes = true;
+    const exchange = document.tenants[0]!.services.exchange;
+    exchange.execution.mode = "live";
+    exchange.execution.graphAuthentication = "certificate";
+    document.deployment!.stage = "foundation";
+    expect(prepareProjectDeployment(document).workers.find(worker => worker.type === "exchange")!.service.mode).toBe("live");
+    document.deployment!.stage = "workers";
+    expect(() => prepareProjectDeployment(document)).toThrow("Hosted Graph certificates require");
   });
 
   it("does not create workers or reporting groups for disabled selections", () => {

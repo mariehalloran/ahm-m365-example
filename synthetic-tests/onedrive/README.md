@@ -21,18 +21,22 @@ Source tests do not establish successful live access or ingestion; see
    and, separately, `Files.ReadWrite.AppFolder` for app-folder execution.
    Bulk setup grants **write on each dedicated folder**; the worker never grants
    itself access or requests broader permissions.
-3. Use [`npm run onedrive:setup`](../../docs/onedrive-setup.md) with a separate,
-   approved administrator identity to plan, then apply folder creation and scoped
-   grants for **all configured accounts**. It discovers real drive/folder IDs,
-   checkpoints verified bindings into the same `monitoring.config.json`, and safely
-   resumes partial runs. No manual per-account IDs/grants are required.
+3. Run `npm run setup`: it looks up each account's user ID from its `userPrincipalName`
+   into the gitignored `.env` next to `monitoring.config.json`
+   (`<TENANT>__<TARGET>__USER_ID`). Then use
+   [`npm run onedrive:setup`](../../docs/onedrive-setup.md), with a separate, approved
+   administrator identity, to plan and then apply folder creation and scoped grants for
+   **all configured accounts**; `npm run setup` does not do that. It discovers the real
+   drive and folder IDs, writes the verified bindings to the same `.env` (`…__DRIVE_ID`
+   and `…__FOLDER_ID`), and safely resumes partial runs. No manual per-account IDs or
+   grants are required.
 4. [Size the service's concurrency/cycle budget and report TTL](../../docs/onedrive-setup.md#size-the-worker-for-hundreds-of-accounts)
    in its `execution` block.
 5. Deploy the updated worker with `execution.mode: "live"` and
    `deployment.enableLiveProbes: true` (hosted workers then receive
    `ENABLE_LIVE_M365=true`); verify real operations, cleanup and accepted reports.
 
-Service block example (`tenants[].services.onedrive`); placeholders are not live resource IDs:
+Service block example (`tenants[].services.onedrive`; the address is a placeholder):
 
 ```json
 {
@@ -44,7 +48,6 @@ Service block example (`tenants[].services.onedrive`); placeholders are not live
   },
   "targets": [{
     "id": "onedrive-probe-001",
-    "userId": "11111111-1111-4111-8111-111111111111",
     "userPrincipalName": "dedicated-onedrive@example.invalid",
     "folderName": "AHM-Synthetic-Tests",
     "restoreVersion": false
@@ -52,7 +55,10 @@ Service block example (`tenants[].services.onedrive`); placeholders are not live
 }
 ```
 
-The setup command fills `driveId` and `folderId` after verifying the folder grant.
+`npm run setup` writes `userId`, and the setup command writes `driveId` and `folderId`
+after verifying the folder grant, all to `.env`; leave them out of the config. Deploy and
+every TypeScript command fill them in by target ID
+([generated IDs](../../docs/deployment.md#generated-ids-in-env)).
 It supports up to 1,000 selected accounts; runtime concurrency and cycle budgets
 remain bounded and must be sized deliberately. Setup credentials are not worker
 credentials. The runtime probe does not discover or mutate the drive root.
@@ -127,9 +133,9 @@ SharePoint workload.
 There is no broad credential/permission fallback or recipient identity substitution.
 Optional stable Service Health uses the distinct `OneDriveForBusiness` /
 `Microsoft OneDrive` overview and matching issues, never SharePoint status.
-Approve `ServiceHealth.Read.All` separately. A configured `providerClientId` selects
-the approved provider application through worker-UAMI federation; it needs its
-own trust for this service identity. The independent provider lane defaults to
+Approve `ServiceHealth.Read.All` separately. The tenant's `providerClientId`, inherited
+once `serviceHealth` is on, selects the approved provider application through
+worker-UAMI federation; it needs its own trust for this service identity. The independent provider lane defaults to
 300 seconds and reports only to suppressed `onedrive-service-health`, without
 changing synthetic success. Simulation keeps `execution.serviceHealth: false`; set it
 to `true` (with root `serviceHealth.enabled`) to collect. OneDrive beta activity

@@ -15,7 +15,9 @@ const messageSchema = z.object({
 });
 const messagesSchema = z.object({
   value: z.array(messageSchema).max(50),
-  "@odata.nextLink": z.string().min(1).max(8192).optional(),
+  // Graph's opaque continuation token grows with channel history (about 5.5 KB when first observed, over 8 KB
+  // after a day of retained posts), so the bound only guards against absurd values; the page itself is capped.
+  "@odata.nextLink": z.string().min(1).max(65536).optional(),
 });
 
 function nextPagePath(value: string, messagesPath: string): string {

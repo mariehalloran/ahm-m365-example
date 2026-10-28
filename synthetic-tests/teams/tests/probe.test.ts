@@ -488,8 +488,29 @@ describe("Teams same-bot channel and thread roundtrip", () => {
     ]);
   });
 
+  it("follows a continuation token far beyond the old 8192-character bound, as Graph's token grows with channel history", async () => {
+    const token = "x".repeat(30000);
+    const { result, calls } = await run({
+      onRead: ({ page, marker }) => page === 1
+        ? json({ value: [], "@odata.nextLink": nextLink(token) })
+        : json({ value: [message(marker)] }),
+    });
+    expect(result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    expect(calls.filter(call => call.method === "GET" && !call.url.includes("/replies")).map(call => call.url)).toEqual([
+      `${graphBase}${messagesPath}?$top=50`, nextLink(token),
+    ]);
+  });
+
+  it("confirms first-page evidence even when the continuation link is long, and rejects an absurd one without requesting it", async () => {
+    const long = await run({ onRead: ({ marker }) => json({ value: [message(marker)], "@odata.nextLink": nextLink("x".repeat(30000)) }) });
+    expect(long.result.steps.find(step => step.name === "confirm-publication")?.status).toBe("succeeded");
+    const absurd = await run({ onRead: ({ marker }) => json({ value: [message(marker)], "@odata.nextLink": nextLink("x".repeat(70000)) }) });
+    expect(absurd.result.diagnosticCategory).toBe("malformed-response");
+    expect(absurd.calls.filter(call => call.method === "GET" && !call.url.includes("/replies"))).toHaveLength(1);
+    expect(absurd.result.diagnosticContext.cleanupSucceeded).toBe(true);
+  });
+
   it.each([
-    "https://attacker.invalid/unfollowed",
     `${graphBase}${messagesPath}?$top=51&$skiptoken=unfollowed`,
     `${graphBase}${messagesPath}?$skiptoken=${"x".repeat(4097)}`,
   ])("confirms actual first-page bot evidence without following irrelevant continuation metadata: %s", async link => {

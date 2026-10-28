@@ -1,6 +1,7 @@
 import { ConfigurationError } from "./config.js";
-import { probeServices, testTypes, type TestType } from "./contracts.js";
-import type { ProjectDocument } from "./project-config.js";
+import { probeServices, testTypes, type SyntheticResult, type TestType } from "./contracts.js";
+import type { ResultContext } from "./otel.js";
+import type { ProjectConfig, ProjectDocument } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 
 type TenantInventory = ProjectDocument["tenants"][number];
@@ -114,4 +115,34 @@ export function reportingGroups(document: ProjectDocument) {
     const scopes = group.members.flatMap(memberScopes);
     return scopes.length ? [{ id: group.id, displayName: group.displayName, scopes }] : [];
   });
+}
+
+// The accounts a result exercised: the Exchange initiating mailbox and its recipient, or the OneDrive owner.
+// Teams participants are bots, not users.
+function resultAccounts(services: ProjectConfig["services"], result: SyntheticResult): Pick<ResultContext, "user" | "peer"> {
+  switch (probeServices[result.testType].service) {
+    case "exchange": {
+      const target = services.exchange.targets.find(target => target.id === result.testId);
+      return {
+        ...(target?.mailbox ? { user: target.mailbox } : {}),
+        ...(target?.recipientMailbox ? { peer: target.recipientMailbox } : {}),
+      };
+    }
+    case "onedrive": {
+      const user = services.onedrive.targets.find(target => target.id === result.testId)?.userPrincipalName;
+      return user ? { user } : {};
+    }
+    case "teams": return {};
+  }
+}
+
+/** What the OTEL logs say about a result: its tenant, the account it exercised and every group its target belongs to. */
+export function resultContext(project: ProjectConfig, result: SyntheticResult): ResultContext {
+  const { service } = probeServices[result.testType];
+  return {
+    tenant: project.tenant.id,
+    ...resultAccounts(project.services, result),
+    groups: project.groups.filter(group => group.targetIds[service].includes(result.testId))
+      .map(({ id, displayName }) => ({ id, displayName })),
+  };
 }

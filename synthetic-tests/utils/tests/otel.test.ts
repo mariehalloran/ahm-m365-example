@@ -3,13 +3,15 @@ import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import {
   AzureMonitorLogExporter, AzureMonitorMetricExporter, type AzureMonitorExporterOptions,
 } from "@azure/monitor-opentelemetry-exporter";
-import { InMemoryLogRecordExporter } from "@opentelemetry/sdk-logs";
+import { InMemoryLogRecordExporter, type LogRecordExporter } from "@opentelemetry/sdk-logs";
 import { AggregationTemporality, InMemoryMetricExporter, type ResourceMetrics } from "@opentelemetry/sdk-metrics";
 import { createProbeTelemetry, validateConnectionString, type AzureExporterFactory } from "../src/azure-monitor.js";
-import { createResultTelemetry, TelemetryExportError } from "../src/otel.js";
+import { resultContext } from "../src/groups.js";
+import { createResultTelemetry, TelemetryExportError, type ResultContext } from "../src/otel.js";
 import { baseResult, simulate } from "../src/probes.js";
-import { isReportedStep, probeServices, testTypes, type SyntheticResult } from "../src/contracts.js";
-import { liveTenantEnv, projectFixture } from "./fixtures.js";
+import { isReportedStep, probeServices, testTypes, type SyntheticResult, type TestType } from "../src/contracts.js";
+import { checkedInDocument, documentFixture, liveTenantEnv, projectFixture } from "./fixtures.js";
+import { selectTenant, serviceExecution, type ProjectConfig } from "../src/project-config.js";
 import { parseServiceConfig } from "../src/service-config.js";
 import { runServiceWorker } from "../src/worker.js";
 
@@ -375,5 +377,281 @@ describe("worker health-report independence", () => {
       signalName: "microsoft-reported-service-status", healthState: "Healthy", value: 100,
     });
     expect(events.emit).toHaveBeenCalledWith("telemetry-output-failed", expect.any(Object));
+  });
+});
+
+type LogRow = { body: unknown; attributes: Record<string, unknown> };
+const stepRows = (rows: LogRow[], step: string) =>
+  rows.filter(row => row.body === "synthetic-step" && row.attributes["probe.step"] === step);
+const resultRows = (rows: LogRow[]) => rows.filter(row => row.body === "synthetic-result");
+const groupIdentities = (rows: LogRow[]) =>
+  rows.map(row => [row.attributes["monitoring.group"], row.attributes["monitoring.group_name"]]);
+const reportedSteps = ["create-draft", "send", "confirm-delivery"] as const;
+
+async function recordLogs(result: SyntheticResult, context?: ResultContext) {
+  const sinks = exporters();
+  const telemetry = createResultTelemetry(sinks, output());
+  try {
+    telemetry.record(result, "live", context);
+    await telemetry.forceFlush();
+    return {
+      rows: [...sinks.logs.getFinishedLogRecords()] as LogRow[],
+      metrics: sinks.metrics.getMetrics().flatMap(batch => batch.scopeMetrics.flatMap(scope => scope.metrics)),
+    };
+  } finally { await telemetry.shutdown(); }
+}
+
+function failedWithDetail(): SyntheticResult {
+  const result = sample();
+  result.steps = result.steps.map(step =>
+    step.name === "send" && step.status === "failed" ? { ...step, detail: "schema:value.0.id(invalid_type)" } : step);
+  result.diagnosticContext = { httpStatus: 403 };
+  return result;
+}
+
+describe("log attributes for group, impacted user and error detail", () => {
+  const groups = [
+    { id: "united-kingdom-users", displayName: "United Kingdom Users" },
+    { id: "united-states-users", displayName: "United States Users" },
+    { id: "everyone", displayName: "Everyone" },
+  ];
+  const context: ResultContext = {
+    tenant: "consto", user: "test-user-4@example.invalid", peer: "test-user-5@example.invalid", groups: groups.slice(0, 2),
+  };
+
+  it("emits one step record and one result record per group the target belongs to, in configured order", async () => {
+    const { rows } = await recordLogs(sample(), context);
+    expect(rows.filter(row => row.body === "synthetic-step")).toHaveLength(reportedSteps.length * 2);
+    expect(resultRows(rows)).toHaveLength(2);
+    const expected = [
+      ["united-kingdom-users", "United Kingdom Users"], ["united-states-users", "United States Users"],
+    ];
+    for (const step of reportedSteps) expect(groupIdentities(stepRows(rows, step))).toEqual(expected);
+    expect(groupIdentities(resultRows(rows))).toEqual(expected);
+  });
+
+  it.each([2, 3])("with %i groups exactly one record per step and result lacks the duplicate marker", async count => {
+    const { rows } = await recordLogs(sample(), { ...context, groups: groups.slice(0, count) });
+    for (const records of [...reportedSteps.map(step => stepRows(rows, step)), resultRows(rows)]) {
+      expect(records).toHaveLength(count);
+      const unmarked = records.filter(row => !("monitoring.group_duplicate" in row.attributes));
+      const marked = records.filter(row => "monitoring.group_duplicate" in row.attributes);
+      expect(unmarked).toHaveLength(1);
+      expect(unmarked[0]?.attributes["monitoring.group"]).toBe("united-kingdom-users");
+      expect(marked).toHaveLength(count - 1);
+      expect(marked.every(row => row.attributes["monitoring.group_duplicate"] === "true")).toBe(true);
+    }
+  });
+
+  it.each([
+    ["a single group", { ...context, groups: groups.slice(0, 1) }, 1],
+    ["no group", { ...context, groups: [] }, 0],
+  ])("emits a single record per step and result for %s and never marks it as a duplicate", async (_label, input, grouped) => {
+    const { rows } = await recordLogs(sample(), input);
+    expect(rows).toHaveLength(reportedSteps.length + 1);
+    for (const row of rows) {
+      expect(row.attributes).not.toHaveProperty("monitoring.group_duplicate");
+      expect(row.attributes["monitoring.tenant"]).toBe("consto");
+      expect("monitoring.group" in row.attributes).toBe(grouped === 1);
+      expect("monitoring.group_name" in row.attributes).toBe(grouped === 1);
+    }
+  });
+
+  it("emits no monitoring attributes when the caller supplies no context", async () => {
+    const { rows } = await recordLogs(sample());
+    expect(rows).toHaveLength(reportedSteps.length + 1);
+    expect(rows.every(row => Object.keys(row.attributes).every(name => !name.startsWith("monitoring.")))).toBe(true);
+  });
+
+  it("attributes the impacted user and peer to every step and result record, omitting what is not set", async () => {
+    const both = await recordLogs(sample(), context);
+    for (const row of both.rows) {
+      expect(row.attributes).toMatchObject({
+        "monitoring.tenant": "consto", "monitoring.user": "test-user-4@example.invalid", "monitoring.peer": "test-user-5@example.invalid",
+      });
+    }
+    const { peer: _peer, ...withoutPeer } = context;
+    for (const row of (await recordLogs(sample(), withoutPeer)).rows) {
+      expect(row.attributes["monitoring.user"]).toBe("test-user-4@example.invalid");
+      expect(row.attributes).not.toHaveProperty("monitoring.peer");
+    }
+    const { user: _user, ...bots } = withoutPeer;
+    for (const row of (await recordLogs(sample(), bots)).rows) {
+      expect(row.attributes).not.toHaveProperty("monitoring.user");
+      expect(row.attributes).not.toHaveProperty("monitoring.peer");
+    }
+  });
+
+  it("puts the value-free detail on failed step records only and the HTTP status and failed step on the result record", async () => {
+    const { rows } = await recordLogs(failedWithDetail(), context);
+    for (const row of stepRows(rows, "send")) {
+      expect(row.attributes).toMatchObject({
+        "probe.step_status": "failed", "probe.diagnostic_category": "send-failure", "probe.detail": "schema:value.0.id(invalid_type)",
+      });
+    }
+    for (const step of ["create-draft", "confirm-delivery"]) {
+      for (const row of stepRows(rows, step)) expect(row.attributes).not.toHaveProperty("probe.detail");
+    }
+    for (const row of resultRows(rows)) {
+      expect(row.attributes).toMatchObject({
+        "probe.success": false, "probe.diagnostic_category": "send-failure", "probe.http_status": 403, "probe.failed_step": "send",
+      });
+      expect(row.attributes).not.toHaveProperty("probe.detail");
+    }
+  });
+
+  it("omits the detail, HTTP status and failed step from records of a healthy result", async () => {
+    const healthy = await simulate({ id: "probe", type: "exchange-mail-flow", cohort: "approved-cohort" }, {
+      config: { SYNTHETIC_SCENARIO: "healthy", PROBE_TIMEOUT_MS: 45000, POLL_INTERVAL_MS: 100 },
+      signal: new AbortController().signal, telemetry: output(), now: () => Date.parse(stamp),
+    });
+    const { rows } = await recordLogs(healthy, context);
+    for (const row of rows) {
+      for (const name of ["probe.detail", "probe.http_status", "probe.failed_step"]) expect(row.attributes).not.toHaveProperty(name);
+    }
+  });
+
+  it("keeps internal authentication and cleanup steps out of the failed step while still reporting the HTTP status", async () => {
+    const result = baseResult({ id: "opaque-id", type: "exchange-mail-flow", cohort: "exchange-global" }, Date.parse(stamp));
+    result.diagnosticCategory = "authentication-failure";
+    result.diagnosticContext = { httpStatus: 401 };
+    result.steps = [
+      { name: "authenticate", status: "failed", observedAt: stamp, durationMs: 10, diagnosticCategory: "authentication-failure", detail: "private" },
+      ...reportedSteps.map(name => ({ name, status: "skipped", observedAt: stamp, reason: "prerequisite-failed" }) as const),
+      { name: "cleanup", status: "skipped", observedAt: stamp, reason: "no-mutation" },
+    ];
+    const { rows } = await recordLogs(result, context);
+    for (const row of resultRows(rows)) {
+      expect(row.attributes).toMatchObject({ "probe.diagnostic_category": "authentication-failure", "probe.http_status": 401 });
+      expect(row.attributes).not.toHaveProperty("probe.failed_step");
+    }
+    expect(JSON.stringify(rows.map(row => row.attributes))).not.toMatch(/authenticate|cleanup-|private/);
+  });
+
+  it("keeps metric dimensions unchanged, free of monitoring attributes and counts each attempt once however many groups", async () => {
+    const { metrics } = await recordLogs(failedWithDetail(), { ...context, groups });
+    const dimensionNames = (name: string) => [...new Set(metrics.find(metric => metric.descriptor.name === name)?.dataPoints
+      .flatMap(point => Object.keys(point.attributes)))].sort();
+    expect(dimensionNames("synthetic.probe.success")).toEqual(["probe.journey", "probe.mode", "probe.outcome", "probe.service"]);
+    expect(dimensionNames("synthetic.probe.duration")).toEqual(["probe.journey", "probe.mode", "probe.outcome", "probe.service"]);
+    expect(dimensionNames("synthetic.step.success")).toEqual(["probe.journey", "probe.mode", "probe.outcome", "probe.service", "probe.step"]);
+    expect(metrics.find(metric => metric.descriptor.name === "synthetic.probe.success")?.dataPoints[0]?.value)
+      .toMatchObject({ count: 1, sum: 0 });
+    expect(metrics.find(metric => metric.descriptor.name === "synthetic.step.success")?.dataPoints).toHaveLength(2);
+    expect(JSON.stringify(metrics)).not.toMatch(/monitoring|test-user|probe\.detail|http_status|failed_step/);
+  });
+});
+
+describe("worker result context", () => {
+  function captureLogs() {
+    const rows: LogRow[] = [];
+    const logs: LogRecordExporter = {
+      export(records, callback) {
+        rows.push(...records.map(record => ({ body: record.body, attributes: { ...record.attributes } })));
+        callback({ code: ExportResultCode.SUCCESS });
+      },
+      forceFlush: async () => undefined,
+      shutdown: async () => undefined,
+    };
+    const metrics = new InMemoryMetricExporter(AggregationTemporality.DELTA);
+    return { rows, createOtel: async () => createResultTelemetry({ logs, metrics }, output()) };
+  }
+  async function runWorker(project: ProjectConfig, type: "exchange" | "teams" | "onedrive") {
+    const capture = captureLogs();
+    const events = output();
+    await runServiceWorker(serviceExecution(project, type), {
+      project: { ...project, otel: { enabled: true, destination: "console" } },
+      once: true, env: {}, telemetry: events, createOtel: capture.createOtel,
+    });
+    return { rows: capture.rows, events };
+  }
+  const centralus = { id: "centralus", displayName: "Central US" };
+  const uksouth = { id: "uksouth", displayName: "UK South" };
+
+  it.each([
+    ["exchange", "exchange-probe-001", { user: "test-user-1@example.invalid", peer: "test-user-2@example.invalid" }, [centralus]],
+    ["exchange", "exchange-probe-002", { user: "test-user-2@example.invalid", peer: "test-user-1@example.invalid" }, [uksouth]],
+    ["onedrive", "onedrive-probe-001", { user: "test-user-1@example.invalid" }, [centralus]],
+    ["onedrive", "onedrive-probe-002", { user: "test-user-2@example.invalid" }, [uksouth]],
+    ["teams", "teams-probe-001", {}, [centralus]],
+    ["teams", "teams-meeting-001", {}, [centralus]],
+  ] as const)("passes the %s target %s's tenant, users and groups to every OTEL log record", async (service, id, accounts, groups) => {
+    const { rows } = await runWorker(selectTenant(documentFixture()), service);
+    const records = rows.filter(row => row.attributes["probe.id"] === id);
+    const journeys = resultRows(records).map(row => row.attributes["probe.journey"]);
+    expect(journeys.length).toBeGreaterThan(0);
+    expect(new Set(journeys).size).toBe(journeys.length);
+    expect(records.length).toBeGreaterThan(journeys.length);
+    for (const row of records) {
+      expect(row.attributes["monitoring.tenant"]).toBe("contoso");
+      expect(row.attributes["monitoring.user"]).toBe("user" in accounts ? accounts.user : undefined);
+      expect(row.attributes["monitoring.peer"]).toBe("peer" in accounts ? accounts.peer : undefined);
+      expect(groupIdentities([row])).toEqual([[groups[0].id, groups[0].displayName]]);
+    }
+  });
+
+  it("writes two records, the second marked as a duplicate, for a user who belongs to two groups", async () => {
+    const document = documentFixture();
+    document.groups.push({ id: "everyone", displayName: "Everyone", accounts: ["test-user-1@example.invalid"], teams: [] });
+    const { rows } = await runWorker(selectTenant(document), "exchange");
+    const mine = resultRows(rows).filter(row => row.attributes["probe.id"] === "exchange-probe-001");
+    const journeys = new Set(mine.map(row => row.attributes["probe.journey"]));
+    expect(mine).toHaveLength(journeys.size * 2);
+    for (const journey of journeys) {
+      const pair = mine.filter(row => row.attributes["probe.journey"] === journey);
+      expect(groupIdentities(pair)).toEqual([["centralus", "Central US"], ["everyone", "Everyone"]]);
+      expect(pair.map(row => row.attributes["monitoring.group_duplicate"])).toEqual([undefined, "true"]);
+      expect(new Set(pair.map(row => row.attributes["monitoring.user"]))).toEqual(new Set(["test-user-1@example.invalid"]));
+    }
+    expect(resultRows(rows).filter(row => row.attributes["probe.id"] === "exchange-probe-002")
+      .every(row => !("monitoring.group_duplicate" in row.attributes))).toBe(true);
+  });
+
+  it("emits a single record without group attributes for a target outside every group", async () => {
+    const document = documentFixture();
+    document.groups = [];
+    const { rows } = await runWorker(selectTenant(document), "exchange");
+    const mine = resultRows(rows).filter(row => row.attributes["probe.id"] === "exchange-probe-001");
+    expect(mine).toHaveLength(new Set(mine.map(row => row.attributes["probe.journey"])).size);
+    for (const row of mine) {
+      expect(row.attributes["monitoring.user"]).toBe("test-user-1@example.invalid");
+      expect(Object.keys(row.attributes).filter(name => name.startsWith("monitoring.group"))).toEqual([]);
+    }
+  });
+
+  it("passes the context to OTEL result recording only and keeps it out of the console results", async () => {
+    const project = { ...selectTenant(documentFixture()), otel: { enabled: true, destination: "console" as const } };
+    const telemetry = { record: vi.fn(), recordDiagnostic: vi.fn(), forceFlush: vi.fn(async () => {}), shutdown: vi.fn(async () => {}) };
+    const events = output();
+    await runServiceWorker(serviceExecution(project, "exchange"), {
+      project, once: true, env: {}, telemetry: events, createOtel: async () => telemetry,
+    });
+    expect(telemetry.record).toHaveBeenCalledWith(
+      expect.objectContaining({ testId: "exchange-probe-001" }), "simulation", {
+        tenant: "contoso", user: "test-user-1@example.invalid", peer: "test-user-2@example.invalid", groups: [centralus],
+      },
+    );
+    expect(telemetry.record).toHaveBeenCalledTimes(14);
+    const consoleResults = events.emit.mock.calls.filter(([event]) => event === "synthetic-result");
+    expect(consoleResults).toHaveLength(14);
+    expect(JSON.stringify(consoleResults)).not.toMatch(/monitoring|Central US|centralus/);
+  });
+
+  it("carries the checked-in group ids and display names exactly as configured", async () => {
+    const project = selectTenant(await checkedInDocument());
+    const uk = [["united-kingdom-users", "United Kingdom Users"]];
+    const us = [["united-states-users", "United States Users"]];
+    const targets: [TestType, string, string[][]][] = [
+      ["exchange-mail-flow", "exchange-probe-001", us], ["exchange-meeting", "exchange-probe-002", uk],
+      ["exchange-reply", "exchange-probe-003", uk], ["onedrive-roundtrip", "onedrive-probe-002", us],
+      ["teams-channel-message", "teams-probe-001", us], ["teams-channel-message", "teams-probe-002", uk],
+      ["teams-call", "teams-bot-meeting-001", us],
+    ];
+    for (const [type, id, expected] of targets) {
+      const result = baseResult({ id, type, cohort: "test" }, Date.parse(stamp));
+      const { rows } = await recordLogs(result, resultContext(project, result));
+      expect(groupIdentities(resultRows(rows))).toEqual(expected);
+      expect(resultRows(rows).every(row => row.attributes["monitoring.tenant"] === project.tenant.id)).toBe(true);
+    }
   });
 });

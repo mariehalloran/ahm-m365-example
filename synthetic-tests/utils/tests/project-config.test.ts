@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyProjectConfig, parseProjectDocument, readProjectDocument, readProjectService, selectTenant, serviceExecution,
+  applyProjectConfig, parseProjectDocument, readProjectService, selectTenant, serviceExecution,
 } from "../src/project-config.js";
+import { exchangeJourneyMilliseconds } from "../src/contracts.js";
+import { executionLanes } from "../src/execution-lanes.js";
 import { parseServiceConfig, serviceProbes, serviceSettings } from "../src/service-config.js";
-import { documentFixture, executionFixture, liveTenantEnv, multiTenantFixture, projectFixture, parseTestProjectConfig as parseProjectConfig } from "./fixtures.js";
+import {
+  checkedInDocument, documentFixture, executionFixture, liveTenantEnv, multiTenantFixture, projectFixture,
+  parseTestProjectConfig as parseProjectConfig,
+} from "./fixtures.js";
 import { runServiceWorker } from "../src/worker.js";
 import { baseResult } from "../src/probes.js";
 import { validateProjectTenantBinding } from "../src/runtime.js";
@@ -24,20 +29,39 @@ const service = parseServiceConfig({
 
 describe("single root document", () => {
   it("accepts the checked-in monitoring.config.json as written and applies the schema defaults", async () => {
-    const document = await readProjectDocument("../monitoring.config.json");
+    const document = await checkedInDocument();
     const services = document.tenants[0]!.services;
     expect(services.exchange.execution).toMatchObject({
-      maxConcurrentProbes: 3, cycleTimeoutSeconds: 170, graphAuthentication: "managed-identity",
+      maxConcurrentProbes: 6, cycleTimeoutSeconds: 170, graphAuthentication: "managed-identity",
       teamsAuthentication: "bot", botAuthentication: "managed-identity", exchangeCleanupEnabled: true,
     });
     expect(services.exchange.access).toEqual({});
     expect(services.teams.worker).toMatchObject({ cpu: 0.25, memory: "0.5Gi" });
     expect(document.deployment).toMatchObject({ stage: "workers", commandTimeoutSeconds: 1800, rolloutTimeoutSeconds: 300 });
-    expect(document.otel).toEqual({ enabled: false, destination: "console" });
-    expect(document.groups.map(group => [group.id, group.accounts, group.teams])).toEqual([
-      ["centralus", ["test-user-1@example.invalid"], ["teams-probe-001", "teams-meeting-001"]],
-      ["uksouth", ["test-user-2@example.invalid"], []],
+    expect(document.otel).toEqual({ enabled: true, destination: "azure-monitor" });
+    expect(document.groups.map(group => [group.id, group.displayName, group.accounts.length, group.teams])).toEqual([
+      ["united-kingdom-users", "United Kingdom Users", 2, ["teams-probe-002"]],
+      ["united-states-users", "United States Users", 2, ["teams-probe-001", "teams-bot-meeting-001"]],
     ]);
+    expect(services.teams.targets.map(target => [target.id, target.channelName])).toEqual([
+      ["teams-probe-001", "General"], ["teams-probe-002", "United Kingdom Users"],
+    ]);
+  });
+
+  it("runs the checked-in Exchange lanes: 15-second mail and a 30-second extended lane above the 15-second service timeout", async () => {
+    const project = selectTenant(await checkedInDocument());
+    const exchange = serviceExecution(project, "exchange");
+    expect(exchange).toMatchObject({ mode: "live", timeoutSeconds: 15, maxConcurrentProbes: 6, cycleTimeoutSeconds: 170 });
+    expect(executionLanes(exchange).map(lane => [lane.name, lane.intervalSeconds, lane.timeoutSeconds, lane.journeys.length]))
+      .toEqual([["mail", 60, 15, 1], ["extended", 300, 30, 6]]);
+    // The live budget accepted above covers the slowest lane plus the bounded cycle and reporting budget.
+    expect(project.healthModel.reportTtlMinutes * 60).toBeGreaterThan(300 + exchange.cycleTimeoutSeconds + (project.otel.enabled ? 54 : 42));
+    const env = { ENABLE_LIVE_M365: "true", ENABLE_BETA_SERVICE_ACTIVITY: "true" };
+    const probes = serviceSettings(exchange, env, project.services.exchange.scenarios).probes;
+    expect(probes).toHaveLength(7 * project.services.exchange.targets.length);
+    for (const probe of probes) {
+      expect(exchangeJourneyMilliseconds(probe.type)).toBe(["exchange-reply", "exchange-meeting"].includes(probe.type) ? 30000 : 15000);
+    }
   });
 
   it("selects the only tenant without an alias and demands one when there are several", () => {
@@ -79,13 +103,15 @@ describe("single root document", () => {
   });
 
   it("reads one tenant's service from the root file, defaulting to the only tenant", async () => {
-    const { project, service: exchange } = await readProjectService("exchange", "../monitoring.config.json");
-    expect(project.tenant.id).toBe("contoso");
+    const document = await checkedInDocument();
+    const project = selectTenant(document);
+    const exchange = serviceExecution(project, "exchange");
+    expect(project.tenant.id).toBe("consto");
     expect(project.multiTenant).toBe(false);
-    expect(project.groups.map(group => group.id)).toEqual(["centralus", "uksouth"]);
-    expect(exchange).toMatchObject({ type: "exchange", enabled: true, mode: "simulation", cohort: "exchange-global" });
-    expect(exchange.targets).toHaveLength(2);
-    await expect(readProjectService("teams", "../monitoring.config.json", "missing")).rejects.toThrow("Unknown --tenant");
+    expect(project.groups.map(group => group.id)).toEqual(["united-kingdom-users", "united-states-users"]);
+    expect(exchange).toMatchObject({ type: "exchange", enabled: true, mode: "live", cohort: "exchange-global" });
+    expect(exchange.targets).toHaveLength(3);
+    expect(() => selectTenant(document, "missing")).toThrow("Unknown --tenant");
     await expect(readProjectService("exchange", "utils/tests/missing-project.json")).rejects.toThrow("Cannot read the project config");
   });
 
@@ -162,7 +188,9 @@ describe("single root document", () => {
     expect(JSON.stringify(telemetry.emit.mock.calls)).not.toContain("probe-0@example.invalid");
     project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
     expect(() => applyProjectConfig(project, { ...service, mode: "live" })).toThrow("needs cycleTimeoutSeconds");
-    const budget = { ...service, mode: "live" as const, maxConcurrentProbes: 20, cycleTimeoutSeconds: 1000 };
+    const budget = { ...service, mode: "live" as const, maxConcurrentProbes: 20, cycleTimeoutSeconds: 1300 };
+    // The 30-second extended lane (reply and meeting) sets the requirement: 600 attempts / 20 = 30 waves of 30 + 12 seconds.
+    expect(() => applyProjectConfig(project, { ...budget, cycleTimeoutSeconds: 1259 })).toThrow("lane extended needs cycleTimeoutSeconds >= 1260");
     expect(() => applyProjectConfig(project, budget)).toThrow("TTL");
     project.healthModel.reportTtlMinutes = 30;
     expect(applyProjectConfig(project, budget).targets).toHaveLength(100);

@@ -7,8 +7,8 @@ separate user-assigned managed identities (UAMIs). Only selected live Teams call
 enables public HTTPS ingress; Exchange, OneDrive and messaging-only Teams stay private.
 The checked-in config selects all three supported services.
 OneDrive reuses the environment/registry and receives its own UAMI
-(`worker.identityName`, `uami-<healthModel.name>-onedrive` in the checked-in config),
-worker and ingest-only service-model assignment.
+(`uami-<healthModel.name>-onedrive` in the checked-in config, an existing one named in
+`worker.identity`), worker and ingest-only service-model assignment.
 It adds no bot, user sign-in, storage account or M365 grants. Its optional stable
 provider uses the distinct Microsoft OneDrive service entry, not SharePoint.
 See the [OneDrive setup and exact permission boundary](../onedrive/README.md).
@@ -30,28 +30,31 @@ Everything comes from the single root [monitoring.config.json](../../monitoring.
 the [`deployment` section](../../docs/deployment.md#the-deployment-section) and each
 service's `worker` and `access` blocks under `tenants[]`. There is no parameters file
 to prepare; `npm run deploy` hands the whole normalized config to this template as
-`projectConfig`. It holds IDs and references, never private keys or user tokens.
+`projectConfig`, with names expanded to full resource IDs, defaults applied and the
+`.env` IDs filled in ([what the config holds](../../docs/deployment.md#what-the-config-holds)).
+It holds names and a few IDs, never private keys or user tokens.
 
 | `worker` field | Meaning |
 | --- | --- |
 | `appName` | Container App name, unique across all workers |
-| `identityName` or `identityResourceId` | Exactly one: a UAMI the foundation creates, or an existing approved one, which a live worker requires |
-| `identityClientId` | Optional; must match the existing `identityResourceId` |
+| `identityName` or `identity` | Exactly one: the name of a UAMI the foundation creates, or the name (or full resource ID) of an existing approved one, which a live worker requires |
+| `identityClientId` | Optional; must match the existing `identity`'s client ID |
 | `cpu`, `memory` | Default 0.25 and `0.5Gi`; memory in Gi must equal twice the CPU |
 
-For selected live Teams meeting calling, the Teams service `access` block must provide
-`botPeerClientId` and `botPeerManagedIdentityResourceId` for the **existing approved**
-peer UAMI, plus `botResourceId` and `botPeerResourceId` for the two existing bot
-registrations, which deployment checks before changing anything. All
-`callTargets[].peerBotClientId` values must match the peer. The worker template
+For selected live Teams meeting calling, the Teams service `access` block must name
+`peerIdentity`, the **existing approved** peer UAMI, plus `bot` and `peerBot`, the two
+existing bot registrations; deployment checks them before changing anything. The peer's
+client ID comes from `.env`, where `npm run setup` looks it up from `peerIdentity`, and
+every call target's `peerBotClientId` (which defaults to it) must match. The worker template
 attaches that identity alongside the unchanged primary reporting/image-pull UAMI and
 supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams, simulation and calling-disabled
 workers receive neither. It creates no peer, Azure Bot or Graph grants. Both bots
 require separately approved `Calls.JoinGroupCall.All` and the same `/api/calls`
-callback, on existing port 8080 with one replica. See
+callback (`execution.teamsCallingCallbackUrl`, which setup writes to `.env`), on existing
+port 8080 with one replica. See
 [meeting setup](../teams/README.md#two-bot-meeting-setup).
 
-The checked-in config remains a safe simulation. A live config attempts real
+A `live` service attempts real
 authentication/operations: incomplete setup produces observed Unhealthy
 journeys, not simulated success. Actions that never ran remain Unknown. Live
 execution needs `execution.mode: "live"` and `deployment.enableLiveProbes: true`;
@@ -75,8 +78,16 @@ runs `what-if` for each before applying; see its
 admin credentials and anonymous pull. Each UAMI receives AcrPull on that registry and
 ingest-only permission on its own service model, not model administration.
 
+Microsoft 365 access is prepared separately by `npm run setup`
+([what it covers](../../docs/deployment.md#set-up-microsoft-365-with-one-script)). Its
+reply-seed step builds the worker image in this registry and runs a temporary Container
+Apps job in this environment, so it needs Contributor on the resource group and ACR build
+rights.
+
 To reuse an approved environment and registry, set `deployment.foundation` to
-`{ "mode": "existing", "environmentResourceId": "...", "registryResourceId": "..." }`.
+`{ "mode": "existing", "environment": "<name or ID>", "registry": "<name or ID>" }`: a bare
+name is a resource in the health model's resource group, and a full resource ID reaches
+another group or subscription.
 This leaves their configuration untouched while workers and the scoped identity and
 report assignments update; `{ "mode": "create", ... }` creates them.
 
@@ -86,8 +97,9 @@ report assignments update; `{ "mode": "create", ... }` creates them.
 skips the build and requires that digest in the configured registry. The non-root
 runtime image contains only production dependencies and compiled code, not the config
 or credentials. Each worker mounts the whole root config read-only at
-`/etc/probe/monitoring.config.json`; verify the actual ready revision, image and
-config after every rollout.
+`/etc/probe/monitoring.config.json`, with names expanded, defaults applied and the `.env`
+IDs already filled in by `npm run deploy`, so workers need no `.env`; verify the actual
+ready revision, image and config after every rollout.
 
 ### Excluding a previously deployed service
 

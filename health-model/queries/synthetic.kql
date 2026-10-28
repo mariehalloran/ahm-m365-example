@@ -4,6 +4,7 @@ AppTraces
 | where Message == '__MESSAGE__'
 | where tostring(Properties['probe.schema_version']) == '2.0'
 | where tostring(Properties['probe.mode']) == 'live'
+| where tostring(Properties['monitoring.group_duplicate']) != 'true'
 | where tostring(Properties['probe.service']) == '__SERVICE__'
 | where tostring(Properties['probe.journey']) == '__JOURNEY__'
 | where '__STEP__' == '' or tostring(Properties['probe.step']) == '__STEP__'

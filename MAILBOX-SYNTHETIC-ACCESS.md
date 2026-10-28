@@ -43,7 +43,7 @@ Use **Exchange Online RBAC for Applications only**, scoped to the dedicated part
 | `Application Mail.Send` | Submit the test draft as that mailbox |
 | `Application Calendars.ReadWrite` | Create/read/update/delete recurring events, invite/accept/observe/cancel meetings; needed only for selected calendar journeys |
 
-The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles only to approved A/B participants. Configure root `mailbox`, `recipientMailbox`, and `distributionList: { address, expectedRecipients }`; the worker neither discovers members nor adds grants. Verify actual Graph access as well as RBAC diagnostics after propagation, including denial of an unrelated control account. See [seven journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
+The administrator registers the existing managed identity's service-principal reference in Exchange, creates a resource scope, and assigns those roles only to approved A/B participants. Configure root `mailbox`, `recipientMailbox`, and `distributionList: { address, expectedRecipients }`; the worker neither discovers members nor adds grants. After this one-time approval, `npm run setup` extends the same scope to every configured mailbox (add-only) and creates the distribution list with its expected recipients ([setup](./docs/deployment.md#set-up-microsoft-365-with-one-script)). Verify actual Graph access as well as RBAC diagnostics after propagation, including denial of an unrelated control account. See [seven journeys, APIs and cleanup rules](./synthetic-tests/exchange/README.md).
 
 **Do not additionally grant tenant-wide Entra Microsoft Graph `Mail.ReadWrite`, `Mail.Send`, or `Calendars.ReadWrite` app roles to this identity.** They are an independent authorization path. Entra and Exchange grants are a **union**, not an intersection; scoped Exchange RBAC cannot restrict an additional broad Entra grant.
 
@@ -67,13 +67,13 @@ An authorized Entra administrator assigns the selected permissions to the servic
 
 Only request the rows actually enabled. These permissions read provider context and do not grant mailbox message access. The prohibition on unscoped Entra `Mail.ReadWrite`/`Mail.Send` grants still applies; do not add those mail roles while configuring provider reads.
 
-Stable Service Health reports exact overview status directly to the single impact-suppressed `exchange-service-health` entity using `microsoft-reported-service-status` (`tenant-<tenant id>--microsoft-reported-service-status` when the config has several tenants): 100 healthy, 50 degraded, 0 interruption. Issues and five approved beta signals share its External Reports group; there are no per-API child entities. Failed/missing/unknown overviews produce Unknown without a value. Collection has an independent provider lane even when journey initialization fails. Beta functions are explicitly opt-in; counts and percentages remain diagnostic unless customer thresholds are configured. They never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available. See [exact provider contracts](./docs/provider-monitoring.md).
+Stable Service Health reports exact overview status directly to the single impact-suppressed `exchange-service-health` entity using `microsoft-reported-service-status` (`tenant-<tenant id>--microsoft-reported-service-status` when the config has several tenants): 100 healthy, 50 degraded, 0 interruption. Issues and five approved beta signals are reported on the same entity; there are no per-API child entities. Failed/missing/unknown overviews produce Unknown without a value. Collection has an independent provider lane even when journey initialization fails. Beta functions are explicitly opt-in; counts and percentages remain diagnostic unless customer thresholds are configured. They never contribute to synthetic/step success or Experience rollup. Microsoft documents `/beta` usage as unsupported in production applications. Validate tenant eligibility and permission availability rather than assuming a successful token means the report is available. See [exact provider contracts](./docs/provider-monitoring.md).
 
 ## 3. Infrastructure and non-secret handoff IDs
 
 The [shared hosting guide](./synthetic-tests/infra/README.md) explains how to obtain each service identity's non-secret handoff values:
 
-- `identityResourceId`: the Azure resource attached to the Container App.
+- The identity's name (`worker.identity` in the config, or `worker.identityName` when the deployment creates it) and its Azure resource ID: the resource attached to the Container App.
 - `clientId`: select this identity in the worker and use it as Exchange `-AppId`.
 - `principalId`: the identity's **enterprise service-principal object ID**, used as Exchange `-ObjectId`/role-assignment principal.
 - `tenantId`: must be the same approved Microsoft 365 tenant.
@@ -85,6 +85,8 @@ The foundation stage (`npm run deploy` with `deployment.stage: "foundation"`) cr
 ## 4. Illustrative Exchange administrator setup
 
 These are **reviewable examples, not commands that have been executed**. Supply approved values and review any preexisting scope/role assignments before applying. An Exchange administrator with Organization Management or suitable delegated application-role assignment rights performs these changes; the worker never runs Exchange administration cmdlets.
+
+This is the one-time approval of the worker identity; `npm run setup` does not create it. Keep all three role assignments on the single scope below and build its filter only from `PrimarySmtpAddress -eq` clauses joined with `-or`, as shown: setup later adds every configured mailbox to that scope (add-only, preserving existing clauses) and stops, saying so, if the identity's roles span more than one scope or the filter has any other clause. Exchange's recipient-filter length limit applies.
 
 Connect using the administrator's normal approved authentication, and verify the actual Exchange session tenant. A cached home-tenant session can differ from the selected Azure subscription.
 
@@ -130,7 +132,7 @@ Test-ServicePrincipalAuthorization -Identity $principalId -Resource $recipientMa
 Test-ServicePrincipalAuthorization -Identity $principalId -Resource $controlMailbox
 ```
 
-Each allowed participant must show the selected roles in scope, and the control mailbox must be out of scope. This example covers an approved A/B pair; include every other explicitly selected expected recipient in the reviewed scope. Omit `Application Calendars.ReadWrite` when both calendar journeys are disabled. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
+Each allowed participant must show the selected roles in scope, and the control mailbox must be out of scope. This example covers an approved A/B pair; include every other explicitly selected expected recipient in the reviewed scope (after this approval, `npm run setup` adds the configured mailboxes). Omit `Application Calendars.ReadWrite` when both calendar journeys are disabled. Preview actual scope membership and audit other grants as well; do not assume the scope name makes it narrow.
 
 New test tenants may require the one-time, tenant-wide `Enable-OrganizationCustomization` prerequisite. Check `Get-OrganizationConfig`'s `IsDehydrated` property, obtain tenant-owner approval, and run the command only when it is `True`. Wait for completion before retrying the scoped setup; do not replace scoped grants with broader permissions.
 
@@ -158,7 +160,7 @@ AZURE_CLIENT_ID=<user-assigned managed identity clientId>
 
 The worker uses `ManagedIdentityCredential({ clientId })` for `https://graph.microsoft.com/.default`. It does not fall back to a developer login, system identity, application secret, or certificate if managed identity fails.
 
-Live execution still requires dedicated target configuration, `execution.mode: "live"`, `enabled: true`, and `deployment.enableLiveProbes: true` (hosted workers then receive `ENABLE_LIVE_M365=true`; a local run must export it). Start with a single manually initiated run after authorization checks. Simulation stays entirely local and acquires no managed-identity token.
+Live execution still requires dedicated target configuration, the approved identity named in `worker.identity`, `execution.mode: "live"`, `enabled: true`, and `deployment.enableLiveProbes: true` (hosted workers then receive `ENABLE_LIVE_M365=true`; a local run must export it). Start with a single manually initiated run after authorization checks. Simulation stays entirely local and acquires no managed-identity token.
 
 For an approved **cross-tenant or local** M365 application, choose `graphAuthentication: certificate` explicitly and provide `M365_TENANT_ID`, `M365_CLIENT_ID`, and `M365_CLIENT_CERTIFICATE_PATH`, or the matching `access.m365TenantId`, `m365ClientId` and `m365CertificatePath` references. The public certificate belongs on the M365 app registration; its Enterprise application Object ID is the Exchange `$principalId`. Graph no longer reads `AZURE_*` certificate settings. A normal laptop also needs independently selected Azure report certificate authentication (`healthReportAuthentication: certificate` with `AZURE_*`); it does not expose the Container App managed-identity endpoint. Neither certificate option is a silent fallback.
 
@@ -168,9 +170,9 @@ Same-tenant hosted Exchange remains keyless by default. The shared hosting templ
 
 The [Exchange service](./synthetic-tests/exchange/) owns its worker, journeys, action functions and tests; its settings live in the root [monitoring.config.json](./monitoring.config.json). Reusable HTTP, authentication, scheduling, console diagnostics and reporting utilities live in [utils/](./synthetic-tests/utils/).
 
-The seven journeys are send/verify, draft lifecycle, attachment delivery, reply delivery, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. The reply journey retains a dedicated received starter message per approved pair, provisioned outside timed attempts with separately visible setup evidence. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
+The seven journeys are send/verify, draft lifecycle, attachment delivery, reply delivery, distribution-list fanout, recurring calendar, and meeting invitation/acceptance/cancellation. The reply journey retains a dedicated received starter message per approved pair, provisioned outside timed attempts (by `npm run setup`, into `.env`) with separately visible setup evidence. Each executed business action contributes its own 1/0 success and duration to cycle aggregation. A blocked action is skipped, not a fabricated failed request; for example, failed authentication must not be reported as a failed send that never happened.
 
-The root health model references an independent Exchange model. Its seven journey entities receive whole-journey reports and 25 business-step children receive action reports through **External Reports**. Token acquisition and compensating cleanup remain internal; deliberate draft deletion and calendar deletion/cancellation are business steps. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. API-backed dedicated participants do not establish Outlook UI or tenant-wide availability.
+The root health model references an independent Exchange model. Its seven journey entities receive whole-journey reports and 25 business-step children receive action reports. Token acquisition and compensating cleanup remain internal; deliberate draft deletion and calendar deletion/cancellation are business steps. No mailbox inventory is sent to the model or retained between cycles. Reports replace current-cycle aggregates rather than storing full metrics or percentile history; TTL expiry removes signals, not a guaranteed Unhealthy state or alert. API-backed dedicated participants do not establish Outlook UI or tenant-wide availability.
 
 ## 7. Not required by this Exchange test
 

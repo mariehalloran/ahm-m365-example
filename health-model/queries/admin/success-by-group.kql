@@ -1,0 +1,13 @@
+// Success rate of live attempts per group, service and journey, weakest first.
+AppTraces
+| where Message == 'synthetic-result' and tostring(Properties['probe.mode']) == 'live'
+| extend Success = tobool(Properties['probe.success'])
+| where isnotnull(Success)
+| summarize Attempts = count(), Succeeded = countif(Success)
+    by Group = coalesce(tostring(Properties['monitoring.group_name']), '(no group)'),
+    GroupId = tostring(Properties['monitoring.group']),
+    Service = tostring(Properties['probe.service']),
+    Journey = tostring(Properties['probe.journey'])
+| project Group, GroupId, Service, Journey, Attempts, Failures = Attempts - Succeeded,
+    SuccessPercent = round(100.0 * Succeeded / Attempts, 1)
+| order by Group asc, GroupId asc, SuccessPercent asc

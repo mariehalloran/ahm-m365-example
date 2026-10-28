@@ -2,13 +2,13 @@ import { AzureCliCredential, type TokenCredential } from "@azure/identity";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceCredential } from "../../utils/src/auth.js";
+import { bindingKey, saveBindings } from "../../utils/src/bindings.js";
 import { ConfigurationError } from "../../utils/src/config.js";
-import { withProjectCheckpoint } from "../../utils/src/config-checkpoint.js";
 import { consoleTelemetry, type Telemetry } from "../../utils/src/contracts.js";
 import { GraphClient } from "../../utils/src/graph.js";
 import { categoryOf } from "../../utils/src/http.js";
 import { canonicalProjectFile } from "../../utils/src/paths.js";
-import { parseProjectDocument, rawTenantServices, selectTenant, type ProjectConfig } from "../../utils/src/project-config.js";
+import { readProjectDocument, selectTenant, type ProjectConfig } from "../../utils/src/project-config.js";
 import { setupOneDriveTargets, type FolderBinding, type SetupGraph } from "./setup.js";
 
 const scope = "https://graph.microsoft.com/.default";
@@ -83,20 +83,15 @@ function setupGraph(options: SetupOptions): SetupGraph {
 export async function runSetupCommand(
   args: SetupArguments, graph: SetupGraph | undefined, telemetry: Telemetry, signal: AbortSignal,
 ) {
-  return withProjectCheckpoint(args.projectFile, args.apply, async context => {
-    const project = selectTenant(parseProjectDocument(context.document), args.tenant);
-    const options = selectedSetupOptions(args, project);
-    if (!project.services.onedrive.enabled) throw new ConfigurationError("OneDrive setup requires an enabled root service selection");
-    const checkpoint = (binding: FolderBinding) => context.checkpoint(raw => {
-      const target = rawTenantServices(raw, project.tenant.id).onedrive.targets.find(target => target.id === binding.targetId);
-      if (!target) throw new ConfigurationError("Setup target is no longer in the tenant inventory");
-      target.driveId = binding.driveId;
-      target.folderId = binding.folderId;
-      return raw;
-    });
-    return setupOneDriveTargets(project.services.onedrive.targets, graph ?? setupGraph(options), {
-      ...options, signal, telemetry, ...(options.apply ? { checkpoint } : {}),
-    });
+  const project = selectTenant(await readProjectDocument(args.projectFile), args.tenant);
+  const options = selectedSetupOptions(args, project);
+  if (!project.services.onedrive.enabled) throw new ConfigurationError("OneDrive setup requires an enabled root service selection");
+  const checkpoint = (binding: FolderBinding) => saveBindings(args.projectFile, {
+    [bindingKey(project.tenant.id, binding.targetId, "DRIVE_ID")]: binding.driveId,
+    [bindingKey(project.tenant.id, binding.targetId, "FOLDER_ID")]: binding.folderId,
+  });
+  return setupOneDriveTargets(project.services.onedrive.targets, graph ?? setupGraph(options), {
+    ...options, signal, telemetry, ...(options.apply ? { checkpoint } : {}),
   });
 }
 

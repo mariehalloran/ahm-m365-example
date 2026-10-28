@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ConfigurationError } from "./config.js";
+import { readBindingsText } from "./bindings.js";
 import type { DeploymentCommand, DeploymentCommandRunner } from "./deploy.js";
 import { nodeProjectDirectory, repositoryDirectory } from "./paths.js";
 import type { PreparedDeployment } from "./prepare-deployment.js";
@@ -38,7 +39,7 @@ type Worker = PreparedDeployment["workers"][number];
 type BuildImage = Extract<PreparedDeployment["settings"]["image"], { mode: "build" }>;
 interface Provenance {
   runId: string; status: "preflight" | "deploying" | "succeeded" | "failed" | "cancelled";
-  configSha256: string; sourceSha256: string; subscriptionId: string; resourceGroup: string; models: string[]; startedAt: string;
+  configSha256: string; bindingsSha256: string; sourceSha256: string; subscriptionId: string; resourceGroup: string; models: string[]; startedAt: string;
   sourceRevision?: string; previousWorkers?: AppSnapshot[]; identityBindings?: Identity[]; retirements?: Retirement[];
   phase?: string; image?: string; completedAt?: string; remoteMayStillRun?: boolean; errorType?: string;
 }
@@ -48,6 +49,7 @@ export interface DeploymentRun {
   prepared: PreparedDeployment;
   configFile: string;
   configText: string;
+  bindingsText: string;
   sourceHash: string;
   certificates: Record<string, Record<string, string>>;
   runId: string;
@@ -366,8 +368,9 @@ export async function previewChanges(run: DeploymentRun, registry: Registry) {
 }
 
 export async function beginMutations(run: DeploymentRun) {
-  if (await readFile(run.configFile, "utf8") !== run.configText || await sourceFingerprint() !== run.sourceHash) {
-    throw new ConfigurationError("Monitoring config/source changed during preflight; no Azure changes were made");
+  if (await readFile(run.configFile, "utf8") !== run.configText || await readBindingsText(run.configFile) !== run.bindingsText ||
+      await sourceFingerprint() !== run.sourceHash) {
+    throw new ConfigurationError("Monitoring config/bindings/source changed during preflight; no Azure changes were made");
   }
   run.provenance.status = "deploying";
   run.mutated = true;

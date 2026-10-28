@@ -1,9 +1,170 @@
-# Deploy the health models and workers
+# Set up and deploy
+
+The whole flow is three steps, all driven by the single root
+[monitoring.config.json](../monitoring.config.json):
+
+1. **Edit** it: tenants, accounts and targets, scenarios, cadence and the reporting
+   [`groups`](./monitoring-groups.md). It names things and holds only the few IDs you
+   must supply ([what the config holds](#what-the-config-holds)).
+2. **Set up Microsoft 365** with `npm run setup`
+   ([below](#set-up-microsoft-365-with-one-script)).
+3. **Deploy** the health models, foundation and workers with `npm run deploy`
+   ([below](#deploy-with-one-command)).
+
+The config is the real configuration of this repository's Consto test tenant and may be
+checked in; it holds your choices, names and a few IDs, never secrets. The IDs that setup
+looks up or generates live in a gitignored [`.env`](#generated-ids-in-env) beside it, not
+in the config.
+
+## What the config holds
+
+The config **names** things, an Azure resource by its name and an account by its address;
+IDs are derived or looked up.
+
+**Azure resources.** A bare name is a resource in `healthModel.resourceGroup` of
+`healthModel.subscriptionId`. A value starting with `/subscriptions/` is a full resource ID,
+for a resource in another resource group or subscription.
+
+| Key | Names |
+| --- | --- |
+| `deployment.foundation` | `{ "mode": "existing", "environment": "<name or ID>", "registry": "<name or ID>" }`; `create` mode names the ones to create |
+| `worker.identity` | The existing, administrator-approved managed identity of a service's worker; `worker.identityName` instead names one the deployment creates |
+| Teams `access.bot`, `access.peerBot`, `access.peerIdentity` | The two Azure Bot registrations and the peer bot's managed identity |
+
+**IDs you supply.** A resource ID is needed only for a resource outside the health model's
+resource group. Otherwise the only IDs left each name something that exists outside this
+repository, so nothing here can derive them:
+
+| ID | Why it is an input |
+| --- | --- |
+| `healthModel.subscriptionId` | The Azure subscription that hosts the models and workers |
+| `tenants[].tenantId` | The Microsoft 365 tenant to monitor; the alias is a label, not authorization |
+| `tenants[].providerClientId` | The Entra app registration for Microsoft-reported Service Health and Service Activity; administrators create it outside this project |
+| Teams `execution.teamsReadbackClientId` | The Teams readback app registration, likewise |
+| Teams target `teamId` | The existing team that holds the channel |
+| Call target `meetingThreadId` | The dedicated meeting, created outside this project |
+
+The optional OneDrive `setup` block, read only by `npm run onedrive:setup`, also holds that
+command's own client IDs ([OneDrive setup](./onedrive-setup.md#plan-apply-and-rerun)).
+
+**Defaults.**
+
+- `deployment.azureTenantId` is optional: it defaults to the single tenant's `tenantId` and
+  is required only when the config has several tenants. Deploy still verifies it against
+  the subscription's real tenant, so set it only to host in a different tenant than
+  Microsoft 365.
+- Teams targets and call targets default `tenantId` to the tenant's. Channel targets
+  default `serviceUrl` to `https://smba.trafficmanager.net/teams/`. A call target's
+  `peerBotClientId` defaults to the peer bot's client ID.
+- A tenant's `providerClientId` is inherited by each service that has `serviceHealth` or
+  `serviceActivity` enabled and no `execution.providerClientId` of its own; set the
+  per-service value only to override it.
+
+**Looked up by `npm run setup`**, never in the config: each OneDrive account's user ID,
+each call target's organizer user ID (from its `organizer`, the organizer's user principal
+name, which only setup reads), the peer bot's client ID and the Teams calling callback URL.
+Setup writes them to `.env` ([keys](#generated-ids-in-env)).
+
+## Set up Microsoft 365 with one script
+
+`npm run setup` runs one PowerShell script,
+[`setup/setup.ps1`](../synthetic-tests/setup/setup.ps1); its header comment is the
+reference. It needs:
+
+- PowerShell 7.4+ and the Exchange module:
+  `Install-Module ExchangeOnlineManagement -Scope CurrentUser`.
+- The Azure CLI signed in with `az login` as an Exchange and Teams administrator of the
+  Microsoft 365 tenant. The lookups only read (Reader on the peer identity and the
+  foundation's environment, and Graph read access to the users involved); the reply-seed
+  step also needs Contributor on the resource group and ACR build rights.
+- The one-time Exchange RBAC approval of the worker identity (below, not part of setup),
+  the identity itself (`worker.identity`), the foundation's environment (setup reads its
+  default domain for the Teams callback URL and runs the reply-seed job in it) and, for
+  reply seeds, its registry. For a new foundation, run `npm run deploy` with
+  `deployment.stage: "foundation"` first.
+
+```sh
+cd synthetic-tests
+az login
+npm run setup -- -Plan   # only reports what would change
+npm run setup
+```
+
+Setup is idempotent and add-only, so re-running it is safe. It signs in through the same
+`az login` as deploy (the Exchange module is given an Azure CLI access token) and sets up
+the config tenant whose `tenantId` matches the signed-in tenant, so run it once per
+tenant; if the signed-in tenant is not in the config it stops and names the
+`az login --tenant <tenantId>` to run. It acts only on enabled services in `live` mode
+and:
+
+1. **Exchange access:** extends the Exchange worker identity's existing management scope
+   (Exchange RBAC for Applications) to every configured mailbox, preserving its existing
+   clauses, and checks with `Test-ServicePrincipalAuthorization` that every mailbox is in
+   scope. That check bypasses Exchange's permission cache, which holds an active app's
+   permissions for 30 minutes to 2 hours, so the running worker can keep getting HTTP 403 for a
+   newly added mailbox for that long.
+2. **Distribution lists:** creates each distribution list named in the targets and adds its
+   expected recipients.
+3. **Teams:** adds every account of each group that lists a Teams target to that target's
+   team (Graph `groups/{id}/members/$ref`), then finds or creates the standard channel named
+   by the target's optional `channelName` (Graph `teams/{id}/channels`) and writes its ID to
+   `.env`.
+4. **Lookups:** finds the IDs the config leaves out and writes them to `.env`: each
+   OneDrive account's user ID (Graph `users/{userPrincipalName}`); the peer bot's client ID
+   (`az identity show` on `access.peerIdentity`); and, when `scheduled-meeting` is selected,
+   each call target's organizer user ID (Graph `users/{organizer}`) and the Teams calling
+   callback URL (`https://<Teams worker appName>.<environment default domain>/api/calls`,
+   the domain from `az containerapp env show`).
+5. **Reply seeds:** for each Exchange target without one (when `reply-mail` is selected),
+   builds the worker image from the current checkout in ACR, runs the worker's own
+   `mail-test-command --apply --setup-only` once in a temporary Container Apps job under the
+   worker's managed identity (only that identity can create the retained message), copies the
+   seeds from the job output to `.env` and deletes the job. A permission failure (HTTP 403)
+   right after step 1 is the cache above catching up, so only that is retried, every 2
+   minutes for up to about 2.3 hours; any other failure stops at once. Press Ctrl+C to stop
+   waiting and re-run setup later.
+
+**Not covered:** the one-time Exchange RBAC approval that gives the worker identity its
+roles and initial scope, which setup only extends
+([MAILBOX-SYNTHETIC-ACCESS.md, section 4](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup));
+OneDrive's drives and folders, which need a separately approved `Files.ReadWrite.All`
+credential and keep their own command, `npm run onedrive:setup`
+([OneDrive setup](./onedrive-setup.md); it reads the user IDs that `npm run setup` looks up);
+Teams meeting creation; and chats (no journey uses chats, so none are created).
+
+**Limits:** same-tenant managed identity only. If `deployment.azureTenantId` names a tenant
+other than the Microsoft 365 tenant, setup stops and points to
+[cross-tenant access](./cross-tenant-access.md).
+The Exchange scope filter must consist only of `PrimarySmtpAddress -eq` clauses (setup stops
+and says so otherwise), and Exchange's recipient-filter length limit applies. The journeys it
+prepares are API-backed: they do not exercise the real Teams or Outlook user interface.
+
+### Generated IDs in `.env`
+
+The setup commands write the IDs they look up or generate to `.env` next to
+`monitoring.config.json` (the repository root), one `KEY=value` per line, so the config
+keeps only what you choose. `npm run deploy` and every TypeScript command read it
+automatically and fill the matching fields; leave those fields out of the config, because
+deploy fails and names the conflict when the config sets one to a different value.
+
+| Where | Keys, each `<TENANT>__<TARGET>__…` | Fills | Written by |
+| --- | --- | --- | --- |
+| Exchange target | `REPLY_SEED_MESSAGE_ID`, `REPLY_SEED_CORRELATION_ID` | `replySeed` | `npm run setup`; a local `npm run exchange:mail-test -- --apply` |
+| Teams channel target | `CHANNEL_ID` | `channelId` | `npm run setup` |
+| Teams call target | `ORGANIZER_USER_ID` | `organizerUserId` | `npm run setup`, from the target's `organizer` |
+| Teams service (`<TARGET>` is `TEAMS`) | `BOT_PEER_CLIENT_ID`, `CALLING_CALLBACK_URL` | `access.botPeerClientId`, `execution.teamsCallingCallbackUrl` | `npm run setup`, from `access.peerIdentity` and the foundation's environment |
+| OneDrive target | `USER_ID` | `userId` | `npm run setup`, from `userPrincipalName` |
+| OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup` |
+
+`<TENANT>` and `<TARGET>` are the tenant alias and the target `id`, uppercased with every
+non-alphanumeric character replaced by `_`; for example, `CONSTO__TEAMS_PROBE_002__CHANNEL_ID`
+or `CONSTO__TEAMS__BOT_PEER_CLIENT_ID`. `.env` holds tenant-specific IDs but no secrets, and
+it is safe to delete and regenerate by re-running the setup commands (reply seeds are then
+re-created). What stays in the config is listed [above](#what-the-config-holds).
 
 ## Deploy with one command
 
-Edit [monitoring.config.json](../monitoring.config.json) in place, then run from
-`synthetic-tests/`:
+From `synthetic-tests/`:
 
 ```sh
 npm ci
@@ -12,13 +173,14 @@ az login                   # the subscription in healthModel.subscriptionId
 npm run deploy
 ```
 
-The command reads the repository-root config; `--config <file>` exists only as an
-escape hatch, and `--plan` names the file it read. It needs the Azure CLI (it builds
+The command reads the repository-root config and the `.env` beside it (`--config <file>`
+reads another file); `--plan` names the file it read. It needs the Azure CLI (it builds
 Bicep with `az bicep` and the image with `az acr build`) and Git (it records the
 source revision). Each run's protected record stores the config's SHA-256. The
 command refuses the placeholder `healthModel.subscriptionId` and stops before any
 change unless `az` can show that subscription and its actual tenant equals
-`deployment.azureTenantId`. `--plan` checks only the config: Azure permissions,
+`deployment.azureTenantId` (by default the single tenant's `tenantId`). `--plan`
+checks only the config: Azure permissions,
 Graph access, bot routes, image availability and rollout are not verified.
 
 Phases, in order:
@@ -48,11 +210,11 @@ already excludes that default `deployment.stateDirectory`; ignore a custom one y
 | --- | --- |
 | `location` | Region for the foundation and workers; it must match an existing environment's actual region |
 | `healthModelLocation` | Optional region for the health models, default `location` |
-| `azureTenantId` | Tenant that hosts the Azure resources; it must be the subscription's actual tenant |
+| `azureTenantId` | Optional tenant that hosts the Azure resources, by default the single tenant's `tenantId` (required with several tenants); it must be the subscription's actual tenant, so set it only to host in a different tenant than Microsoft 365 |
 | `stage` | `workers` (default), or `foundation` to stop after the models and foundation, for example until administrators approve the new identities |
 | `enableLiveProbes` | Default `false`; see the live gates below |
 | `enableBetaServiceActivity` | Default `false`; required when a service enables `serviceActivity` |
-| `foundation` | `{ "mode": "create", "environmentName", "registryName" }` or `{ "mode": "existing", "environmentResourceId", "registryResourceId" }` |
+| `foundation` | `{ "mode": "create", "environmentName", "registryName" }` or `{ "mode": "existing", "environment", "registry" }`, each name a resource in the health model's resource group or a full resource ID ([names](#what-the-config-holds)) |
 | `image` | `{ "mode": "build", "repository", "tag" }`, built in ACR for `linux/amd64` with the run ID appended to the tag, or `{ "mode": "existing", "reference" }`, a `registry/repository@sha256:…` digest in the configured registry |
 | `workspaceName`, `applicationInsightsName` | Optional OTEL resource names, defaulting to `law-<healthModel.name>` and `appi-<healthModel.name>` |
 | `retireEntities` | Optional `{ "service", "entityName" }` list of obsolete entities to delete after the rollout |
@@ -62,22 +224,52 @@ already excludes that default `deployment.stateDirectory`; ignore a custom one y
 
 Live Microsoft 365 execution is off until all of these hold:
 
-- `tenants[].services.<service>.execution.mode` is `"live"`; the checked-in config
-  uses `"simulation"`.
+- `tenants[].services.<service>.execution.mode` is `"live"`; the alternative,
+  `"simulation"`, is labeled and makes no Microsoft 365 or Azure calls.
 - `deployment.enableLiveProbes` is `true`. At the default `workers` stage, planning
   or deploying a live worker fails without it, and it makes the worker template set
   `ENABLE_LIVE_M365=true`. The runtime refuses `mode: "live"` without that variable;
   a local live run must export it.
 - The live worker names an existing, administrator-approved identity in
-  `worker.identityResourceId` (deployment never grants Microsoft 365 access), uses
+  `worker.identity` (deployment never grants Microsoft 365 access), uses
   managed-identity health-report authentication and has the bindings its journeys
-  need: Teams bot references, Exchange `replySeed` and OneDrive `driveId` and
-  `folderId`. Deployment rejects it otherwise.
+  need: Teams bot references, Exchange reply seeds and OneDrive user, drive and
+  folder IDs (the generated ones come from [`.env`](#generated-ids-in-env)).
+  Deployment rejects it otherwise.
 
 Beta provider collection also needs `deployment.enableBetaServiceActivity: true`,
 which sets `ENABLE_BETA_SERVICE_ACTIVITY=true`.
 
 ## Deployment status and order
+
+First deployment with the single command, 2026-10-28: `npm run deploy` against the Consto
+test tenant (existing foundation and worker apps, a private copy of the config passed with
+`--config`) deployed the models and workers, rolled each worker to a new image and retired
+the two obsolete `exchange-attachment-*reply-mail` entities. Read back through ARM after
+the last rollout, once every lane had completed a steady-state cycle:
+
+- **Groups:** `Central US` and `UK South` appear as named signal aggregation groups on the
+  journey entities only (Central US on all 12 journeys, UK South on the 3 OneDrive ones),
+  alongside External Reports, each reporting its own state. Workers published the matching
+  `group-<id>--tenant-<tenant>--<signal>` reports.
+- **Health:** the root model and every Experience entity were Healthy. Of 66 service-model
+  entities, 63 were Healthy. The exceptions are the Exchange and Teams Service Health context
+  entities, Degraded because Microsoft's own overview reports `serviceDegradation` for both
+  services (Suppressed, so they do not roll up), and the optional OneDrive restore step,
+  Unknown by design while `restoreVersion` is false.
+- **Journeys:** every Exchange, Teams and OneDrive journey passed in the steady-state cycles
+  after the final rollout, with Exchange finishing in under 10 seconds against the 15-second cap.
+
+The run also exposed defects that mocked tests had hidden, now fixed: `az acr show` has no
+`--ids` argument; Azure reports an environment's region as `Central US`, not `centralus`; and
+the Teams channel readback rejected whole Graph pages once the continuation link exceeded
+8,192 characters, which retained posts had grown it past. Exchange calendar journeys sat at the
+15-second cap because of 2-second polling, so Exchange now polls every 500 milliseconds. A
+restart can still show one Unhealthy cycle, because all lanes fire at once and Exchange may
+throttle (HTTP 429); the next cycle recovers. An occasional health-report acknowledgement
+still exceeds its 5-second deadline (`cancelled`) and is re-sent on the next cycle. Exchange's five
+beta Service Activity functions return 403 until the provider application is granted
+`ServiceActivity-Exchange.Read.All`; they are diagnostics only.
 
 *Entries below were recorded with the earlier per-service profile files and separate
 prepare and deploy commands, which the single `npm run deploy` command supersedes.*
@@ -225,8 +417,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s health-model/tests
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s synthetic-tests/infra/tests
 ```
 
-The checked-in config uses simulation. Simulation is labeled and does not ingest
-cloud health, send messages, join calls or mutate files.
+A service in `simulation` mode is labeled and does not ingest cloud health, send messages,
+join calls or mutate files. A `live` service run locally needs `ENABLE_LIVE_M365=true` and
+real access.
 
 ## Root configuration
 
@@ -236,11 +429,13 @@ The [root configuration](../monitoring.config.json) is the only file you maintai
 | --- | --- |
 | `healthModel`, `otel`, `serviceHealth` | Azure destination, thresholds and report TTL; optional OTEL and Service Health context, both off by default |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins, above |
-| `tenants[]` | `id`, `displayName`, `tenantId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (certificate and bot references), `worker` (app and identity), `scenarios`, `targets`, Teams `callTargets` and OneDrive `setup` |
+| `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (certificate references and, for Teams, bot names), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
 | `groups[]` | Optional [reporting groups](./monitoring-groups.md) |
 
-It holds IDs and references, never secrets. Model and worker deployment use this same
-file, and every worker mounts all of it with defaults applied.
+It holds names, choices and the few [IDs only you can supply](#what-the-config-holds),
+never secrets. Model and worker deployment use this same file, and every worker mounts
+all of it with names expanded to resource IDs and defaults applied. Looked-up and
+generated IDs stay out of it: see [`.env`](#generated-ids-in-env).
 
 ## Identity and permissions
 
@@ -248,7 +443,8 @@ Use an explicitly selected managed identity per service and separate
 authorization for Microsoft 365 access and health-report ingestion.
 
 - **Exchange:** application RBAC scoped to the dedicated test mailboxes; see
-  [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md).
+  [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md). The one-time approval is manual;
+  `npm run setup` then extends the scope to every configured mailbox.
 - **Teams messaging:** managed-identity Bot Connector authentication and a
   separate federated application with team-scoped Graph readback permission.
   No user sign-in, MFA, refresh-token cache or bot-to-bot delivery claim.
@@ -280,7 +476,10 @@ unexecuted dependent steps are not extra failed requests.
 
 OTEL is root-controlled and disabled by default. Azure Monitor export requires
 the model's telemetry resources before workers; direct health reports and
-console diagnostics do not depend on OTEL. Microsoft-reported provider data
+console diagnostics do not depend on OTEL. Deployment with Azure Monitor export also
+creates the administrator saved searches described in
+[Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
+Microsoft-reported provider data
 remains separate, suppressed Service Health context; see
 [provider configuration](./provider-monitoring.md).
 

@@ -1,17 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { readBindings } from "../../utils/src/bindings.js";
 import { IntegrationError } from "../../utils/src/http.js";
+import { readProjectDocument, selectTenant } from "../../utils/src/project-config.js";
+import { documentFixture } from "../../utils/tests/fixtures.js";
+import { main, provisionReplySeeds } from "../src/mail-test-command.js";
 import { provisionReplySeed, type ReplySeedGraph } from "../src/reply-seed.js";
-import { replySeedOutputDocument } from "../src/mail-test-command.js";
-import { parseProjectDocument, selectTenant } from "../../utils/src/project-config.js";
-import { multiTenantFixture } from "../../utils/tests/fixtures.js";
 
 const target = { id: "pair-one", mailbox: "sender@example.invalid", recipientMailbox: "recipient@example.invalid" };
+const second = { id: "pair-two", mailbox: "second@example.invalid", recipientMailbox: "recipient@example.invalid" };
 const priorBinding = { messageId: "old-seed", correlationId: "11111111-1111-4111-8111-111111111111" };
+const priorLines = [
+  `CONTOSO__PAIR_ONE__REPLY_SEED_MESSAGE_ID=${priorBinding.messageId}`,
+  `CONTOSO__PAIR_ONE__REPLY_SEED_CORRELATION_ID=${priorBinding.correlationId}`,
+];
 
-function fixture(options: { existingStatus?: number; wrongSender?: boolean; neverDelivered?: boolean } = {}) {
+function fixture(options: { existingStatus?: number; wrongSender?: boolean; neverDelivered?: boolean; deniedSender?: string } = {}) {
   let clock = 0;
   let delivered: unknown;
+  let deliveries = 0;
   let inboxReads = 0;
   const calls: { path: string; method: string }[] = [];
   const telemetry = { emit: vi.fn() };
@@ -33,13 +43,16 @@ function fixture(options: { existingStatus?: number; wrongSender?: boolean; neve
         });
       }
       if (method === "POST") {
+        if (options.deniedSender && path.startsWith(`/users/${encodeURIComponent(options.deniedSender)}/`)) {
+          throw new IntegrationError("permission-failure", 403);
+        }
         const draft = z.object({
           subject: z.string(), internetMessageHeaders: z.array(z.object({ name: z.string(), value: z.string() })),
         }).parse(body);
         delivered = {
-          ...draft, id: "received-seed", isDraft: false,
+          ...draft, id: ++deliveries === 1 ? "received-seed" : `received-seed-${deliveries}`, isDraft: false,
           conversationId: "received-thread", internetMessageId: "<original@example.invalid>",
-          from: { emailAddress: { address: target.mailbox } },
+          from: { emailAddress: { address: decodeURIComponent(path.split("/")[2]!) } },
         };
         return schema.parse({ id: "sender-draft" });
       }
@@ -61,22 +74,6 @@ function fixture(options: { existingStatus?: number; wrongSender?: boolean; neve
 }
 
 describe("retained received reply fixtures", () => {
-  it("writes a reply binding into the selected tenant's inventory without rewriting anything else", () => {
-    const raw = multiTenantFixture();
-    const selected = selectTenant(parseProjectDocument(raw), "contoso");
-    selected.services.exchange.targets[0]!.replySeed = priorBinding;
-    const written = replySeedOutputDocument(raw, "contoso", [selected.services.exchange.targets[0]!]);
-    expect(written.tenants[0]!.services.exchange.targets[0]!.replySeed).toEqual(priorBinding);
-    expect(raw.tenants[0]!.services.exchange.targets[0]!.replySeed).toBeUndefined();
-    expect(written.tenants[0]!.services.exchange.targets[1]).toEqual(raw.tenants[0]!.services.exchange.targets[1]);
-    expect(written.tenants[0]!.services.onedrive).toEqual(raw.tenants[0]!.services.onedrive);
-    expect(written.tenants[1]).toEqual(raw.tenants[1]);
-    expect(written.groups).toEqual(raw.groups);
-    expect(() => replySeedOutputDocument(raw, "contoso", [{ ...target, replySeed: priorBinding }]))
-      .toThrow("no longer in the tenant inventory");
-    expect(() => replySeedOutputDocument(raw, "missing", [])).toThrow("Unknown --tenant");
-  });
-
   it("provisions real A-to-B mail and records the received immutable ID and visible setup time", async () => {
     const { graph, calls, context, telemetry } = fixture();
     const binding = await provisionReplySeed(graph, target, context);
@@ -123,5 +120,117 @@ describe("retained received reply fixtures", () => {
       ...context, signal: controller.signal, sleep: async () => { controller.abort(); },
     })).rejects.toMatchObject({ name: "AbortError" });
     expect(telemetry.emit.mock.calls.some(([event]) => event === "exchange-reply-seed-ready")).toBe(false);
+  });
+});
+
+describe("reply seed bindings in the .env next to the config", () => {
+  const directories: string[] = [];
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
+  });
+
+  async function workspace(targets: (typeof target)[], env?: string) {
+    const document = documentFixture();
+    document.tenants[0]!.services.exchange.targets = targets;
+    document.groups = [];
+    const directory = await mkdtemp(join(tmpdir(), "ahm-reply-seed-"));
+    directories.push(directory);
+    const file = join(directory, "monitoring.config.json");
+    const envFile = join(directory, ".env");
+    await writeFile(file, JSON.stringify(document));
+    if (env !== undefined) await writeFile(envFile, env);
+    return { directory, file, envFile, project: selectTenant(await readProjectDocument(file)) };
+  }
+  const listing = async (directory: string) => (await readdir(directory)).sort();
+  const existing = `# my notes\n${priorLines.join("\n")}\nOTHER=1\n`;
+
+  it("saves each provisioned seed to a new .env and never rewrites the config", async () => {
+    const { directory, file, project } = await workspace([target, second]);
+    const configText = await readFile(file, "utf8");
+    const f = fixture();
+    expect(await provisionReplySeeds(project, file, f.graph, f.context)).toEqual(new Set());
+    const first = project.services.exchange.targets[0]!.replySeed!;
+    const other = project.services.exchange.targets[1]!.replySeed!;
+    expect([first.messageId, other.messageId]).toEqual(["received-seed", "received-seed-2"]);
+    expect(await readBindings(file)).toEqual({
+      CONTOSO__PAIR_ONE__REPLY_SEED_MESSAGE_ID: "received-seed", CONTOSO__PAIR_ONE__REPLY_SEED_CORRELATION_ID: first.correlationId,
+      CONTOSO__PAIR_TWO__REPLY_SEED_MESSAGE_ID: "received-seed-2", CONTOSO__PAIR_TWO__REPLY_SEED_CORRELATION_ID: other.correlationId,
+    });
+    const reloaded = selectTenant(await readProjectDocument(file)).services.exchange.targets;
+    expect(reloaded.map(item => item.replySeed)).toEqual([first, other]);
+    expect(await readFile(file, "utf8")).toBe(configText);
+    expect(await listing(directory)).toEqual([".env", "monitoring.config.json"]);
+  });
+
+  it("reuses the seeds a partial .env holds, provisions the rest and keeps every other line", async () => {
+    const { file, envFile, project } = await workspace([target, second], existing);
+    const f = fixture();
+    expect(await provisionReplySeeds(project, file, f.graph, f.context)).toEqual(new Set());
+    expect(project.services.exchange.targets[0]!.replySeed).toEqual(priorBinding);
+    expect(f.calls.filter(call => call.method === "POST").map(call => call.path)).toEqual([
+      "/users/second%40example.invalid/messages", "/users/second%40example.invalid/messages/sender-draft/send",
+    ]);
+    const added = project.services.exchange.targets[1]!.replySeed!;
+    expect(await readFile(envFile, "utf8")).toBe(
+      `${existing}CONTOSO__PAIR_TWO__REPLY_SEED_MESSAGE_ID=received-seed\nCONTOSO__PAIR_TWO__REPLY_SEED_CORRELATION_ID=${added.correlationId}\n`,
+    );
+  });
+
+  it("does not rewrite a .env whose seeds are all still valid", async () => {
+    const { file, envFile, project } = await workspace([target], existing);
+    const before = await stat(envFile);
+    const f = fixture();
+    expect(await provisionReplySeeds(project, file, f.graph, f.context)).toEqual(new Set());
+    expect(f.calls.map(call => call.method)).toEqual(["GET"]);
+    expect(await readFile(envFile, "utf8")).toBe(existing);
+    expect((await stat(envFile)).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("re-provisions a seed that no longer exists and replaces its keys in place", async () => {
+    const { file, envFile, project } = await workspace([target], existing);
+    const f = fixture({ existingStatus: 404 });
+    expect(await provisionReplySeeds(project, file, f.graph, f.context)).toEqual(new Set());
+    const replacement = project.services.exchange.targets[0]!.replySeed!;
+    expect(replacement.correlationId).not.toBe(priorBinding.correlationId);
+    expect(await readFile(envFile, "utf8")).toBe(
+      `# my notes\nCONTOSO__PAIR_ONE__REPLY_SEED_MESSAGE_ID=received-seed\nCONTOSO__PAIR_ONE__REPLY_SEED_CORRELATION_ID=${replacement.correlationId}\nOTHER=1\n`,
+    );
+  });
+
+  it("reports a target whose setup failed and still saves the others", async () => {
+    const denied = { id: "pair-denied", mailbox: "denied@example.invalid", recipientMailbox: "recipient@example.invalid" };
+    const { file, project } = await workspace([denied, target]);
+    const f = fixture({ deniedSender: denied.mailbox });
+    expect(await provisionReplySeeds(project, file, f.graph, f.context)).toEqual(new Set(["pair-denied"]));
+    expect(f.telemetry.emit).toHaveBeenCalledWith("exchange-reply-seed-setup-failed", {
+      targetId: "pair-denied", category: "permission-failure", httpStatus: 403,
+    });
+    expect(Object.keys(await readBindings(file)).sort()).toEqual([
+      "CONTOSO__PAIR_ONE__REPLY_SEED_CORRELATION_ID", "CONTOSO__PAIR_ONE__REPLY_SEED_MESSAGE_ID",
+    ]);
+    expect(project.services.exchange.targets[0]!.replySeed).toBeUndefined();
+  });
+
+  it("treats a seed that cannot be saved as a failed setup", async () => {
+    const { file, envFile, project } = await workspace([target]);
+    await mkdir(envFile);
+    const f = fixture();
+    expect(await provisionReplySeeds(project, file, f.graph, f.context)).toEqual(new Set(["pair-one"]));
+    expect(f.telemetry.emit).toHaveBeenCalledWith("exchange-reply-seed-setup-failed", {
+      targetId: "pair-one", category: "collector-failure",
+    });
+  });
+
+  it("plans without writing a .env or changing the config", async () => {
+    const { directory, file } = await workspace([target, second]);
+    const configText = await readFile(file, "utf8");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await main(["--config", file]);
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ event: "exchange-reply-seed-setup-plan", targetCount: 2, cloudChanges: false }),
+    );
+    expect(await listing(directory)).toEqual(["monitoring.config.json"]);
+    expect(await readFile(file, "utf8")).toBe(configText);
   });
 });

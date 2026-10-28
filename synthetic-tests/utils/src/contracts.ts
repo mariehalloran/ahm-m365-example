@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { probeServices, stepNames, targetServices, testTypes, type StepName } from "./catalog.js";
+import { probeServices, stepNames, targetServices, testTypes, type StepName, type TestType } from "./catalog.js";
 export { journeyStepEntities, probeServices, stepNames, testTypes } from "./catalog.js";
 export type { StepName, TestType } from "./catalog.js";
 
@@ -19,7 +19,14 @@ export const serviceProbeLimits = Object.fromEntries(
     service, testTypes.filter(type => probeServices[type].service === service).length * maxServiceTargets,
   ]),
 ) as Record<"exchange" | "teams" | "onedrive", number>;
-export const maxExchangeJourneyMilliseconds = 15000;
+// Reply and meeting wait on two or three sequential mailbox hops of 3-10 seconds each, so they get twice the
+// deadline of the single-hop journeys. Longer successes are Degraded by the latency policy, not cancelled earlier.
+export function exchangeJourneyMilliseconds(testType: TestType): number {
+  return testType === "exchange-reply" || testType === "exchange-meeting" ? 30000 : 15000;
+}
+// Exchange journeys wait on several mailbox/calendar propagation delays inside their deadline, so they poll
+// finely; a 2-second interval alone costs about a second per wait and left calendar journeys at the cap.
+export const exchangePollIntervalMilliseconds = 500;
 export const replySeedSchema = z.object({
   messageId: z.string().min(1),
   correlationId: z.string().uuid(),
@@ -30,6 +37,7 @@ export type ReportedStepName = Exclude<StepName, "authenticate" | "cleanup">;
 export function isReportedStep(name: StepName): name is ReportedStepName {
   return name !== "authenticate" && name !== "cleanup";
 }
+export const maxStepDetailLength = 200;
 export const stepResultSchema = z.discriminatedUnion("status", [
   z.object({
     name: z.enum(stepNames), status: z.literal("succeeded"), observedAt: isoDate,
@@ -38,6 +46,8 @@ export const stepResultSchema = z.discriminatedUnion("status", [
   z.object({
     name: z.enum(stepNames), status: z.literal("failed"), observedAt: isoDate,
     durationMs: z.number().finite().nonnegative(), diagnosticCategory: z.enum(categories),
+    // A short, value-free hint such as `schema:@odata.nextLink(too_big)`; never message or Graph content.
+    detail: z.string().max(maxStepDetailLength).optional(),
   }).strict(),
   z.object({
     name: z.enum(stepNames), status: z.literal("skipped"), observedAt: isoDate,

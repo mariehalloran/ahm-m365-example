@@ -23,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 INFRA = HERE.parent
 TYPESCRIPT = HERE.parents[1]
 ROOT = HERE.parents[2]
+ALIAS = json.loads((ROOT / "monitoring.config.json").read_text())["tenants"][0]["id"]
 SERVICES = ("exchange", "teams", "onedrive")
 SNAPSHOT_PREFIX = "worker-snapshot-"
 SUBSCRIPTION = "11111111-1111-4111-8111-111111111111"
@@ -183,7 +184,39 @@ def workers(document):
     return found
 
 
-# Raw root-configuration variants; each is a deep copy of the checked-in file with a few edits.
+# Raw root-configuration variants; each is a deep copy of the checked-in file, hosted as a simulation example, with a
+# few edits.
+def fixture_ids(config):
+    """The IDs the checked-in file leaves to `.env` (OneDrive users, the meeting organizer and the peer bot)."""
+    for index, target in enumerate(config["tenants"][0]["services"]["onedrive"]["targets"]):
+        target.setdefault("userId", f"77777777-7777-4777-8777-00000000000{index}")
+    for call in config["tenants"][0]["services"]["teams"]["callTargets"]:
+        call.setdefault("organizerUserId", "44444444-4444-4444-8444-444444444444")
+        call.setdefault("peerBotClientId", "55555555-5555-4555-8555-555555555555")
+
+
+def baseline(config):
+    """The checked-in tenants and targets hosted as a simulation example that creates its own foundation and identities.
+
+    The file itself targets a real environment: live execution with provider lanes and bot bindings, an existing
+    foundation and identities, Service Health and Azure Monitor OTEL. The tests assert on the hosting, so it is pinned
+    here whatever the file deploys to; cadences and lanes still come from the file.
+    """
+    fixture_ids(config)
+    health = config["healthModel"]
+    health.update(subscriptionId=SUBSCRIPTION, resourceGroup="rg-m365-demo")
+    config["serviceHealth"] = {"enabled": False}
+    config["otel"] = {"enabled": False}
+    config["deployment"].update(enableLiveProbes=False, enableBetaServiceActivity=False, foundation={
+        "mode": "create", "environmentName": f"cae-{health['name']}", "registryName": "crm365example"})
+    for service, selected in config["tenants"][0]["services"].items():
+        execution = selected["execution"]
+        selected["execution"] = {"mode": "simulation", **{
+            key: execution[key] for key in ("intervalSeconds", "timeoutSeconds", "cohort", "executionLanes") if key in execution}}
+        selected["worker"] = {"appName": f"m365-example-{service}", "identityName": f"uami-{health['name']}-{service}"}
+        selected.pop("access", None)
+
+
 def run_only(config, **journeys):
     """Turns on exactly the named scenarios of the given services (first tenant) and off the rest."""
     for service, names in journeys.items():
@@ -194,7 +227,6 @@ def run_only(config, **journeys):
 
 def live(config):
     """Live Exchange with a Key Vault certificate; live Teams with a bot, a peer bot and the public callback."""
-    config["healthModel"]["subscriptionId"] = SUBSCRIPTION
     config["deployment"].update(enableLiveProbes=True, enableBetaServiceActivity=True)
     tenant = config["tenants"][0]
     exchange, teams = tenant["services"]["exchange"], tenant["services"]["teams"]
@@ -204,6 +236,8 @@ def live(config):
     exchange["worker"] = {"appName": exchange["worker"]["appName"], "identityResourceId": f"{IDENTITIES}/uami-exchange"}
     for target in exchange["targets"]:
         target["replySeed"] = {"messageId": f'received-{target["id"]}', "correlationId": "33333333-3333-4333-8333-333333333333"}
+    for target in teams["targets"]:
+        target["channelId"] = f'19:{target["id"]}@thread.tacv2'
     teams["execution"].update(mode="live", teamsCallingCallbackUrl="https://m365-example-teams.approved.invalid/api/calls")
     teams["worker"] = {"appName": teams["worker"]["appName"], "identityResourceId": f"{IDENTITIES}/uami-teams"}
     teams["access"] = {
@@ -244,26 +278,31 @@ def existing_foundation(config):
 def second_tenant(config):
     """Adds Fabrikam with its own targets and workers.
 
-    Fabrikam's Exchange worker shares Contoso's Exchange identity and its OneDrive is off; Contoso's Teams is enabled
-    but has no scenario, so neither gets a Container App.
+    Fabrikam has two Exchange pairs, one Teams channel and meeting and two OneDrive drives. Its Exchange worker shares
+    the first tenant's Exchange identity and its OneDrive is off; the first tenant's Teams is enabled but has no
+    scenario, so neither gets a Container App.
     """
-    contoso = config["tenants"][0]
-    fabrikam = copy.deepcopy(contoso)
+    first = config["tenants"][0]
+    config["deployment"]["azureTenantId"] = first["tenantId"]  # required once the config has several tenants
+    fabrikam = copy.deepcopy(first)
     fabrikam.update(id="fabrikam", displayName="Fabrikam", tenantId=FABRIKAM)
     exchange, teams, onedrive = (fabrikam["services"][service] for service in SERVICES)
-    accounts = ["test-user-3@example.invalid", "test-user-4@example.invalid"]
+    accounts = ["test-user-3@fabrikam.example.invalid", "test-user-4@fabrikam.example.invalid"]
+    exchange["targets"] = exchange["targets"][:2]
     for index, target in enumerate(exchange["targets"]):
         target.update(id=f"fabrikam-pair-{index + 1}", mailbox=accounts[index], recipientMailbox=accounts[1 - index])
         target["distributionList"] = {"address": "list@fabrikam.example.invalid", "expectedRecipients": accounts}
+    teams["targets"] = teams["targets"][:1]
     teams["targets"][0].update(id="fabrikam-channel", tenantId=FABRIKAM)
     teams["callTargets"][0].update(id="fabrikam-meeting", tenantId=FABRIKAM)
+    onedrive["targets"] = onedrive["targets"][:2]
     for index, target in enumerate(onedrive["targets"]):
         target.update(id=f"fabrikam-drive-{index + 1}", userPrincipalName=accounts[index],
                       userId=f"77777777-7777-4777-8777-00000000000{index}")
     for service, selected in fabrikam["services"].items():
         selected["worker"] = {"appName": f"fabrikam-{service}", "identityName": f"uami-fabrikam-{service}",
                               "cpu": 0.25, "memory": "0.5Gi"}
-    exchange["worker"]["identityName"] = contoso["services"]["exchange"]["worker"]["identityName"]
+    exchange["worker"]["identityName"] = first["services"]["exchange"]["worker"]["identityName"]
     onedrive["enabled"] = False
     config["tenants"].append(fabrikam)
     run_only(config, teams=[])
@@ -284,12 +323,13 @@ def make_variants(root):
     variants = {}
     for name, change in changes.items():
         variants[name] = copy.deepcopy(root)
+        baseline(variants[name])
         change(variants[name])
     return variants
 
 
 # Secure inputs the deploy command supplies separately, by variant: {tenant alias: {service: certificate}}.
-SECURE = {"native": {"contoso": {"exchange": CERTIFICATE}}}
+SECURE = {"native": {ALIAS: {"exchange": CERTIFICATE}}}
 
 
 class WorkerTemplateContracts(unittest.TestCase):
@@ -434,7 +474,7 @@ class WorkerTemplateContracts(unittest.TestCase):
     def test_native_certificates_come_from_the_secure_parameter_by_tenant_and_service(self):
         native = self.deployment("native").secrets("m365-example-exchange")["m365-certificate"]
         self.assertEqual(set(native), {"name", "value"})
-        for required in ("parameters('serviceCertificates')", "'contoso'", "'exchange'"):
+        for required in ("parameters('serviceCertificates')", f"'{ALIAS}'", "'exchange'"):
             self.assertIn(required, native["value"])
         self.assertEqual(self.worker["parameters"]["m365CertificatePem"]["type"].lower(), "securestring")
         native_parameter = self.module["properties"]["parameters"]["m365CertificatePem"]
@@ -504,7 +544,7 @@ class WorkerTemplateContracts(unittest.TestCase):
                 for worker in expected:
                     self.assertEqual(deployment.container(worker.app)["name"], f"{worker.service}-synthetic")
         self.assertEqual(self.document("root")["tenants"][0]["services"]["teams"]["enabled"], True)
-        # Contoso's Teams is enabled without a scenario and Fabrikam's OneDrive is disabled: neither is hosted.
+        # The first tenant's Teams is enabled without a scenario and Fabrikam's OneDrive is disabled: neither is hosted.
         self.assertEqual(set(self.deployment("two").apps),
                          {"m365-example-exchange", "m365-example-onedrive", "fabrikam-exchange", "fabrikam-teams"})
 
@@ -552,9 +592,9 @@ class WorkerTemplateContracts(unittest.TestCase):
             with self.subTest(variant=variant):
                 expected = [worker.identity for worker in workers(self.document(variant)) if worker.created]
                 self.assertEqual(self.deployment(variant).identities, set(expected))
-        self.assertEqual(len([worker for worker in workers(self.document("two")) if worker.identity == "uami-m365-experience-poc-exchange"]), 2)
+        self.assertEqual(len([worker for worker in workers(self.document("two")) if worker.identity == f"uami-{self.name}-exchange"]), 2)
         self.assertEqual(len(self.deployment("two").outputs["identityIds"]), 3)
-        self.assertEqual(self.deployment("live").identities, {"uami-m365-experience-poc-onedrive"})
+        self.assertEqual(self.deployment("live").identities, {f"uami-{self.name}-onedrive"})
 
     def test_workers_share_one_environment_and_registry_with_service_scoped_identities(self):
         deployment, foundation = self.deployment("root"), self.document("root")["deployment"]["foundation"]

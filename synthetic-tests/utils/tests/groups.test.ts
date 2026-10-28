@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { groupSignalName, reportingGroups, resolveGroups, tenantSignalName } from "../src/groups.js";
+import { groupSignalName, reportingGroups, resolveGroups, resultContext, tenantSignalName } from "../src/groups.js";
+import { baseResult } from "../src/probes.js";
 import { teamsCallSignals } from "../src/health-reports.js";
 import { parseProjectDocument, selectTenant, type ProjectDocument } from "../src/project-config.js";
 import { activityFunctionNames } from "../src/provider-catalog.js";
+import type { TestType } from "../src/contracts.js";
 import { documentFixture, multiTenantFixture } from "./fixtures.js";
 
 const mail = [
@@ -197,6 +199,78 @@ describe("reporting group plan", () => {
         expect(seen!.targetIds[scope.service].length).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+const resultFor = (id: string, type: TestType) => baseResult({ id, type, cohort: "test" }, 0);
+
+describe("result log context", () => {
+  const centralus = { id: "centralus", displayName: "Central US" };
+  const uksouth = { id: "uksouth", displayName: "UK South" };
+
+  it("names the tenant alias, the initiating Exchange mailbox, its recipient and the target's groups", () => {
+    const project = selectTenant(documentFixture());
+    expect(resultContext(project, resultFor("exchange-probe-001", "exchange-attachment"))).toEqual({
+      tenant: "contoso", user: "test-user-1@example.invalid", peer: "test-user-2@example.invalid", groups: [centralus],
+    });
+    expect(resultContext(project, resultFor("exchange-probe-002", "exchange-meeting"))).toEqual({
+      tenant: "contoso", user: "test-user-2@example.invalid", peer: "test-user-1@example.invalid", groups: [uksouth],
+    });
+  });
+
+  it("names the OneDrive owner without a peer", () => {
+    const project = selectTenant(documentFixture());
+    const context = resultContext(project, resultFor("onedrive-probe-002", "onedrive-versions"));
+    expect(context).toEqual({ tenant: "contoso", user: "test-user-2@example.invalid", groups: [uksouth] });
+    expect(context).not.toHaveProperty("peer");
+  });
+
+  it("names no user for Teams channel and meeting targets, which are bots, but still lists their groups", () => {
+    const project = selectTenant(documentFixture());
+    for (const [id, type] of [["teams-probe-001", "teams-channel-message"], ["teams-meeting-001", "teams-call"]] as const) {
+      const context = resultContext(project, resultFor(id, type));
+      expect(context).toEqual({ tenant: "contoso", groups: [centralus] });
+      expect(context).not.toHaveProperty("user");
+      expect(context).not.toHaveProperty("peer");
+    }
+  });
+
+  it("omits the peer and user a target does not set and lists no groups for an unknown or ungrouped target", () => {
+    const document = documentFixture();
+    const [first] = document.tenants[0]!.services.exchange.targets;
+    delete first!.recipientMailbox;
+    document.groups = [];
+    const project = selectTenant(document);
+    expect(resultContext(project, resultFor("exchange-probe-001", "exchange-mail-flow")))
+      .toEqual({ tenant: "contoso", user: "test-user-1@example.invalid", groups: [] });
+    expect(resultContext(project, resultFor("not-configured", "exchange-mail-flow"))).toEqual({ tenant: "contoso", groups: [] });
+    expect(resultContext(project, resultFor("not-configured", "teams-call"))).toEqual({ tenant: "contoso", groups: [] });
+  });
+
+  it("lists every group a user belongs to, in configured order", () => {
+    const document = documentFixture();
+    document.groups.push({
+      id: "everyone", displayName: "Everyone", accounts: ["TEST-USER-1@example.invalid", "test-user-2@example.invalid"], teams: [],
+    });
+    const project = selectTenant(document);
+    expect(resultContext(project, resultFor("exchange-probe-001", "exchange-mail-flow")).groups)
+      .toEqual([centralus, { id: "everyone", displayName: "Everyone" }]);
+    expect(resultContext(project, resultFor("onedrive-probe-002", "onedrive-roundtrip")).groups)
+      .toEqual([uksouth, { id: "everyone", displayName: "Everyone" }]);
+  });
+
+  it("uses the selected tenant's alias and only the groups that have members in it", () => {
+    const document = multiTenantFixture();
+    const fabrikam = selectTenant(document, "fabrikam");
+    expect(resultContext(fabrikam, resultFor("pair-a", "exchange-reply"))).toEqual({
+      tenant: "fabrikam", user: "probe-a@fabrikam.example.invalid", peer: "recipient@fabrikam.example.invalid",
+      groups: [{ id: "priority", displayName: "Priority accounts" }],
+    });
+    expect(resultContext(fabrikam, resultFor("pair-b", "exchange-reply")).groups).toEqual([]);
+    expect(resultContext(fabrikam, resultFor("fabrikam-channel", "teams-channel-message")).groups)
+      .toEqual([{ id: "bridge", displayName: "Bridge" }]);
+    expect(resultContext(selectTenant(document, "contoso"), resultFor("pair-b", "exchange-reply")))
+      .toMatchObject({ tenant: "contoso", groups: [{ id: "field", displayName: "Field accounts" }] });
   });
 });
 

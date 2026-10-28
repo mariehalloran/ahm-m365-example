@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { executionLanes, runExecutionLanes } from "../src/execution-lanes.js";
 import { aggregateHealthReports } from "../src/health-reports.js";
 import { baseResult } from "../src/probes.js";
-import { projectFixture } from "./fixtures.js";
+import { projectFixture, liveTenantEnv } from "./fixtures.js";
+import { serviceExecution } from "../src/project-config.js";
 import { runCycle } from "../src/runner.js";
 import { parseServiceConfig, serviceSettings } from "../src/service-config.js";
 import { runServiceWorker } from "../src/worker.js";
@@ -14,11 +15,44 @@ const service = parseServiceConfig({
 });
 
 describe("independent fixed-rate execution lanes", () => {
-  it("caps both default and explicitly configured Exchange lanes without extending shorter budgets", () => {
+  it("caps default and explicit Exchange lanes at their slowest journey without extending shorter budgets", () => {
     const defaults = executionLanes({ ...service, timeoutSeconds: 120 });
-    expect(defaults.map(lane => lane.timeoutSeconds)).toEqual([15, 15]);
+    expect(defaults.map(lane => [lane.name, lane.timeoutSeconds])).toEqual([["mail", 15], ["extended", 30]]);
+    expect(executionLanes({ ...service, timeoutSeconds: 20 }).map(lane => lane.timeoutSeconds)).toEqual([15, 20]);
     const custom = defaults.map((lane, index) => ({ ...lane, timeoutSeconds: index === 0 ? 8 : 120 }));
-    expect(executionLanes({ ...service, executionLanes: custom }).map(lane => lane.timeoutSeconds)).toEqual([8, 15]);
+    expect(executionLanes({ ...service, executionLanes: custom }).map(lane => lane.timeoutSeconds)).toEqual([8, 30]);
+  });
+
+  it("clamps an Exchange lane to the largest deadline among the journeys assigned to it", () => {
+    const lane = (name: string, timeoutSeconds: number, journeys: string[]) => ({ name, intervalSeconds: 60, timeoutSeconds, journeys });
+    const lanes = [
+      lane("mail", 120, ["send-receive-mail"]),
+      lane("single-hop", 120, ["edit-reopen-draft", "attachment-mail", "distribution-list-mail", "recurring-calendar"]),
+      lane("reply", 120, ["reply-mail"]),
+      lane("meeting", 20, ["meeting-invitation"]),
+    ];
+    expect(executionLanes({ ...service, executionLanes: lanes }).map(lane => [lane.name, lane.timeoutSeconds]))
+      .toEqual([["mail", 15], ["single-hop", 15], ["reply", 30], ["meeting", 20]]);
+    const mixed = [lane("mail", 15, ["send-receive-mail"]), lane("extended", 120, lanes.slice(1).flatMap(item => item.journeys))];
+    expect(executionLanes({ ...service, executionLanes: mixed }).map(lane => lane.timeoutSeconds)).toEqual([15, 30]);
+  });
+
+  it("accepts a lane timeout above the service-level timeout and leaves other services' lanes untouched", () => {
+    const configured = parseServiceConfig({
+      ...service, timeoutSeconds: 15,
+      executionLanes: [
+        { name: "mail", intervalSeconds: 60, timeoutSeconds: 15, journeys: ["send-receive-mail"] },
+        { name: "extended", intervalSeconds: 300, timeoutSeconds: 30, journeys: [
+          "edit-reopen-draft", "attachment-mail", "reply-mail", "distribution-list-mail", "recurring-calendar", "meeting-invitation",
+        ] },
+      ],
+    });
+    expect(configured.timeoutSeconds).toBe(15);
+    expect(executionLanes(configured).map(lane => lane.timeoutSeconds)).toEqual([15, 30]);
+    const teams = { type: "teams", intervalSeconds: 120, timeoutSeconds: 120 } as const;
+    expect(executionLanes(teams).map(lane => lane.timeoutSeconds)).toEqual([120]);
+    const onedriveLanes = [{ name: "all", intervalSeconds: 300, timeoutSeconds: 120, journeys: ["user-drive-roundtrip"] }];
+    expect(executionLanes({ ...teams, type: "onedrive", executionLanes: onedriveLanes })).toEqual(onedriveLanes);
   });
 
   it("rejects overlapping assignments, unknown journeys, missing assignments and the reserved provider lane name", () => {
@@ -143,8 +177,58 @@ describe("execution deadlines", () => {
     expect(handler).toHaveBeenCalledTimes(6);
   });
 
-  it.each(["exchange-mail-flow", "onedrive-roundtrip"] as const)(
-    "enforces the Exchange 15-second deadline without changing other products: %s", async type => {
+  it.each([
+    ["exchange-mail-flow", 15000], ["exchange-draft", 15000], ["exchange-attachment", 15000], ["exchange-reply", 30000],
+    ["exchange-distribution-list", 15000], ["exchange-recurring-calendar", 15000], ["exchange-meeting", 30000],
+  ] as const)("cancels %s at its %s ms deadline even when the lane or service timeout is 120 seconds", async (type, deadlineMs) => {
+    vi.useFakeTimers();
+    const config = serviceSettings({ ...service, timeoutSeconds: 120 }, { ENABLE_LIVE_M365: "true" });
+    expect(config.PROBE_TIMEOUT_MS).toBe(120000);
+    let aborted = false;
+    const pending = runCycle({ ...config, probes: [{ ...config.probes[0]!, type }] }, {
+      telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} },
+      handler: async (probe, context) => {
+        context.signal.addEventListener("abort", () => { aborted = true; });
+        await new Promise(resolve => setTimeout(resolve, deadlineMs + 3000));
+        return { ...baseResult(probe, Date.now()), success: true };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+    expect(aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await pending).results[0]).toMatchObject({
+      success: false, diagnosticCategory: "delivery-timeout", durationMs: deadlineMs + 3000,
+    });
+  });
+
+  it.each([
+    ["exchange-reply", "exchange-reply"], ["exchange-meeting", "exchange-meeting"],
+  ] as const)("lets a 20-second %s succeed under the 30-second deadline and reports it Degraded, not Unhealthy", async (type, entityName) => {
+    vi.useFakeTimers();
+    const config = serviceSettings({ ...service, timeoutSeconds: 15 }, { ENABLE_LIVE_M365: "true" });
+    let aborted = false;
+    const pending = runCycle({ ...config, PROBE_TIMEOUT_MS: 30000, probes: [{ ...config.probes[0]!, type }] }, {
+      telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} },
+      handler: async (probe, context) => {
+        context.signal.addEventListener("abort", () => { aborted = true; });
+        await new Promise(resolve => setTimeout(resolve, 20000));
+        return { ...baseResult(probe, Date.now()), success: true };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(20000);
+    const cycle = await pending;
+    expect(aborted).toBe(false);
+    expect(cycle.results[0]).toMatchObject({ success: true, diagnosticCategory: null, durationMs: 20000 });
+    const reports = aggregateHealthReports("exchange", cycle, projectFixture().healthModel);
+    const signal = (name: string) => reports.find(report => report.entityName === entityName && report.body.signalName === name)?.body;
+    expect(signal("synthetic-success-percentage")).toMatchObject({ value: 100, healthState: "Healthy" });
+    expect(signal("synthetic-mean-duration")).toMatchObject({ value: 20000, healthState: "Degraded" });
+  });
+
+  it.each(["onedrive-roundtrip", "teams-channel-message", "teams-call"] as const)(
+    "leaves the configured timeout of other products untouched by the Exchange deadlines: %s", async type => {
       vi.useFakeTimers();
       const config = serviceSettings({ ...service, timeoutSeconds: 45 }, { ENABLE_LIVE_M365: "true" });
       let aborted = false;
@@ -152,22 +236,52 @@ describe("execution deadlines", () => {
         telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} },
         handler: async (probe, context) => {
           context.signal.addEventListener("abort", () => { aborted = true; });
-          await new Promise(resolve => setTimeout(resolve, 18000));
+          await new Promise(resolve => setTimeout(resolve, 33000));
           return { ...baseResult(probe, Date.now()), success: true };
         },
       });
-      await vi.advanceTimersByTimeAsync(14999);
+      await vi.advanceTimersByTimeAsync(33000);
       expect(aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(aborted).toBe(type === "exchange-mail-flow");
-      await vi.advanceTimersByTimeAsync(3000);
-      const cycle = await pending;
-      expect(cycle.results[0]).toMatchObject({
-        success: type !== "exchange-mail-flow", durationMs: 18000,
-        diagnosticCategory: type === "exchange-mail-flow" ? "delivery-timeout" : null,
-      });
+      expect((await pending).results[0]).toMatchObject({ success: true, durationMs: 33000, diagnosticCategory: null });
     },
   );
+
+  it("does not apply the Exchange deadlines in simulation", async () => {
+    const simulated = parseServiceConfig({ ...service, mode: "simulation", scenario: "slow", timeoutSeconds: 120 });
+    const config = serviceSettings(simulated, {}, { "reply-mail": true, "meeting-invitation": true, "send-receive-mail": true });
+    const cycle = await runCycle(config, { telemetry: { emit() {} }, results: { record() {}, recordDiagnostic() {} } });
+    expect(config.PROBE_TIMEOUT_MS).toBe(120000);
+    expect(cycle.results).toHaveLength(9);
+    expect(cycle.results.every(result => result.success && result.durationMs === 30000)).toBe(true);
+  });
+
+  it("hands every journey its own deadline through the lanes of a live worker: 30 s for reply and meeting, 15 s otherwise", async () => {
+    const project = projectFixture();
+    project.healthModel.subscriptionId = "11111111-1111-4111-8111-111111111111";
+    const deadlines: Record<string, number> = {};
+    const lanes: Record<string, number> = {};
+    await runServiceWorker({ ...serviceExecution(project, "exchange"), mode: "live" }, {
+      project, once: true, telemetry: { emit() {} },
+      env: { ENABLE_LIVE_M365: "true", AZURE_CLIENT_ID: "22222222-2222-4222-8222-222222222222", ...liveTenantEnv },
+      createDependencies: (_service, _config, telemetry) => ({ telemetry, results: { record() {}, recordDiagnostic() {} } }),
+      execute: (config, dependencies) => {
+        for (const probe of config.probes) lanes[probe.type] = config.PROBE_TIMEOUT_MS;
+        return runCycle(config, {
+          telemetry: dependencies.telemetry, results: dependencies.results,
+          handler: async (probe, context) => {
+            deadlines[probe.type] = context.config.PROBE_TIMEOUT_MS;
+            return { ...baseResult(probe, Date.now()), success: true };
+          },
+        });
+      },
+    });
+    expect(deadlines).toEqual({
+      "exchange-mail-flow": 15000, "exchange-draft": 15000, "exchange-attachment": 15000, "exchange-reply": 30000,
+      "exchange-distribution-list": 15000, "exchange-recurring-calendar": 15000, "exchange-meeting": 30000,
+    });
+    expect(Object.entries(lanes).filter(([, timeout]) => timeout === 15000).map(([type]) => type)).toEqual(["exchange-mail-flow"]);
+    expect(new Set(Object.values(lanes))).toEqual(new Set([15000, 30000]));
+  });
 
   it("cancels timed-out work, publishes zero/Unhealthy, preserves siblings and ignores late success", async () => {
     vi.useFakeTimers();

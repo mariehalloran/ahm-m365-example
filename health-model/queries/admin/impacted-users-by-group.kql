@@ -1,0 +1,13 @@
+// Users with failed live steps per group, most affected first.
+AppTraces
+| where Message == 'synthetic-step' and tostring(Properties['probe.mode']) == 'live'
+| where tostring(Properties['probe.step_status']) == 'failed'
+| summarize Failures = count(),
+    Journeys = make_set(tostring(Properties['probe.journey'])),
+    Errors = make_set(tostring(Properties['probe.diagnostic_category'])),
+    FirstFailure = min(TimeGenerated),
+    LastFailure = max(TimeGenerated)
+    by Group = coalesce(tostring(Properties['monitoring.group_name']), '(no group)'),
+    GroupId = tostring(Properties['monitoring.group']),
+    User = coalesce(tostring(Properties['monitoring.user']), '(n/a)')
+| order by Group asc, GroupId asc, Failures desc

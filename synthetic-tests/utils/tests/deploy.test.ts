@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalProjectFile, nodeProjectDirectory, repositoryDirectory } from "../src/paths.js";
+import { bindingKey } from "../src/bindings.js";
 import { deployMonitoring, DeploymentCommandError, parseDeployArguments, type DeploymentCommand, type DeploymentCommandRunner } from "../src/deploy.js";
 import { readProjectService } from "../src/project-config.js";
 import { documentFixture } from "./fixtures.js";
@@ -13,6 +14,15 @@ afterEach(async () => {
   await Promise.all(ownedDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 const digest = `sha256:${"a".repeat(64)}`;
+const correlationId = "33333333-3333-4333-8333-333333333333";
+
+// One .env line pair per Exchange target, the way the setup commands write them.
+function seedsText(document: ReturnType<typeof documentFixture>) {
+  return `${document.tenants[0]!.services.exchange.targets.flatMap(target => [
+    `${bindingKey("contoso", target.id, "REPLY_SEED_MESSAGE_ID")}=received-${target.id}`,
+    `${bindingKey("contoso", target.id, "REPLY_SEED_CORRELATION_ID")}=${correlationId}`,
+  ]).join("\n")}\n`;
+}
 
 async function fixture() {
   const document = documentFixture();
@@ -142,6 +152,7 @@ describe("config-driven npm deployment", () => {
     const state = String(result.stateDirectory);
     expect((await stat(state)).mode & 0o777).toBe(0o700);
     const provenance = JSON.parse(await readFile(join(state, "provenance.json"), "utf8"));
+    expect(provenance.bindingsSha256).toBe(createHash("sha256").update("").digest("hex"));
     expect(provenance.previousWorkers).toEqual(f.apps());
     expect(provenance.image).toBe(f.document.deployment!.image.mode === "existing" ? f.document.deployment!.image.reference : "");
     expect(f.calls.every(command => command.cwd === nodeProjectDirectory && command.timeoutSeconds <= 1800)).toBe(true);
@@ -207,6 +218,31 @@ describe("config-driven npm deployment", () => {
     expect(f.calls.filter(command => command.phase === "verify-rollout")).toHaveLength(3);
   });
 
+  it("deploys the foundation stage of live Teams meetings before the peer client ID and callback URL exist, and leaves workers to the next stage", async () => {
+    const f = await fixture();
+    f.document.deployment!.enableLiveProbes = true;
+    f.document.deployment!.stage = "foundation";
+    const teams = f.document.tenants[0]!.services.teams;
+    teams.execution.mode = "live";
+    const peerId = `${f.base}/Microsoft.ManagedIdentity/userAssignedIdentities/peer-identity`;
+    teams.access = {
+      botResourceId: `${f.base}/Microsoft.BotService/botServices/primary-bot`,
+      botPeerResourceId: `${f.base}/Microsoft.BotService/botServices/peer-bot`,
+      botPeerManagedIdentityResourceId: peerId,
+    };
+    f.identities.set(peerId.toLowerCase(), {
+      id: peerId, clientId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", principalId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      tenantId: f.document.deployment!.azureTenantId,
+    });
+    await f.execute();
+    const phases = f.calls.map(command => command.phase);
+    expect(phases).toContain("foundation-create");
+    expect(phases.filter(phase => /^workers-|^bot-binding|^verify-rollout/.test(phase))).toEqual([]);
+    f.document.deployment!.stage = "workers";
+    await expect(f.execute()).rejects.toThrow("Teams peer access requires both access.peerIdentity and its client ID");
+    expect(f.calls.map(command => command.phase)).toEqual(phases);
+  });
+
   it("surfaces unhealthy rollout and bounds every readiness call by the remaining deadline", async () => {
     const f = await fixture();
     let clock = 0;
@@ -255,5 +291,42 @@ describe("config-driven npm deployment", () => {
     await expect(stat(securePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(JSON.stringify(f.emit.mock.calls)).not.toContain("unit-test-only");
     expect(f.calls.some(command => command.phase.endsWith("-create"))).toBe(false);
+  });
+
+  it("fills generated IDs from the .env next to the config before validating the plan", async () => {
+    const f = await fixture();
+    f.document.deployment!.enableLiveProbes = true;
+    f.document.tenants[0]!.services.exchange.execution.mode = "live";
+    await expect(f.execute({ plan: true })).rejects.toThrow("run npm run setup (it writes them to .env)");
+    await writeFile(join(f.directory, ".env"), seedsText(f.document));
+    expect(await f.execute({ plan: true })).toMatchObject({ cloudChanges: false, workerCount: 3 });
+    expect(f.calls).toEqual([]);
+  });
+
+  it("deploys the effective values and records the hash of the .env it applied", async () => {
+    const f = await fixture();
+    const text = seedsText(f.document);
+    await writeFile(join(f.directory, ".env"), text);
+    const result = await f.execute();
+    for (const phase of ["models-create", "workers-create"]) {
+      const command = f.calls.find(command => command.phase === phase)!;
+      const path = command.args[command.args.indexOf("--parameters") + 1]!.slice(1);
+      const { tenants } = JSON.parse(await readFile(path, "utf8")).parameters.projectConfig.value;
+      expect(tenants[0].services.exchange.targets.map((target: { replySeed: unknown }) => target.replySeed)).toEqual(
+        f.document.tenants[0]!.services.exchange.targets.map(target => ({ messageId: `received-${target.id}`, correlationId })),
+      );
+    }
+    const provenance = JSON.parse(await readFile(join(String(result.stateDirectory), "provenance.json"), "utf8"));
+    expect(provenance.bindingsSha256).toBe(createHash("sha256").update(text).digest("hex"));
+    expect(provenance.configSha256).toBe(createHash("sha256").update(JSON.stringify(f.document)).digest("hex"));
+  });
+
+  it.each(["monitoring.json", ".env"])("stops before any Azure change when %s changes during preflight", async name => {
+    const f = await fixture();
+    f.hook.run = async command => {
+      if (command.phase === "workers-preview-what-if") await writeFile(join(f.directory, name), name === ".env" ? "CHANGED=1\n" : "{}");
+    };
+    await expect(f.execute()).rejects.toThrow("changed during preflight");
+    expect(f.calls.some(command => /-create$|build-image|^retire-obsolete/.test(command.phase))).toBe(false);
   });
 });

@@ -17,12 +17,14 @@ Every service model contains:
 - An impact-suppressed `${service}-service-health` supporting entity only when
   root `serviceHealth.enabled` is explicitly `true`.
 - Business-step children for every selected journey.
-- **External Reports** on each journey/business step, plus optional OTEL sources.
+- Worker-reported signals on each journey and business step, plus optional OTEL
+  query signals. The only signal aggregation groups are your
+  [reporting groups](../docs/monitoring-groups.md), on journey entities.
 
-The supporting entity's **External Reports** group contains stable overview and
-issue-count signals, plus that product's approved beta activity signals.
-Exchange and Teams each have seven members; OneDrive has two stable members and
-no approved beta endpoint. There are **no per-API child entities or relationships**.
+The supporting entity carries the stable overview and issue-count signals, plus that
+product's approved beta activity signals, ungrouped: seven for Exchange and Teams, two
+for OneDrive, which has no approved beta endpoint. There are **no per-API child
+entities or relationships**.
 Provider context never supplies synthetic samples or Experience health.
 
 Exchange groups its existing journeys under two parents:
@@ -76,7 +78,7 @@ connectivity does not prove received audio, bidirectional audio or call quality.
 ## Health reports target signals
 
 Each journey/business step receives `synthetic-success-percentage` and
-`synthetic-mean-duration` through its **External Reports** group.
+`synthetic-mean-duration` as ungrouped external signals.
 Whole journeys aggregate attempts; children aggregate only executed actions.
 Success is `100 * succeeded / executed`; mean duration includes failed executed
 samples. A skipped action produces Unknown without a value, never a failed or
@@ -84,16 +86,14 @@ invented successful request.
 
 With more than one tenant in the root config, each tenant's worker publishes every
 overall signal as `tenant-<tenant id>--<signal>` (for example
-`tenant-contoso--synthetic-success-percentage`), and each entity's **External
-Reports** group lists one such set per tenant that runs it, so tenants never
-overwrite one another on the shared service model. This covers the journey and step
+`tenant-contoso--synthetic-success-percentage`), so tenants never overwrite one
+another on the shared service model. This covers the journey and step
 signals above, the `teams-call` signals below and the Service Health and
 activity signals. With exactly one tenant the names stay plain, as listed here.
 Group signals keep `group-<id>--tenant-<tenant id>--<signal>` and are not qualified
 twice. Adding a second tenant (or dropping back to one) renames every overall signal
-at once: `npm run deploy` changes models and workers together, new members stay
-unresolved until workers publish under the new names, and reports under the old
-names expire after the report TTL.
+at once: `npm run deploy` changes models and workers together, and reports under the
+old names expire after the report TTL.
 
 Default Degraded/Unhealthy rules are below 99%/95% success or above
 15,000/60,000 ms mean duration; equality does not breach. A timed-out attempt
@@ -122,18 +122,23 @@ this reporter; optional query-backed signals have native units.
 
 ## Optional reporting groups
 
-Root `groups` add native `signalAggregationGroups` to **journey** entities only,
-next to `external-reports`: one `reporting-<group id>` group per user group,
-displayed with the group's `displayName` and combined `WorstOf`. Its `members` are the
-group's `group-<id>--tenant-<tenant>--<signal>` signals, one set per tenant service the
-group has member targets in: `synthetic-success-percentage` and
+Root `groups` add native `signalAggregationGroups` to **journey** entities only
+([ARM contract](https://learn.microsoft.com/azure/templates/microsoft.cloudhealth/2026-10-01-preview/healthmodels/entities#signalaggregationgroup),
+`2026-10-01-preview`): one `reporting-<group id>` group per user group,
+displayed with the group's `displayName` and combined `WorstOf`. They are the only
+aggregation groups in the model; overall signals publish ungrouped. Each group's `members`
+are its `group-<id>--tenant-<tenant>--<signal>` signal-name strings, one set per tenant
+service the group has member targets in: `synthetic-success-percentage` and
 `synthetic-mean-duration`, plus the four call-phase signals on `teams-call`. Step,
 Service Health and OTEL signals are never included, and no entities,
 relationships or models are added. A journey receives a group only when its tenant
 service and scenario are enabled and the group has a member target for it.
 TypeScript resolves membership into the template's `reportingGroups` parameter; Bicep
 applies no membership logic. Group health reaches parents through the normal
-dependency roll-up. See [reporting groups](../docs/monitoring-groups.md).
+dependency roll-up. Under native `WorstOf`, Unknown has the lowest severity and
+`ignoreUnknown: false` does not make a missing signal override a known one, so inspect
+individual signals rather than treating a known group state as proof that every member
+reported. See [reporting groups](../docs/monitoring-groups.md).
 
 ## Microsoft-reported Service Health
 
@@ -163,19 +168,10 @@ OneDrive issues are filtered by exact `Microsoft OneDrive` service name. Denied
 or missing OneDrive data produces no health report; no beta permission or invented OneDrive
 activity call is introduced.
 
-Native grouping uses the `2026-10-01-preview`
-[ARM `signalAggregationGroups` contract](https://learn.microsoft.com/azure/templates/microsoft.cloudhealth/2026-10-01-preview/healthmodels/entities#signalaggregationgroup):
-one `external-reports` group, display name **External Reports**, `WorstOf`, and
-`members` containing **signal-name strings** (one set per tenant when several
-tenants run the entity), not entity names or signal definitions. Ingestion creates
-external signals; the template does not write
-read-only external signal definitions or invent `signalGroups.externalReports`.
-Predeclared members without reports are unresolved/Unknown. Each report retains
-its source and API version in `additionalContext`, so grouping does not conflate
-stable status with beta activity. Under native `WorstOf`, Unknown has the lowest
-severity; `ignoreUnknown: false` does not make a missing signal override a known
-signal. Inspect individual signals rather than treating a known group state as
-proof that every source succeeded.
+Ingestion creates these external signals on the existing supporting entity; they are
+not grouped, and the template writes no read-only external signal definitions. Each
+report retains its source and API version in `additionalContext`, so stable status
+stays distinct from beta activity.
 
 Only approved stable status mappings are automatic: operational 100/Healthy,
 degradation 50/Degraded, interruption 0/Unhealthy. Missing, denied, malformed,
@@ -197,14 +193,20 @@ not delete old entities: remove each selected service's
 ## Optional OTEL signals
 
 Root `otel.enabled` defaults to false. Only enabled `destination: "azure-monitor"`
-with a selected journey creates Log Analytics and workspace-backed Application
-Insights, plus **OpenTelemetry** query groups on journeys/business steps.
-`destination: "console"` is a local export preview, not Azure infrastructure.
-External Reports and topology remain intact; providers stay external-report-only.
+with a selected journey creates the Log Analytics workspace (`law-<model>`),
+workspace-backed Application Insights (`appi-<model>`), three administrator saved
+searches ([`queries/admin/`](./queries/admin/); see
+[Log Analytics for administrators](../docs/operations.md#log-analytics-for-administrators))
+and the query-backed `otel-success-percentage` and `otel-mean-duration` signals on
+journeys and business steps. `destination: "console"` is a local export preview, not
+Azure infrastructure. Direct reports and topology remain intact; providers stay
+direct-report-only.
 
 [synthetic.kql](./queries/synthetic.kql) binds the Application Insights resource,
-service, journey and action. It uses live schema-2.0 observations within 15 minutes;
-skipped/internal actions, simulation and provider logs are excluded. Query
+service, journey and action. It averages live schema-2.0 observations over the last
+15 minutes, so one failure can hold an entity below Healthy for up to 15 minutes. It
+excludes skipped/internal actions, simulation, provider logs and records marked
+`monitoring.group_duplicate` (so each attempt counts once). Query
 refresh is one minute; its rolling window/ingestion latency can differ from
 current-cycle direct reports. No data is not a healthy fallback.
 
@@ -248,21 +250,22 @@ OneDrive IDs above.
 ### Splitting attachment delivery and reply delivery
 
 The attachment journey retains its ID and send/verify child IDs. Provision a
-root-owned received reply fixture and deploy `exchange-reply` with its two
-business-step children before updated workers send reports there. After old
-workers stop, explicitly retire only the attachment journey's old reply/confirm
-children and their relationships. See the [ordered scenario/fixture migration](../synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately).
+retained received reply seed for each target (`npm run setup` does, into `.env`)
+and deploy `exchange-reply` with its two business-step children before updated
+workers send reports there. After old workers stop, explicitly retire only the
+attachment journey's old reply/confirm children and their relationships. See the
+[ordered scenario/fixture migration](../synthetic-tests/exchange/README.md#provision-and-test-attachment-and-reply-separately).
 
 ### Consolidating Service Health: ordered handoff
 
 1. Deploy the matching model template first, with the same root config the
-   workers use. Existing parent entities gain their combined signal
-   group; do **not** delete old children yet.
+   workers use. Existing parent entities become the single destination of the
+   combined signals; do **not** delete old children yet.
 2. Deploy one immutable image containing the matching reporters and collectors
    to all selected workers, together with the matching root config.
    Retain independently scheduled 300-second provider lanes and explicit live/
-   beta approvals. For OneDrive, enable stable `serviceHealth` and select the
-   existing federated read-only `providerClientId`; verify that the explicitly
+   beta approvals. For OneDrive, enable stable `serviceHealth`; it inherits the
+   tenant's existing federated read-only `providerClientId`. Verify that the explicitly
    selected OneDrive worker managed identity has its own federation trust.
    Existing `ServiceHealth.Read.All` is sufficient; no additional Graph
    permissions or OneDrive beta grant is needed.
@@ -279,7 +282,7 @@ children and their relationships. See the [ordered scenario/fixture migration](.
    parents and their relationships only when root `serviceHealth.enabled` is true.
 5. Observe at least another provider interval plus collection/publication time.
    Verify no retired IDs reappear, no reports use retired destinations, and
-   enabled stable/beta members resolve on the single supporting entity. Verify
+   enabled stable/beta signals appear on the single supporting entity. Verify
    suppression and notification/ingestion monitoring separately; HTTP 204 is
    not end-to-end alert proof.
 

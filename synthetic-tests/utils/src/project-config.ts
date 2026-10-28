@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { applyBindings, readBindings } from "./bindings.js";
 import { ConfigurationError, readConfigJson } from "./config.js";
 import { probeSchema, probeServices } from "./contracts.js";
 import { executionLanes } from "./execution-lanes.js";
 import { resolveGroups, tenantGroups, type TenantGroup } from "./groups.js";
+import { expandReferences } from "./references.js";
 import {
   parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema,
   type ServiceConfig, type ServiceExecution,
@@ -145,10 +147,11 @@ function validateTenants(tenants: ProjectDocument["tenants"]): void {
 }
 
 export function parseProjectDocument(raw: unknown): ProjectDocument {
-  if (raw && typeof raw === "object" && "schemaVersion" in raw && raw.schemaVersion === "1.0") {
+  const document = expandReferences(raw);
+  if (document && typeof document === "object" && "schemaVersion" in document && document.schemaVersion === "1.0") {
     throw new ConfigurationError("Migrate monitoring.config.json from schemaVersion 1.0 to 2.0: declare tenants[] with inline service execution, access and targets; configFile and separate service profiles are no longer supported");
   }
-  const parsed = projectDocumentSchema.safeParse(raw);
+  const parsed = projectDocumentSchema.safeParse(document);
   if (!parsed.success) {
     if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("attachment-reply-mail"))) {
       throw new ConfigurationError("Obsolete attachment-reply-mail: select attachment-mail and reply-mail separately, then provision root-owned replySeed bindings");
@@ -165,7 +168,7 @@ export function parseProjectDocument(raw: unknown): ProjectDocument {
 }
 
 export async function readProjectDocument(file: string): Promise<ProjectDocument> {
-  return parseProjectDocument(await readConfigJson(file));
+  return parseProjectDocument(applyBindings(await readConfigJson(file), await readBindings(file)));
 }
 
 /** The alias may be omitted only when the document has exactly one tenant. */
@@ -185,13 +188,6 @@ export function selectTenant(document: ProjectDocument, alias?: string): Project
 
 export function serviceModelName(project: { healthModel: { name: string } }, service: ServiceConfig["type"]): string {
   return `${project.healthModel.name}-${service}`;
-}
-
-// Setup write-backs edit the user's original JSON, never the default-expanded normalization.
-export function rawTenantServices(raw: unknown, alias: string): TenantInventory["services"] {
-  const tenant = (raw as ProjectDocument).tenants.find(tenant => tenant.id === alias);
-  if (!tenant) throw new ConfigurationError("Unknown --tenant alias in the root inventory");
-  return tenant.services;
 }
 
 export function serviceExecution(project: ProjectConfig, type: ServiceConfig["type"]): ServiceConfig {

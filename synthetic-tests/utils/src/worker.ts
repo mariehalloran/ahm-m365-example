@@ -14,6 +14,7 @@ import { createResultOutput, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import type { ResultTelemetry } from "./otel.js";
 import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
+import { resultContext } from "./groups.js";
 import { canonicalProjectFile } from "./paths.js";
 
 const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
@@ -229,7 +230,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const results: ResultOutput = {
     record(result, mode) {
       consoleResults.record(result, mode);
-      otel?.record(result, mode);
+      if (otel && options.project) otel.record(result, mode, resultContext(options.project, result));
     },
     recordDiagnostic(record) {
       consoleResults.recordDiagnostic(record);

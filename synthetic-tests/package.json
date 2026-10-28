@@ -18,6 +18,7 @@
     "teams": "tsx teams/src/worker.ts",
     "onedrive": "tsx onedrive/src/worker.ts",
     "onedrive:setup": "tsx onedrive/src/setup-command.ts",
+    "setup": "pwsh -NoProfile -File setup/setup.ps1",
     "deploy": "npm run catalog:check && tsx utils/src/deploy.ts"
   },
   "dependencies": {

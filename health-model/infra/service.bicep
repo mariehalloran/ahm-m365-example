@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-import { ServiceDefinition, providerActivityFunctions, getJourneyGroups } from './service-catalog.bicep'
+import { ServiceDefinition, getJourneyGroups } from './service-catalog.bicep'
 
 @minLength(3)
 @maxLength(44)
@@ -13,8 +13,6 @@ param suppressOneDriveRestore bool = false
 param enableOtel bool = false
 param workspaceName string
 param applicationInsightsResourceId string
-@description('With several tenants, each tenant worker qualifies its signal names: [{ tenant, journeys }]. Empty keeps plain names.')
-param externalReportTenants array = []
 @description('Reporting groups with at least one scope for this service.')
 param reportingGroups array = []
 
@@ -41,48 +39,32 @@ func bindTelemetryQuery(queryText string, service string, journey string, step s
     aggregation
   )
 
-func sourceGroup(name string, displayName string, members string[]) object => {
-  name: name
-  displayName: displayName
-  aggregationType: 'WorstOf'
-  ignoreUnknown: false
-  members: members
-}
-
-// Journey entities and their steps report the synthetic signals; the call journey adds its four call phases.
+// A journey entity reports the two synthetic signals; the call journey adds its four call phases.
 func journeySignals(entityName string, callSignals string[]) string[] =>
   concat(['synthetic-success-percentage', 'synthetic-mean-duration'], entityName == 'teams-call' ? callSignals : [])
-
-// Workers publish tenant-<alias>--<signal> when several tenants report; a journey lists the tenants that run it.
-func externalSignals(tenants array, journey string, signals string[]) string[] =>
-  empty(tenants)
-    ? signals
-    : flatten(map(
-        filter(tenants, entry => empty(journey) || contains(entry.journeys, journey)),
-        entry => map(signals, signal => 'tenant-${entry.tenant}--${signal}')
-      ))
 
 // One aggregation group per reporting group with a scope for this journey. Members are the per-tenant
 // signals (group-<id>--tenant-<alias>--<signal>) that each tenant worker publishes.
 func reportingGroupEntries(groups array, service string, journey string, signals string[]) array =>
   filter(
-    map(groups, group => sourceGroup(
-      'reporting-${group.id}',
-      group.displayName,
-      flatten(map(
+    map(groups, group => {
+      name: 'reporting-${group.id}'
+      displayName: group.displayName
+      aggregationType: 'WorstOf'
+      ignoreUnknown: false
+      members: flatten(map(
         filter(group.scopes, scope => scope.service == service && contains(scope.journeys, journey)),
         scope => map(signals, signal => 'group-${group.id}--tenant-${scope.tenant}--${signal}')
       ))
-    )),
+    }),
     entry => !empty(entry.members)
   )
 
+// Aggregation groups appear only on journey entities, and only when a reporting group runs the journey.
+func aggregationGroupsProperty(groups array) object => empty(groups) ? {} : { signalAggregationGroups: groups }
+
 var contextName = '${service.service}-service-health'
 var journeyGroups = getJourneyGroups(service.journeys)
-var providerSignalNames = concat(
-  ['microsoft-reported-service-status', 'microsoft-reported-issue-count'],
-  map(providerActivityFunctions[service.service], name => 'microsoft-activity-${name}')
-)
 var telemetryQuery = loadTextContent('../queries/synthetic.kql')
 var teamsCallSignals = [
   'teams-call-connection-success-percentage'
@@ -266,31 +248,11 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey' || node.kind == 'journey-group'
         ? { icon: { iconName: 'UserFlow' } }
         : {},
-      node.kind == 'root' || node.kind == 'journey-group'
-        ? {}
-        : {
-            signalAggregationGroups: concat(
-              [
-                sourceGroup(
-                  'external-reports',
-                  'External Reports',
-                  externalSignals(
-                    externalReportTenants,
-                    node.journey,
-                    node.kind == 'context' ? providerSignalNames : journeySignals(node.name, teamsCallSignals)
-                  )
-                )
-              ],
-              enableOtel && (node.kind == 'journey' || node.kind == 'step')
-                ? [sourceGroup('otel', 'OpenTelemetry', ['otel-success-percentage', 'otel-mean-duration'])]
-                : [],
-              node.kind == 'journey'
-                ? reportingGroupEntries(
-                    reportingGroups, service.service, node.journey, journeySignals(node.name, teamsCallSignals)
-                  )
-                : []
-            )
-          }
+      node.kind == 'journey'
+        ? aggregationGroupsProperty(reportingGroupEntries(
+            reportingGroups, service.service, node.journey, journeySignals(node.name, teamsCallSignals)
+          ))
+        : {}
     )
     dependsOn: [workspaceReader, workspaceAuthentication]
   }

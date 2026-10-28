@@ -9,7 +9,15 @@ import { probeServices, reportedResult, resultSchema, type SyntheticResult, type
 import { providerLog } from "./provider-diagnostics.js";
 import { outcomeOf, type ExecutionMode, type ResultOutput } from "./results.js";
 
+export interface ResultContext {
+  tenant: string;
+  user?: string;
+  peer?: string;
+  groups: { id: string; displayName: string }[];
+}
+
 export interface ResultTelemetry extends ResultOutput {
+  record(result: SyntheticResult, mode: ExecutionMode, context?: ResultContext): void;
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -19,6 +27,7 @@ export class TelemetryExportError extends Error {
 }
 
 export function resultAttributes(result: SyntheticResult, mode: ExecutionMode): Attributes {
+  const failedStep = result.steps.find(step => step.status === "failed");
   return {
     "probe.schema_version": result.schemaVersion,
     "probe.service": probeServices[result.testType].service,
@@ -32,10 +41,29 @@ export function resultAttributes(result: SyntheticResult, mode: ExecutionMode): 
     "probe.observed_at": result.observedAt,
     "probe.duration_ms": result.durationMs,
     "probe.diagnostic_category": result.diagnosticCategory ?? "none",
+    ...(result.diagnosticContext.httpStatus === undefined ? {} : { "probe.http_status": result.diagnosticContext.httpStatus }),
+    ...(failedStep ? { "probe.failed_step": failedStep.name } : {}),
     ...(result.sendDurationMs === undefined ? {} : { "probe.send_duration_ms": result.sendDurationMs }),
     ...(result.deliveryDurationMs === undefined ? {} : { "probe.delivery_duration_ms": result.deliveryDurationMs }),
     ...(result.publicationDurationMs === undefined ? {} : { "probe.publication_duration_ms": result.publicationDurationMs }),
   };
+}
+
+// The attributes of each log record to emit for one step or result: one per group the target belongs to, so a
+// per-group view sees every row, with the later ones marked so totals can count each attempt once. A target in no
+// group emits a single record without group attributes.
+function monitoringAttributes(context: ResultContext | undefined): Attributes[] {
+  if (!context) return [{}];
+  const shared = {
+    "monitoring.tenant": context.tenant,
+    ...(context.user === undefined ? {} : { "monitoring.user": context.user }),
+    ...(context.peer === undefined ? {} : { "monitoring.peer": context.peer }),
+  };
+  if (!context.groups.length) return [shared];
+  return context.groups.map((group, index) => ({
+    ...shared, "monitoring.group": group.id, "monitoring.group_name": group.displayName,
+    ...(index === 0 ? {} : { "monitoring.group_duplicate": "true" }),
+  }));
 }
 
 export function consoleExporters(output: Telemetry): { logs: LogRecordExporter; metrics: PushMetricExporter } {
@@ -170,10 +198,14 @@ export function createResultTelemetry(
       if (closed) throw new TelemetryExportError();
       logger.emit(providerLog(record));
     },
-    record(raw, mode) {
+    record(raw, mode, context) {
       if (closed) throw new TelemetryExportError();
       const result = reportedResult(resultSchema.parse(raw));
       const attributes = resultAttributes(result, mode);
+      const records = monitoringAttributes(context);
+      const emitLogs = (body: string, timestamp: Date, logAttributes: Attributes) => {
+        for (const monitoring of records) logger.emit({ body, timestamp, attributes: { ...logAttributes, ...monitoring } });
+      };
       const dimensions = {
         "probe.service": attributes["probe.service"],
         "probe.journey": attributes["probe.journey"],
@@ -208,19 +240,17 @@ export function createResultTelemetry(
           stepSuccess.record(step.status === "succeeded" ? 1 : 0, stepDimensions);
           stepDuration.record(step.durationMs / 1000, stepDimensions);
         }
-        logger.emit({
-          body: "synthetic-step", timestamp: new Date(step.observedAt),
-          attributes: {
-            ...stepDimensions, "probe.correlation_id": result.correlationId, "probe.id": result.testId,
-            "probe.observed_at": step.observedAt, "probe.step_status": step.status,
-            ...(step.status === "skipped" ? { "probe.skip_reason": step.reason } : { "probe.duration_ms": step.durationMs }),
-            ...(step.status === "failed" ? { "probe.diagnostic_category": step.diagnosticCategory } : {}),
-          },
+        emitLogs("synthetic-step", new Date(step.observedAt), {
+          ...stepDimensions, "probe.schema_version": result.schemaVersion,
+          "probe.correlation_id": result.correlationId, "probe.id": result.testId,
+          "probe.observed_at": step.observedAt, "probe.step_status": step.status,
+          ...(step.status === "skipped" ? { "probe.skip_reason": step.reason } : { "probe.duration_ms": step.durationMs }),
+          ...(step.status === "failed" ? { "probe.diagnostic_category": step.diagnosticCategory } : {}),
+          ...(step.status === "failed" && step.detail ? { "probe.detail": step.detail } : {}),
         });
       }
-      logger.emit({
-        body: "synthetic-result", timestamp: new Date(result.observedAt),
-        attributes: { ...attributes, ...(result.call ? { "probe.call_evidence": JSON.stringify(result.call) } : {}) },
+      emitLogs("synthetic-result", new Date(result.observedAt), {
+        ...attributes, ...(result.call ? { "probe.call_evidence": JSON.stringify(result.call) } : {}),
       });
     },
     async forceFlush() {

@@ -3,7 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { DiagnosticCategory } from "./contracts.js";
 
 export class IntegrationError extends Error {
-  constructor(public readonly category: DiagnosticCategory, public readonly status?: number) {
+  // `detail` is a short, value-free hint (field paths, never content) for operators reading failure events.
+  constructor(public readonly category: DiagnosticCategory, public readonly status?: number, public readonly detail?: string) {
     super(category);
     this.name = "IntegrationError";
   }
