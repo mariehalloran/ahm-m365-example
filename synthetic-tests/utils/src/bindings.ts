@@ -4,10 +4,11 @@ import { dirname, join, resolve } from "node:path";
 import { parseEnv } from "node:util";
 import { ConfigurationError } from "./config.js";
 import { at, isRecord, records } from "./raw-config.js";
+import { accountTargetId } from "./account-identity.js";
 
 /**
  * Generated IDs live in a gitignored `.env` next to the config file, one `TENANT__ID__FIELD=value` per line. The ID is
- * the target's id, or the service name for a service's own settings (`CONSTO__TEAMS__BOT_PEER_CLIENT_ID`).
+ * derived from an account address, a Teams target's id, or the service name for its own settings.
  */
 export type Bindings = NodeJS.Dict<string>;
 export type BindingField =
@@ -72,9 +73,14 @@ function bindService(
   const targets = name === "teams" ? records(service.targets)
     : Object.values(isRecord(service.targets) ? service.targets : {}).flatMap(group => records(at(group, "users")));
   const callTargets = records(service.callTargets);
-  rejectCollidingTargets(tenantAlias, [...targets, ...callTargets]);
+  const targetId = (target: Record<string, unknown>) => {
+    if (name === "teams") return target.id;
+    const address = name === "exchange" ? target.mailbox : target.userPrincipalName;
+    return typeof address === "string" ? accountTargetId(address) : undefined;
+  };
+  rejectCollidingTargets(tenantAlias, [...targets.map(target => ({ id: targetId(target) })), ...callTargets]);
   bindFields(tenantAlias, name, service, fields.service, bindings);
-  for (const target of targets) bindFields(tenantAlias, target.id, target, fields.targets, bindings);
+  for (const target of targets) bindFields(tenantAlias, targetId(target), target, fields.targets, bindings);
   for (const target of callTargets) bindFields(tenantAlias, target.id, target, fields.callTargets, bindings);
 }
 

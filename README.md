@@ -36,7 +36,7 @@ Details: [Exchange](./synthetic-tests/exchange/README.md),
 
 Follow the separate **[setup guide](./docs/setup.md)** for prerequisites, creating
 and licensing Microsoft 365 test accounts, configuring the project, granting
-access, generating target IDs and deploying.
+access, generating required service IDs and deploying.
 
 The only maintained configuration is
 [monitoring.config.json](./monitoring.config.json): tenants, accounts and targets,

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ConfigurationError } from "./config.js";
 import { maxServiceTargets, probeServices, type SyntheticResult } from "./contracts.js";
+import { accountTargetId, type AccountTarget } from "./account-identity.js";
 import type { ResultContext } from "./otel.js";
 import type { ProjectConfig, ProjectDocument } from "./project-config.js";
 
@@ -12,20 +13,21 @@ interface Member { tenant: TenantInventory; targetIds: string[] }
 interface ResolvedGroup { id: string; displayName: string; service: UserService; members: Member[] }
 
 /** A user shared by several groups still runs once, with one consistent set of target settings. */
-export function userGroupTargets<T extends { id: string }>(
+export function userGroupTargets<T extends AccountTarget>(
   groups: Readonly<Record<string, { users: readonly T[] }>>,
-): T[] {
-  const targets = new Map<string, T>();
+): (T & { id: string })[] {
+  const targets = new Map<string, T & { id: string }>();
   for (const [id, group] of Object.entries(groups)) {
-    if (new Set(group.users.map(user => user.id)).size !== group.users.length) {
-      throw new ConfigurationError(`User group "${id}" must not repeat target IDs`);
+    if (new Set(group.users.map(user => accountTargetId(user))).size !== group.users.length) {
+      throw new ConfigurationError(`User group "${id}" must not repeat account addresses`);
     }
     for (const user of group.users) {
-      const previous = targets.get(user.id);
-      if (previous !== undefined && !isDeepStrictEqual(previous, user)) {
+      const target = { ...user, id: accountTargetId(user) };
+      const previous = targets.get(target.id);
+      if (previous !== undefined && !isDeepStrictEqual(previous, target)) {
         throw new ConfigurationError(`User group "${id}" changes the settings of a target shared with another group`);
       }
-      targets.set(user.id, user);
+      targets.set(target.id, target);
     }
   }
   if (targets.size > maxServiceTargets) {
@@ -48,14 +50,14 @@ export function resolveGroups(document: ProjectDocument): ResolvedGroup[] {
   const groups = new Map<string, ResolvedGroup>();
   for (const tenant of document.tenants) {
     for (const service of userServices) {
-      const serviceGroups: Record<string, { userGroupName: string; users: { id: string }[] }> = tenant.services[service].targets;
+      const serviceGroups: Record<string, { userGroupName: string; users: AccountTarget[] }> = tenant.services[service].targets;
       for (const [id, { userGroupName, users }] of Object.entries(serviceGroups)) {
         const key = `${service}:${id.toLowerCase()}`;
         const group: ResolvedGroup = groups.get(key) ?? { id, displayName: userGroupName, service, members: [] };
         if (group.id !== id || group.displayName !== userGroupName) {
           throw new ConfigurationError(`User group "${id}" must use the same ID casing and userGroupName throughout ${service}`);
         }
-        group.members.push({ tenant, targetIds: users.map(user => user.id) });
+        group.members.push({ tenant, targetIds: users.map(user => accountTargetId(user)) });
         groups.set(key, group);
       }
     }

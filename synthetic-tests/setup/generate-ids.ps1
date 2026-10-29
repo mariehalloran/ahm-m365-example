@@ -62,10 +62,10 @@ if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
 $onedrive = $tenant.services.onedrive
 if ($onedrive.enabled -ne $false -and $onedrive.execution.mode -eq 'live') {
     Write-Host 'OneDrive'
-    $targets = $onedrive.targets.PSObject.Properties | ForEach-Object { $_.Value.users } | Sort-Object id -Unique
+    $targets = $onedrive.targets.PSObject.Properties | ForEach-Object { $_.Value.users } | Sort-Object userPrincipalName -Unique
     foreach ($target in $targets) {
         $user = Invoke-Graph GET "/users/$($target.userPrincipalName)`?`$select=id"
-        Set-Binding $project.EnvFile $bindings (& $key $target.id 'USER_ID') $user.id
+        Set-Binding $project.EnvFile $bindings (& $key (Get-AccountTargetId $target.userPrincipalName) 'USER_ID') $user.id
     }
 }
 

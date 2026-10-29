@@ -99,8 +99,15 @@ deploy fails and names the conflict when the config sets one to a different valu
 | OneDrive target | `USER_ID` | `userId` | `npm run setup:ids`, from `userPrincipalName` |
 | OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup` |
 
-`<TENANT>` and `<TARGET>` are the tenant alias and the target `id`, uppercased with every
-non-alphanumeric character replaced by `_`; for example, `CONSTO__TEAMS_PROBE_002__CHANNEL_ID`
+`<TENANT>` is the tenant alias, uppercased with non-alphanumeric characters replaced by `_`.
+For Exchange and OneDrive, `<TARGET>` is `ACCOUNT_<SHA256>`, derived automatically from the
+trimmed, lowercased mailbox address or UPN; the hexadecimal digest is uppercased in `.env`
+keys. No manually assigned account `id` is required or accepted. Moving an account between
+groups does not change its bindings; changing its address requires regenerating or
+explicitly migrating its bindings.
+
+Teams retains configured target IDs, uppercased with non-alphanumeric characters
+replaced by `_`; for example, `CONSTO__TEAMS_PROBE_002__CHANNEL_ID`
 or `CONSTO__TEAMS__BOT_PEER_CLIENT_ID`. `.env` holds tenant-specific IDs but no secrets, and
 it is safe to delete and regenerate by re-running the setup commands (reply seeds are then
 re-created). What stays in the config is listed [above](#what-the-config-holds).

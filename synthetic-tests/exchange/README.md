@@ -20,7 +20,7 @@ bare-name foundation resources.
        "userGroup1": {
          "userGroupName": "User Group One",
          "users": [
-           { "id": "exchange-probe-001", "mailbox": "synthetic-user@example.invalid" }
+           { "mailbox": "synthetic-user@example.invalid" }
          ]
        }
      }
@@ -28,10 +28,11 @@ bare-name foundation resources.
    ```
 
    [User groups](../../docs/monitoring-groups.md) contain the user target objects;
-   the same ID with identical settings can belong to several groups but executes
+   the same mailbox address with identical settings can belong to several groups but executes
    once. Distinct targets must identify unique mailboxes case-insensitively. Optional `region` and simulation
    `scenario` remain supported; generated `replySeed` bindings come from `.env`,
-   not the config. Removed `recipientMailbox`, `distributionList`,
+   not the config. Account keys are derived automatically; do not supply a target `id`.
+   Removed `recipientMailbox`, `distributionList`,
    distribution and invitation scenario options are rejected, even when disabled.
 2. Obtain administrator approval for dedicated mailboxes and mailbox-scoped
    `Application Mail.Send`, `Application Mail.ReadWrite` and, for the recurring

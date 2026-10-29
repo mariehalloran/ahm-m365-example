@@ -59,7 +59,6 @@ Service block example (`tenants[].services.onedrive`; the address is a placehold
     "userGroup1": {
       "userGroupName": "User Group One",
       "users": [{
-        "id": "onedrive-probe-001",
         "userPrincipalName": "dedicated-onedrive@example.invalid",
         "folderName": "AHM-Synthetic-Tests",
         "restoreVersion": false
@@ -71,7 +70,8 @@ Service block example (`tenants[].services.onedrive`; the address is a placehold
 
 `npm run setup:ids` writes `userId`, and the setup command writes `driveId` and `folderId`
 after verifying the folder grant, all to `.env`; leave them out of the config. Deploy and
-every TypeScript command fill them in by target ID
+every TypeScript command fill them in using the account's automatically derived key;
+do not supply a target `id`
 ([generated IDs](../../docs/deployment.md#generated-ids-in-env)).
 It supports up to 1,000 selected accounts; runtime concurrency and cycle budgets
 remain bounded and must be sized deliberately. Setup credentials are not worker

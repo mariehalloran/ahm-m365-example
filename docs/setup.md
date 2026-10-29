@@ -1,7 +1,7 @@
 # Setup: Microsoft 365 test accounts and Azure access
 
 Start here before the first deployment. Create dedicated test accounts, configure
-the project, grant access, then generate target IDs and deploy. Repeat the relevant
+the project, grant access, then generate required service IDs and fixtures and deploy. Repeat the relevant
 steps whenever you add a tenant, service or target.
 
 ## Prerequisites
@@ -95,8 +95,10 @@ Edit the repository-root [monitoring.config.json](../monitoring.config.json) for
 your Azure destination and Microsoft 365 tenants, replacing this repository's
 real test-tenant settings. 
 
-Use the account fields in the table above, each target's stable `id`, the selected
-scenarios and execution settings. Put Exchange/OneDrive user targets in
+Use the account fields in the table above, the selected scenarios and execution settings.
+Exchange uses the mailbox address and OneDrive uses the UPN as the account identity;
+do not assign account target IDs. Teams channel and meeting targets retain their `id`.
+Put Exchange/OneDrive user targets in
 [`targets.<groupId>.users`](./monitoring-groups.md), with `userGroupName` alongside
 each `users` array; there is no separate root group list. Supply the ungrouped Teams channel and meeting
 references and approved provider/readback app registrations where selected.

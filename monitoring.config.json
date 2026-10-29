@@ -55,15 +55,15 @@
           "united-kingdom-users": {
             "userGroupName": "United Kingdom Users",
             "users": [
-              { "id": "exchange-probe-002", "mailbox": "test-user-4@constosuites.onmicrosoft.com" },
-              { "id": "exchange-probe-003", "mailbox": "test-user-5@constosuites.onmicrosoft.com" }
+              { "mailbox": "test-user-4@constosuites.onmicrosoft.com" },
+              { "mailbox": "test-user-5@constosuites.onmicrosoft.com" }
             ]
           },
           "united-states-users": {
             "userGroupName": "United States Users",
             "users": [
-              { "id": "exchange-probe-001", "mailbox": "test-user-1@constosuites.onmicrosoft.com" },
-              { "id": "exchange-probe-004", "mailbox": "test-user-2@constosuites.onmicrosoft.com" }
+              { "mailbox": "test-user-1@constosuites.onmicrosoft.com" },
+              { "mailbox": "test-user-2@constosuites.onmicrosoft.com" }
             ]
           }
         }
@@ -110,8 +110,8 @@
           "united-states-users": {
             "userGroupName": "United States Users",
             "users": [
-              { "id": "onedrive-probe-001", "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false },
-              { "id": "onedrive-probe-002", "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false }
+              { "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false },
+              { "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false }
             ]
           }
         }

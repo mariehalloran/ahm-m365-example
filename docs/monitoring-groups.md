@@ -15,23 +15,26 @@ For `tenants[].services.exchange`, `targets` is an object keyed by group ID:
     "userGroup1": {
       "userGroupName": "User Group One",
       "users": [
-        { "id": "exchange-probe-001", "mailbox": "test-user-1@example.invalid" }
+        { "mailbox": "test-user-1@example.invalid" }
       ]
     },
     "userGroup2": {
       "userGroupName": "User Group Two",
       "users": [
-        { "id": "exchange-probe-002", "mailbox": "test-user-2@example.invalid" }
+        { "mailbox": "test-user-2@example.invalid" }
       ]
     }
   }
 }
 ```
 
-OneDrive uses the same shape, with its existing per-user target fields inside
-`users`: `id`, `userPrincipalName`, `folderName` and optional `restoreVersion`.
+OneDrive uses the same shape, with its per-user fields inside
+`users`: `userPrincipalName`, `folderName` and optional `restoreVersion`.
+Exchange accounts are identified by `mailbox`, and OneDrive accounts by
+`userPrincipalName`, case-insensitively. Neither accepts a manually assigned `id`.
 Generated reply seeds and OneDrive IDs still come from the adjacent `.env`, matched
-by tenant and user target ID; moving a target between groups does not rename its bindings.
+by tenant and an automatically derived account key; moving an account between groups
+does not rename its bindings. See [generated IDs](./deployment.md#generated-ids-in-env).
 
 - A group ID starts with a letter, contains letters/digits and optional single
   hyphens, and is at most 40 characters. `userGroupName` is a nonempty display name
@@ -40,10 +43,10 @@ by tenant and user target ID; moving a target between groups does not rename its
   Within one service, matching IDs across tenants combine into one model group and
   must use identical casing and `userGroupName`.
 - Every configured Exchange/OneDrive user belongs inside a group's `users`.
-  Reuse the same target ID and identical settings to put a user in several groups:
+  Repeat the same account address and identical settings to put a user in several groups:
   the worker executes it once and includes the result in each group.
-- Repeated target IDs inside one group, conflicting settings across groups, and
-  different target IDs for the same mailbox/account are rejected. The limit is
+- Repeated account addresses inside one group and conflicting settings across groups
+  are rejected. The limit is
   1,000 unique user targets per tenant/service, not 1,000 per group.
 - An empty group is allowed but has no model signals until it has runnable users.
   An enabled service with selected journeys still needs at least one user.

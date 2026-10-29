@@ -21,14 +21,16 @@ then this setup, and deploy the live workers. Keep certificates and keys outside
 Generate [user groups](./monitoring-groups.md) under
 `tenants[].services.onedrive.targets` in `monitoring.config.json`, each keyed by its
 group ID with `userGroupName` and a `users` array from your approved
-account-provisioning output. Each user target needs a stable opaque `id` (it also
-names the target's `.env` keys, `<TENANT>__<TARGET>__USER_ID`, `…__DRIVE_ID` and
-`…__FOLDER_ID`), the account's `userPrincipalName` and a dedicated `folderName`,
+account-provisioning output. Each user target needs the account's `userPrincipalName`
+and a dedicated `folderName`,
 normally `AHM-Synthetic-Tests`. Set `restoreVersion` deliberately. Leave out `userId`,
 `driveId` and `folderId`: `npm run setup:ids` looks up `userId` from the `userPrincipalName`,
-this command writes the drive and folder IDs, and deploy fills all three in by target ID.
+this command writes the drive and folder IDs, and deploy fills all three in using an
+account key derived automatically from the case-insensitive UPN. Do not supply a target `id`.
+The generated [binding keys](./deployment.md#generated-ids-in-env) use that account key.
 Run `npm run setup:ids` first, with the OneDrive service in `live` mode (it acts only on live
-services), because this command reads the user IDs. Shared users use identical target IDs/settings and are provisioned only once.
+services), because this command reads the user IDs. Shared users use the same UPN/settings
+and are provisioned only once.
 The configured user targets are the only
 account inventory; neither setup command enumerates the tenant or silently adds users.
 

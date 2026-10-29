@@ -38,6 +38,11 @@ function Select-ConfiguredTenant($Document) {
     $tenant
 }
 
+function Get-AccountTargetId([string]$Address) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Address.Trim().ToLowerInvariant())
+    'account-' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
 function Get-BindingKey([string]$TenantId, [string]$TargetId, [string]$Field) {
     $part = { param($text) $text.ToUpperInvariant() -replace '[^A-Z0-9]', '_' }
     "$(& $part $TenantId)__$(& $part $TargetId)__$Field"

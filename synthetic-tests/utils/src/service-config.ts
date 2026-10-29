@@ -54,13 +54,14 @@ const common = {
   enabled: z.boolean(),
 };
 const target = probeSchema.pick({ id: true, region: true, scenario: true });
+const accountTarget = target.omit({ id: true });
 export const serviceTargetSchemas = {
-  exchange: z.array(target.extend({
-    mailbox: probeSchema.shape.mailbox.unwrap(),
+  exchange: z.array(accountTarget.extend({
+    mailbox: probeSchema.shape.mailbox.unwrap().toLowerCase(),
     replySeed: probeSchema.shape.replySeed,
   }).strict()).max(maxServiceTargets),
-  onedrive: z.array(target.extend({
-    userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName,
+  onedrive: z.array(accountTarget.extend({
+    userId: probeSchema.shape.userId, userPrincipalName: probeSchema.shape.userPrincipalName.unwrap().toLowerCase(),
     driveId: probeSchema.shape.driveId, folderId: probeSchema.shape.folderId,
     folderName: probeSchema.shape.folderName, restoreVersion: probeSchema.shape.restoreVersion,
   }).strict()).max(maxServiceTargets),
@@ -81,11 +82,11 @@ export const teamsCallTargetsSchema = z.array(target.extend({
 const serviceSchema = z.discriminatedUnion("type", [
   z.object({
     ...common, type: z.literal("exchange"),
-    targets: serviceTargetSchemas.exchange,
+    targets: z.array(serviceTargetSchemas.exchange.element.extend({ id: probeSchema.shape.id })).max(maxServiceTargets),
   }).strict(),
   z.object({
     ...common, type: z.literal("onedrive"),
-    targets: serviceTargetSchemas.onedrive,
+    targets: z.array(serviceTargetSchemas.onedrive.element.extend({ id: probeSchema.shape.id })).max(maxServiceTargets),
   }).strict(),
   z.object({
     ...common, type: z.literal("teams"),
