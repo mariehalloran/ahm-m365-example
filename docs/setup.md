@@ -32,9 +32,10 @@ journeys create mail, drafts, private appointments and files. The project does
 2. Enter a recognizable display name and username, such as `m365-monitor-001`,
    and select one of your tenant's verified domains. Record the resulting user
    principal name (UPN), such as `m365-monitor-001@yourtenant.onmicrosoft.com`.
-3. Set the user's usage location and assign a license covering the services below.
-   Expand **Apps** and confirm the required service plans are enabled; not every
-   Microsoft 365 subscription includes Teams.
+3. Set the user's usage location. For Exchange Multi-Geo, follow the
+   [PDL setup below](#optional-exchange-multi-geo-placement) before licensing.
+   Assign a license covering the services below. Expand **Apps** and confirm the
+   required service plans are enabled; not every Microsoft 365 subscription includes Teams.
 4. Leave the account without administrator roles. Store its generated password in
    your approved password manager, never in the config, `.env` or Git. Retain your
    normal sign-in protections; the hosted workers use application identities,
@@ -68,6 +69,25 @@ Keep bulk-upload files and exported passwords outside Git. Microsoft's
 [account creation guide](https://learn.microsoft.com/en-us/microsoft-365/admin/add-users/add-users)
 and [license assignment guide](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/assign-licenses-to-users)
 cover bulk creation and existing accounts.
+
+### Optional Exchange Multi-Geo placement
+
+To monitor mailboxes in different geographies, follow Microsoft's
+[Exchange Online Multi-Geo administration guide](https://learn.microsoft.com/en-us/microsoft-365/enterprise/administering-exchange-online-multi-geo?view=o365-worldwide).
+This requires appropriate Multi-Geo licensing and an enabled destination geography.
+
+- **New cloud-only accounts:** create the user without an Exchange license, set
+  `PreferredDataLocation` (PDL) on its Entra user with Microsoft Graph PowerShell
+  (for example, `EUR`), then assign the license.
+- **Synchronized accounts:** configure PDL in on-premises Active Directory and
+  synchronize it through Microsoft Entra Connect.
+- **Existing mailboxes:** changing PDL initiates an asynchronous relocation.
+  Verify the actual mailbox database geography in Exchange Online PowerShell;
+  the requested PDL alone does not prove that the move has completed.
+
+Country and `UsageLocation` alone do not select mailbox placement. PDL selects a
+geography, not a particular stamp or database. Reporting group names do not change
+mailbox placement.
 
 ## Configure the project
 
