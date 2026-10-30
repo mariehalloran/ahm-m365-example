@@ -202,12 +202,14 @@ secret-reading/application-modification access.
   rotations may require an explicit restart.
 - Selected live calls expose only the Teams HTTPS callback on `/api/calls`.
   `/healthz` is static readiness, not proof of journey progress.
-- Live workers publish raw observations to Event Hubs; all modes emit console diagnostics.
-  The Function/DCR bridge ingests them into Log Analytics and Health Models evaluates KQL.
+- With `logAnalytics.enabled: false`, live workers push aggregated health reports
+  directly to their service model. With `true`, they publish raw observations through
+  Event Hubs and the Function/DCR bridge for Log Analytics/KQL model health.
+  Both modes emit console diagnostics.
   External Microsoft provider context remains separately reported and suppressed.
   Setup-created environments use `--logs-destination none`; reused environments
   retain their existing logging configuration. Durable platform log retention
-  needs separate configuration from in-process OTEL.
+  needs separate configuration and is not enabled by a reporting exporter.
 - Shutdown allows 60 seconds for bounded cleanup/reporting. Workers retain no
   cross-cycle journey history or durable outbox.
 
@@ -234,19 +236,18 @@ Production acceptance additionally requires [worker-stall, publication-failure a
 end-to-end notification checks](../../docs/operations.md#enterprise-reliability-acceptance-gate).
 TTL expiry removes reports; it does not guarantee an Unhealthy state or alert.
 
-## Optional OTEL export
+## Optional Log Analytics pipeline
 
-Root `otel` is disabled by default. Disabled/console-only modes add no Application
-Insights settings or platform log forwarding. Azure Monitor export runs in the
-same workers, not a separate telemetry service.
+The root `logAnalytics.enabled` toggle is independent of worker hosting.
+Off deploys no Event Hub, ingestion Function, DCR, workspace or log freshness rule;
+containers push health reports directly. The private configuration store named by
+`deployment.configurationStorageAccount` remains in both modes for scalable
+hash-verified configuration delivery.
 
-For `destination: azure-monitor`, the [observation/diagnostic resources](../../health-model/README.md#shared-observation-queries)
-deploy before the workers. The worker template reads `appi-<healthModel.name>` (or the
-matching `deployment.applicationInsightsName`) and passes its connection string as a
-secret reference, not a normal parameter. Verify live ingestion/query evaluation,
-report independence, retention and cost; source validation does not prove cloud export.
-
-When disabling OTEL, incremental deployment does not remove old query bindings,
-permissions, app settings or telemetry resources. Follow the [model migration
-procedure](../../health-model/README.md#apply-and-migrate), preserve active models
-and remove only owned resources after retention/export review.
+On deploys the [observation resources](../../health-model/README.md#shared-observation-queries)
+and uses native KQL model signals. Capture is optional within that pipeline.
+When switching off, deployment proves fresh direct reports before retiring only
+owned pipeline resources. Existing Log Analytics history, archive containers and
+configuration storage are retained. Historical data is not a second active pipeline.
+Direct mode has no log-based freshness watchdog; TTL expiry alone does not guarantee
+an Unhealthy state or notification.

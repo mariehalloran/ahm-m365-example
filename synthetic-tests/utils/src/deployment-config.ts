@@ -32,6 +32,7 @@ export const workerSettingsSchema = z.object({
 }).strict();
 export const deploymentSettingsSchema = z.object({
   location: z.string().regex(/^[a-z][a-z0-9]{1,39}$/),
+  configurationStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
   healthModelLocation: z.string().regex(/^[a-z][a-z0-9]{1,39}$/).optional(),
   azureTenantId: z.string().uuid(),
   stage: z.enum(["foundation", "workers"]).default("workers"),

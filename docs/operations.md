@@ -2,10 +2,11 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and publishes settled per-attempt
-journey and executed-business-step observations. Workers do not calculate synthetic
-health states. Event Hubs, optional Capture and Log Analytics retain observations;
-Azure Monitor Health Models evaluates success percentages and mean durations with KQL.
+Each service process runs its selected journeys and reports settled journey and
+executed-business-step measurements. With `logAnalytics.enabled: false`, containers
+aggregate their current cycle and push health reports directly, without a log pipeline.
+With `true`, Event Hubs, optional Capture and Log Analytics retain observations and
+Azure Monitor Health Models evaluates rolling success percentages/durations with KQL.
 Workers retain no cross-cycle history or user-token cache. Ten journeys reuse three
 Container Apps (one per enabled tenant and service); the default family has four models,
 57 entities, 53 relationships and 38 business-step entities, including Exchange's
@@ -19,12 +20,12 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 - Exchange continuous execution waits for an aligned wall-clock minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts/minute. `--once` is an immediate single-cycle diagnostic. Other products/provider lanes retain their independent cadences and immediate first run.
 - Live Exchange execution deadlines are 30 seconds for explicit SELF-REPLY (`reply-mail`), 15 seconds for the other four journeys. Timeouts contribute success 0, not Unknown; bounded cleanup can finish afterward. Model queries apply the configured thresholds to these observations. Latency degradation remains 15000 ms; slower successful replies contribute to latency degradation. Actual Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
-- The Exchange minute bounds execution/settlement to 42 seconds, reporting to 12 and telemetry flush to 5; late starts reduce the remaining budget. `exchange-minute-capacity` emits expected/started/completed/timed-out attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
+- The Exchange minute bounds execution/settlement to 42 seconds and publication to 12; late starts reduce the remaining budget. `exchange-minute-capacity` emits expected/started/completed/timed-out attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
 - SIGINT/SIGTERM stop new runs, cancel current work, and allow bounded probe cleanup and observation publication.
-- Restarting can lose unpublished observations. Already accepted events and external history remain subject to Event Hub, archive and workspace retention.
+- Restarting can lose unpublished results. Direct reports remain visible only until their TTL; accepted logging-mode events/history remain subject to Event Hub, archive and workspace retention.
 - Run one authoritative instance per target set. Statelessness does not prevent duplicate test emails across replicas.
 
 ## Identity and permission gates
@@ -57,9 +58,10 @@ The existing Teams app attaches the approved peer through
 `tenants[].services.teams.access.peerIdentity`; no runtime
 grants or extra app/host are created.
 
-Live workers require scoped Event Hubs sender and private configuration Blob reader
-roles, independently of Graph/mailbox permissions. Service-model report permission is
-for optional Microsoft provider context, not synthetic state publication; see the
+Live workers require scoped service-model report and private configuration Blob reader
+roles, independently of Graph/mailbox permissions. Direct mode uses those report
+permissions for synthetic journey/action health as well as provider context.
+Event Hubs sender roles are required only when Log Analytics is enabled; see the
 [model guide](../health-model/README.md). Default bot/mail/file journeys need no user
 password or interactive sign-in. Calling's tenant-wide application permission is a
 separate approved exception, not a scoped recipient grant. Optional provider collection
@@ -71,6 +73,16 @@ The Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra
 Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
 
 ## Observation publication and health evaluation
+
+The single root `logAnalytics.enabled` toggle selects the reporting path:
+
+- **Off:** each container aggregates observed current-cycle results into direct
+  health reports. Both success percentage and mean duration use actual attempts;
+  skipped/internal actions contribute no sample. Reports expire after
+  `healthModel.signalWindowMinutes`. There is no Event Hub, ingestion Function,
+  DCR ingestion or Log Analytics query dependency in this mode.
+- **On:** the observation pipeline described below retains per-attempt history and
+  evaluates the rolling window in KQL. `minimumSamples` applies in both modes.
 
 The [root configuration](../monitoring.config.json) owns service/scenario selection,
 account metadata, observation resources and model policy. Each service retains its
@@ -118,9 +130,12 @@ Each attempt contributes one binary success observation (1 or 0); executed busin
 [Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics)
 apply to raw observations. Log Analytics can now calculate percentiles and weighted
 cross-cycle statistics from individual attempts rather than precomputed means.
-The independent freshness alert uses two service intervals plus three minutes
+In enabled logging mode, the independent freshness alert uses two service intervals plus three minutes
 (5 minutes Exchange, 7 Teams, 13 OneDrive with the checked-in cadences). It shares
 the workspace dependency and does not detect every workspace/region/notification outage.
+That rule is retired when logging is turned off. Direct report expiry becomes
+Unknown rather than guaranteed Unhealthy; independent stopped/stalled-worker and
+publication-loss detection remains an operational acceptance requirement in direct mode.
 
 Root-configured `healthModel.alertActionGroupIds` connects existing Azure Monitor
 action groups to the main model's root: Degraded alerts at Sev 2 and Unhealthy at
@@ -129,17 +144,9 @@ See [root health alerts](../health-model/README.md#root-health-alerts) for deplo
 and notification checks. These state-change alerts do not replace independent
 worker/report-freshness monitoring or prove notification delivery.
 
-## Optional OpenTelemetry
-
-OTEL remains root-configured optional provider diagnostics. It does not duplicate
-journey/step observations into `AppTraces` or calculate a second set of synthetic
-health signals. Export uses the selected managed identity, with bounded flush and
-shutdown. Check `telemetry-initialization-failed`, `telemetry-output-failed` and
-`telemetry-export-failed` separately from Event Hub publication and Function ingestion.
-
 ## Log Analytics for administrators
 
-`npm run deploy` creates or reuses `law-<model>`, `appi-<model>` and the
+Only with `logAnalytics.enabled: true`, `npm run deploy` creates or reuses `law-<model>`, `appi-<model>` and the
 `M365Synthetic_CL` Analytics table. Five saved searches in **M365 Synthetic Monitoring**
 cover failures, affected users/groups, success rate, step latency and ingestion volume.
 Their KQL is in [`health-model/queries/admin/`](../health-model/queries/admin/).

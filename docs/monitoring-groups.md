@@ -66,7 +66,7 @@ per tenant, combined worst-of rather than as a pooled percentage. These are the 
 aggregation groups in the model; overall signals publish ungrouped.
 
 - No group or tenant entity branches, per-group models or per-account entities.
-- Journey entities only: not business steps, Service Health or OTEL.
+- Journey entities only: not business steps or Service Health.
 - Group health reaches the Experience and root entities through the normal
   dependency roll-up.
 - A group appears on a journey when its tenant service and scenario are enabled and
@@ -101,7 +101,7 @@ centrally hosted: group names are reporting labels, not execution regions.
 
 ## Per-group searches in Log Analytics
 
-`M365Synthetic_CL` retains `GroupIds` and `GroupNames` arrays on each Exchange/OneDrive
+With `logAnalytics.enabled: true`, `M365Synthetic_CL` retains `GroupIds` and `GroupNames` arrays on each Exchange/OneDrive
 observation. A shared account emits one observation, not one duplicate per group.
 Model queries filter memberships; administrator queries expand them only after
 event-ID deduplication. The five saved searches cover failures, impacted users,
@@ -113,8 +113,8 @@ success rates, latency and ingestion volume. Teams arrays remain empty. See
 - Group health joins each journey's worst-of composite, so a small group (one
   account) can turn an entity Degraded or Unhealthy on a single failed attempt that
   the overall percentage would absorb.
-- Each group adds journey-level KQL signals, so model-query work grows with
-  groups x journeys, not with one model/entity per account.
+- Each group adds journey-level signals, not models/entities per account. With logging
+  off, direct report work grows with groups x journeys; when on, KQL evaluation does.
 - Unknown never overrides a known state, so a stopped worker is not visible through
   a group; use the [operations checks](./operations.md#enterprise-reliability-acceptance-gate).
 - Groups label API-backed results; they do not measure employee experience or

@@ -5,14 +5,15 @@ import { BlockBlobClient } from "@azure/storage-blob";
 import { z } from "zod";
 import { ConfigurationError } from "./config.js";
 import { probeServices } from "./contracts.js";
+import { groupSignalName, tenantSignalName } from "./groups.js";
 import { az, azJson, hash, runFile, runtimeConfiguration, writeJson, type DeploymentRun } from "./deploy-phases.js";
 import { nodeProjectDirectory } from "./paths.js";
 import { serviceProbes } from "./service-config.js";
 
-const template = "observations-template.json";
-const parameters = "observations.parameters.json";
+const template = "reporting-template.json";
+const parameters = "reporting.parameters.json";
 
-export async function writePipelineParameters(run: DeploymentRun): Promise<void> {
+export async function writeReportingParameters(run: DeploymentRun): Promise<void> {
   const token = await azJson<{ accessToken: string }>(run, "deployment-identity", [
     "account", "get-access-token", "--resource", "https://management.azure.com/",
     "--tenant", run.prepared.settings.azureTenantId,
@@ -35,12 +36,12 @@ export async function writePipelineParameters(run: DeploymentRun): Promise<void>
   });
 }
 
-export async function deployPipeline(run: DeploymentRun, operation: "what-if" | "create"): Promise<void> {
-  const phase = `observations-${operation}`;
+export async function deployReportingFoundation(run: DeploymentRun, operation: "what-if" | "create"): Promise<void> {
+  const phase = `reporting-foundation-${operation}`;
   run.phase = phase;
   await az(run, phase, [
     "deployment", "group", operation, "--resource-group", run.prepared.document.healthModel.resourceGroup,
-    ...run.subscription, "--name", `observations-${run.runId}`,
+    ...run.subscription, "--name", `reporting-foundation-${run.runId}`,
     "--template-file", runFile(run, template), "--parameters", `@${runFile(run, parameters)}`,
     ...(operation === "what-if" ? ["--no-pretty-print"] : []), "--output", "none",
   ]);
@@ -58,6 +59,8 @@ async function local(
 }
 
 export async function deployIngestionFunction(run: DeploymentRun): Promise<void> {
+  const settings = run.prepared.document.logAnalytics;
+  if (!settings.enabled) throw new ConfigurationError("The ingestion Function requires logAnalytics.enabled");
   await local(run, "npm", "build-ingestion-function", ["run", "build"]);
   const directory = join(nodeProjectDirectory, ".function-package", run.runId);
   const zip = runFile(run, "ingestion-function.zip");
@@ -78,7 +81,7 @@ export async function deployIngestionFunction(run: DeploymentRun): Promise<void>
     await az(run, "deploy-ingestion-function", [
       "functionapp", "deployment", "source", "config-zip",
       "--resource-group", run.prepared.document.healthModel.resourceGroup,
-      "--name", run.prepared.document.observations.functionAppName, ...run.subscription,
+      "--name", settings.functionAppName, ...run.subscription,
       "--src", zip, "--build-remote", "false", "--timeout", "600", "--output", "none",
     ]);
     await verifyIngestionFunction(run);
@@ -88,8 +91,9 @@ export async function deployIngestionFunction(run: DeploymentRun): Promise<void>
 }
 
 async function verifyIngestionFunction(run: DeploymentRun): Promise<void> {
-  const { observations, healthModel } = run.prepared.document;
-  const resource = `/subscriptions/${healthModel.subscriptionId}/resourceGroups/${healthModel.resourceGroup}/providers/Microsoft.Web/sites/${observations.functionAppName}`;
+  const { logAnalytics, healthModel } = run.prepared.document;
+  if (!logAnalytics.enabled) throw new ConfigurationError("Function verification requires logAnalytics.enabled");
+  const resource = `/subscriptions/${healthModel.subscriptionId}/resourceGroups/${healthModel.resourceGroup}/providers/Microsoft.Web/sites/${logAnalytics.functionAppName}`;
   await az(run, "sync-ingestion-trigger", [
     "rest", "--method", "post",
     "--url", `https://management.azure.com${resource}/syncfunctiontriggers?api-version=2024-04-01`,
@@ -100,11 +104,11 @@ async function verifyIngestionFunction(run: DeploymentRun): Promise<void> {
   while (run.now() < deadline) {
     const names = z.array(z.string()).parse(await azJson<unknown>(run, run.phase, [
       "functionapp", "function", "list",
-      "--resource-group", healthModel.resourceGroup, "--name", observations.functionAppName,
+      "--resource-group", healthModel.resourceGroup, "--name", logAnalytics.functionAppName,
       ...run.subscription, "--query", "[].name",
     ]));
     if (names.some(name => name.endsWith("/ingestObservations"))) {
-      run.emit({ event: "observation-function-indexed", functionApp: observations.functionAppName });
+      run.emit({ event: "observation-function-indexed", functionApp: logAnalytics.functionAppName });
       return;
     }
     await run.sleep(5000);
@@ -151,7 +155,12 @@ async function observationWorkspace(run: DeploymentRun): Promise<string> {
 }
 
 export async function verifyObservations(run: DeploymentRun, service: string, since: string): Promise<void> {
-  const workers = run.prepared.workers.filter(worker => worker.type === service);
+  const workers = run.prepared.workers.filter(worker => worker.type === service && worker.service.mode === "live");
+  if (!workers.length) {
+    run.emit({ event: "reporting-verification-skipped", service, reason: "simulation-does-not-publish-cloud-reports" });
+    return;
+  }
+  if (!run.prepared.document.logAnalytics.enabled) throw new ConfigurationError("Observation ingestion verification requires logAnalytics.enabled");
   const expected = new Set(workers.flatMap(worker => serviceProbes(
     worker.service, worker.project.services[worker.type].scenarios,
   ).map(probe => `${worker.project.tenant.id}/${probe.id}/${probeServices[probe.type].journey}`)));
@@ -183,7 +192,90 @@ export async function verifyObservations(run: DeploymentRun, service: string, si
   throw new ConfigurationError(`Fresh ${service} observations did not reach Log Analytics before the ingestion deadline`);
 }
 
+export async function verifyDirectReports(run: DeploymentRun, service: string, since: string): Promise<void> {
+  if (run.prepared.document.logAnalytics.enabled) throw new ConfigurationError("Direct-report verification requires Log Analytics off");
+  const workers = run.prepared.workers.filter(worker => worker.type === service && worker.service.mode === "live");
+  if (!workers.length) {
+    run.emit({ event: "reporting-verification-skipped", service, reason: "simulation-does-not-publish-cloud-reports" });
+    return;
+  }
+  const expected = new Map<string, { samples: number; revision: string }>();
+  for (const worker of workers) {
+    const revision = z.string().min(1).parse(await azJson<unknown>(run, "direct-report-worker-revision", [
+      "containerapp", "show", "--resource-group", run.prepared.document.healthModel.resourceGroup,
+      "--name", worker.appName, ...run.subscription, "--query", "properties.latestReadyRevisionName",
+    ]));
+    const probes = serviceProbes(worker.service, worker.project.services[worker.type].scenarios);
+    for (const journey of new Set(probes.map(probe => probe.type))) {
+      const selected = probes.filter(probe => probe.type === journey);
+      const definition = probeServices[journey];
+      const scopes = [
+        { group: undefined, samples: selected.length },
+        ...worker.project.groups.filter(group => group.service === service).map(group => ({
+          group: group.id, samples: selected.filter(probe => group.targetIds.includes(probe.id)).length,
+        })),
+      ];
+      for (const scope of scopes.filter(scope => scope.samples >= worker.project.healthModel.minimumSamples)) {
+        for (const metric of ["observed-success-percentage", "observed-mean-duration"]) {
+          const signal = scope.group ? groupSignalName(scope.group, worker.tenant, metric)
+            : worker.project.multiTenant ? tenantSignalName(worker.tenant, metric) : metric;
+          expected.set(`${definition.entityName}/${signal}`, { samples: scope.samples, revision });
+        }
+      }
+    }
+  }
+  if (!expected.size) throw new ConfigurationError("Direct-report minimumSamples excludes every selected live journey scope");
+  const statusSchema = z.object({
+    name: z.string(),
+    status: z.object({
+      reportedAt: z.string().optional(), additionalContext: z.string().optional(),
+      value: z.number().optional(), healthState: z.string().optional(),
+    }).optional(),
+  });
+  const responseSchema = z.object({ value: z.array(z.object({
+    name: z.string(),
+    properties: z.object({ signalGroups: z.object({
+      azureLogAnalytics: z.unknown().optional(),
+      external: z.object({ signals: z.array(statusSchema).default([]) }).nullish(),
+    }).default({}) }),
+  })) });
+  const snapshot = runtimeConfiguration(run);
+  const { subscriptionId, resourceGroup, name } = run.prepared.document.healthModel;
+  const url = `https://management.azure.com/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CloudHealth/healthmodels/${name}-${service}/entities?api-version=2026-10-01-preview`;
+  run.phase = "verify-direct-health-reports";
+  const deadline = run.now() + 480000;
+  while (run.now() < deadline) {
+    const response = responseSchema.parse(await azJson<unknown>(run, run.phase, [
+      "rest", "--method", "get", "--url", url, ...run.subscription,
+    ]));
+    const observed = new Set<string>();
+    for (const entity of response.value) {
+      if (entity.properties.signalGroups.azureLogAnalytics) {
+        throw new ConfigurationError(`Direct reporting retains an active Log Analytics source on ${entity.name}`);
+      }
+      for (const signal of entity.properties.signalGroups.external?.signals ?? []) {
+        const key = `${entity.name}/${signal.name}`;
+        const scope = expected.get(key);
+        const status = signal.status;
+        if (!scope || !status?.additionalContext || !status.reportedAt || Date.parse(status.reportedAt) < Date.parse(since)) continue;
+        const context = z.object({
+          configSha256: z.string().optional(), containerRevision: z.string().optional(), samples: z.number().optional(),
+        }).parse(JSON.parse(status.additionalContext));
+        if (context.configSha256 === snapshot.sha256 && context.containerRevision === scope.revision &&
+            context.samples !== undefined && context.samples >= scope.samples && status.value !== undefined) observed.add(key);
+      }
+    }
+    if ([...expected.keys()].every(key => observed.has(key))) {
+      run.emit({ event: "direct-health-reports-verified", service, expectedSignals: expected.size, observedSignals: observed.size });
+      return;
+    }
+    await run.sleep(10000);
+  }
+  throw new ConfigurationError(`Fresh ${service} direct health reports did not reach the model before the verification deadline`);
+}
+
 export async function deployFreshnessAlert(run: DeploymentRun): Promise<void> {
+  if (!run.prepared.document.logAnalytics.enabled) throw new ConfigurationError("Log-based freshness alerts require logAnalytics.enabled");
   const file = runFile(run, "observation-alerts-template.json");
   await writeFile(file, await az(run, "build-freshness-alert", [
     "bicep", "build", "--file", join(nodeProjectDirectory, "../health-model/infra/observation-alerts.bicep"), "--stdout",

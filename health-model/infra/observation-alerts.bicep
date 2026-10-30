@@ -13,6 +13,7 @@ var expected = flatten(map(projectConfig.tenants, tenant => map(
     maxAgeSeconds: 2 * tenant.services[service].execution.intervalSeconds + 180
   }
 )))
+var deployFreshness = projectConfig.logAnalytics.enabled && !empty(actionGroups) && !empty(expected)
 var query = replace('''
 M365Synthetic_CL
 | where TimeGenerated > ago(30m) and Category == 'M365Synthetic' and Mode == 'live' and Kind == 'journey'
@@ -26,10 +27,10 @@ M365Synthetic_CL
 | where isnull(LastObserved) or datetime_diff('second',now(),LastObserved)>MaxAgeSeconds
 | project TenantAlias,Service,LastObserved,MaxAgeSeconds
 ''', '__EXPECTED__', string(expected))
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = if (deployFreshness) {
   name: workspaceName
 }
-resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(actionGroups) && !empty(expected)) {
+resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (deployFreshness) {
   name: '${projectConfig.healthModel.name}-observation-freshness'
   location: location
   kind: 'LogAlert'
@@ -41,7 +42,7 @@ resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(
     severity: 1
     evaluationFrequency: 'PT1M'
     windowSize: 'PT30M'
-    scopes: [workspace.id]
+    scopes: [workspace!.id]
     autoMitigate: true
     criteria: {
       allOf: [{
@@ -55,9 +56,9 @@ resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(
     actions: { actionGroups: actionGroups }
   }
 }
-resource reader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(actionGroups) && !empty(expected)) {
-  name: guid(workspace.id, projectConfig.healthModel.name, 'freshness-query')
-  scope: workspace
+resource reader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployFreshness) {
+  name: guid(workspace!.id, projectConfig.healthModel.name, 'freshness-query')
+  scope: workspace!
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
     principalId: alert!.identity.principalId

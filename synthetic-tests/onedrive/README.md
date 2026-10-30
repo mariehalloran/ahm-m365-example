@@ -3,8 +3,9 @@
 One independent Container App supports three journeys, executing every enabled
 journey for **every configured account** on independent 300-second lanes. Workers
 keep no cross-cycle state/outbox; each cycle publishes aggregated success percentages
-and mean journey/action durations directly, with console diagnostics. Root OTEL is optional
-(schema default off; the checked-in root config enables Azure Monitor export).
+and mean journey/action durations directly when `logAnalytics.enabled` is false,
+with console diagnostics in both modes. Enabling that single root toggle publishes
+per-attempt observations through the logging pipeline for KQL-backed model health.
 
 These tests exercise Graph, not employee sign-in, browser rendering or sync.
 Sharing/search/browser prototypes and SharePoint are not selectable.

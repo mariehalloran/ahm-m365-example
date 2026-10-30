@@ -72,7 +72,7 @@ export function runtimeConfiguration(run: DeploymentRun) {
   const sha256 = hash(text);
   return {
     text, sha256,
-    url: `https://${run.prepared.document.observations.archiveStorageAccount}.blob.core.windows.net/worker-config/${sha256}.json`,
+    url: `https://${run.prepared.settings.configurationStorageAccount}.blob.core.windows.net/worker-config/${sha256}.json`,
   };
 }
 export const deploysWorkers = (prepared: PreparedDeployment) => prepared.settings.stage === "workers";
@@ -344,7 +344,7 @@ export async function buildBicep(run: DeploymentRun) {
   const builds = [
     ["build-model-bicep", join(repositoryDirectory, "health-model/infra/main.bicep"), healthTemplate],
     ["build-worker-bicep", join(nodeProjectDirectory, "infra/main.bicep"), workerTemplate],
-    ["build-observation-bicep", join(nodeProjectDirectory, "infra/observations.bicep"), "observations-template.json"],
+    ["build-reporting-bicep", join(nodeProjectDirectory, "infra/configuration.bicep"), "reporting-template.json"],
   ] as const;
   for (const [phase, source, template] of builds) {
     const text = await az(run, phase, ["bicep", "build", "--file", source, "--stdout"]);

@@ -103,12 +103,12 @@ Put Exchange/OneDrive user targets in
 each `users` array; there is no separate root group list. Supply the ungrouped Teams channel and meeting
 references and approved provider/readback app registrations where selected.
 See [what the config holds](./deployment.md#what-the-config-holds) for each field.
-The root `observations` block names the shared Event Hub, private storage,
-ingestion Function and DCR resources. `npm run deploy` provisions these with managed
-identities and keeps Log Analytics on pay-as-you-go. Capture is optional
-(`captureEnabled`); the checked-in setting enables its separately billed raw archive.
-Workers publish observations, and Health Models evaluates KQL. No additional
-Microsoft 365 permissions are needed for this Azure ingestion path.
+The root `logAnalytics.enabled` toggle selects direct container health reports
+(`false`) or the optional Event Hub/Function/DCR/Log Analytics pipeline (`true`).
+Pipeline resource names are required only when enabled; Capture is optional within
+that mode. The checked-in setting is off. Both modes use private configuration
+storage named by `deployment.configurationStorageAccount`; that store is not a log
+pipeline. No additional Microsoft 365 permissions are needed for either Azure reporting path.
 Reference existing Azure Monitor action groups with `healthModel.alertActionGroupIds`;
 manage recipients in the action groups, not this config
 ([root alerts](../health-model/README.md#root-health-alerts)).
@@ -159,9 +159,14 @@ az provider register --namespace Microsoft.ContainerRegistry --wait
 az provider register --namespace Microsoft.App --wait
 az provider register --namespace Microsoft.BotService --wait
 az provider register --namespace Microsoft.CloudHealth --wait
-# Only when otel.enabled and otel.destination are "azure-monitor":
+# Only when logAnalytics.enabled is true:
 az provider register --namespace Microsoft.OperationalInsights --wait
 az provider register --namespace Microsoft.Insights --wait
+az provider register --namespace Microsoft.EventHub --wait
+az provider register --namespace Microsoft.Web --wait
+
+# Required for private configuration storage in both modes:
+az provider register --namespace Microsoft.Storage --wait
 
 az group create --name <healthModel.resourceGroup> --location <deployment.location>
 ```

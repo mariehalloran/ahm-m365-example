@@ -144,22 +144,23 @@ remain distinct from total journey time.
 Each complete lane cycle publishes only its observed journeys. An incomplete
 cycle skips observation publication and emits `observations-skipped-incomplete-cycle`
 rather than presenting a partial cohort as complete. Every journey/action
-contributes raw success and duration observations. Models query the fixed
+contributes success and duration measurements. Reports use the fixed
 `observed-success-percentage` / `observed-mean-duration` signals;
 with more than one tenant in the config each is named `tenant-<tenant id>--<signal>`
 (group signals: `group-<id>--tenant-<tenant id>--<signal>`).
 OneDrive maps semantic actions to deployed `step-1`…`step-4` IDs; its historical
 `onedrive-planned-*` names are retained, not proposal nodes. There are no
-per-target signal inventories. Skipped actions receive Unknown without a value.
+per-target signal inventories. Skipped actions contribute no sample.
 
 Valid-but-incomplete live setup produces unsuccessful/unexecutable journey
 evidence when reporting credentials are usable. Unsafe schemas/reporting
 credentials can prevent publication and require independent freshness checks.
-Event Hub publication uses bounded retries; the synthetic
-Exchange batch has 12 seconds, other batches 30. The Function forwards batches through
-the DCR Logs Ingestion API. Acceptance is not evaluated rollup or notification delivery.
-Queries deduplicate event IDs and preserve no-data Unknown; a separate freshness alert
-does not provide independent protection against the workspace itself failing.
+Reporting uses bounded retries: the synthetic Exchange batch has 12 seconds,
+other batches 30. With Log Analytics off, the container publishes aggregated health
+reports directly. When enabled, the Function forwards raw observations through the
+DCR Logs Ingestion API. Acceptance is not evaluated rollup or notification delivery.
+Queries deduplicate event IDs and preserve no-data Unknown. Direct reports expire
+after their TTL; expiry is not guaranteed Unhealthy or an alert.
 
 ## Optional provider collectors
 
@@ -177,25 +178,26 @@ health. Missing, denied, stale or invalid data produces no health report, so an
 enabled collector need not have a visible signal.
 See [permissions, exact endpoints and bounded contracts](../../docs/provider-monitoring.md).
 
-## Console, OTEL and reliability
+## Reporting modes and reliability
 
 Console diagnostics always include labeled mode, opaque test/correlation IDs,
 bounded category, optional value-free failure hints, executed/skipped actions and
 durations; never target addresses, message bodies, credentials or raw HTTP failures.
-Journey/step observations use the shared [publisher](./src/observation-publisher.ts)
-and [generic contract](./src/observations.ts). Event Hub Capture is optional.
-The [Function](../ingestion/src/index.ts) preserves invalid/exhausted records in private
-quarantine and submits valid batches to DCR ingestion. Root OTEL is optional provider
-diagnostics only and does not duplicate synthetic observations. Exchange/OneDrive
-observations retain mailbox/UPN and reporting-group arrays; Teams stays ungrouped. See
+`logAnalytics.enabled` is the only reporting-mode toggle. Off sends aggregated
+journey/action health reports directly from each container, with no logging pipeline.
+On uses the shared [publisher](./src/observation-publisher.ts) and
+[generic contract](./src/observations.ts), optional Capture, and the
+[Function](../ingestion/src/index.ts), which preserves invalid/exhausted records
+in private quarantine and submits valid batches to DCR ingestion. Only this enabled
+mode retains mailbox/UPN and reporting-group arrays in observations; Teams stays ungrouped. See
 [Log Analytics for administrators](../../docs/operations.md#log-analytics-for-administrators).
-Azure export uses Microsoft's OpenTelemetry exporters directly, retaining
-observable export callbacks and bounded flush/shutdown. The distribution would
-hide these failures behind its own processors. No automatic instrumentation,
-live metrics or additional standard metrics are enabled.
+Provider diagnostics remain console output; provider supporting reports are direct
+and suppressed in either mode. No additional exporter or instrumentation switch exists.
 
 No in-memory cycle can survive every crash/network partition. There is no
 exactly-once or lossless-delivery guarantee. Independently verify stopped/stalled
 workers, fresh accepted reports, model propagation and notifications; do not rely
-on the worker to detect its own loss. See
+on the worker to detect its own loss. The log-based freshness alert exists only
+when Log Analytics is enabled and shares that workspace dependency. Direct mode
+does not provide this independent watchdog. See
 [enterprise acceptance](../../docs/operations.md#enterprise-reliability-acceptance-gate).

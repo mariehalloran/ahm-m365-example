@@ -3,6 +3,14 @@ import { providerLog, type ProviderDiagnostic } from "./provider-diagnostics.js"
 
 export type ExecutionMode = "simulation" | "live";
 export type Outcome = "success" | "failure" | "unexecutable";
+export interface CycleResults { cycleId: string; results: SyntheticResult[]; signal?: AbortSignal }
+export type CyclePublisher = (cycle: CycleResults) => Promise<void>;
+export interface ResultContext {
+  tenant: string;
+  user?: string;
+  peer?: string;
+  groups: { id: string; displayName: string }[];
+}
 export interface ResultOutput {
   record(result: SyntheticResult, mode: ExecutionMode): void;
   recordDiagnostic(record: ProviderDiagnostic): void;

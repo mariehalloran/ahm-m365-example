@@ -6,8 +6,7 @@ import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
-import type { ResultOutput } from "./results.js";
-import type { CycleResults, ObservationPublisher } from "./observations.js";
+import type { CyclePublisher, CycleResults, ResultOutput } from "./results.js";
 
 const CLEANUP_GRACE_MS = 12_000;
 
@@ -21,7 +20,7 @@ export interface RunnerDependencies {
   shutdown?: () => Promise<void>;
   handler?: ProbeHandler;
   now?: () => number;
-  publishObservations?: ObservationPublisher;
+  publishResults?: CyclePublisher;
   exchangeRequests?: GraphRequestPermits;
   capacityGroups?: { id: string; displayName: string; targetIds: string[] }[];
 }
@@ -203,15 +202,16 @@ async function publishCycleResults(
   telemetryErrors: unknown[],
 ): Promise<void> {
   const complete = cycle.results.length === config.probes.length;
-  if (!complete && dependencies.publishObservations) {
-    dependencies.telemetry.emit("observations-skipped-incomplete-cycle", {
-      cycleId: cycle.cycleId, probeCount: cycle.results.length,
+  if (!complete) {
+    dependencies.telemetry.emit("service-cycle-incomplete", {
+      cycleId: cycle.cycleId, expectedAttempts: config.probes.length, settledAttempts: cycle.results.length,
     });
   }
-  if (complete) {
+  if (cycle.results.length) {
     const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
-    const signal = AbortSignal.timeout(exchange ? 12000 : 30000);
-    await withAbort(signal, async () => dependencies.publishObservations?.({ ...cycle, signal }));
+    const deadline = AbortSignal.timeout(exchange ? 12000 : 30000);
+    const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
+    await withAbort(signal, async () => dependencies.publishResults?.({ ...cycle, signal }));
   }
   if (telemetryErrors.length) throw telemetryErrors[0];
 }
@@ -291,7 +291,9 @@ export async function runCycle(
     if (exchange) reportExchangeCapacity(config, dependencies, cycle, results, permitStart!);
 
     stage = "reporting";
-    await publishCycleResults(config, dependencies, { cycleId, results }, telemetryErrors);
+    await publishCycleResults(config, dependencies, {
+      cycleId, results, ...(externalSignal ? { signal: externalSignal } : {}),
+    }, telemetryErrors);
     telemetry.emit("service-execution-completed", {
       cycleId,
       probeCount: results.length,

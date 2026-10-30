@@ -10,6 +10,8 @@ param service ServiceDefinition
 param policy object
 param enableServiceHealth bool = false
 param suppressOneDriveRestore bool = false
+@description('Bind native observation queries when true; otherwise accept direct external health reports.')
+param logAnalyticsEnabled bool = false
 param workspaceName string
 param tenantScopes array
 @description('Exchange/OneDrive user groups with at least one runnable scope for this service.')
@@ -49,9 +51,9 @@ func reportingGroupEntries(groups array, service string, journey string, signals
     entry => !empty(entry.members)
   )
 
-// The API requires at least one group when this optional property is present.
+// Empty arrays are invalid; null explicitly clears a previously configured group list.
 func aggregationGroupsProperty(groups array) object =>
-  empty(groups) ? {} : { signalAggregationGroups: groups }
+  { signalAggregationGroups: empty(groups) ? null : groups }
 
 func centerX(positions int[]) int => empty(positions) ? 0 : (min(positions) + max(positions)) / 2
 
@@ -84,7 +86,7 @@ var signalScopes = concat(
     journeys: scope.journeys
   })))
 )
-var telemetryMetrics = [
+var observationMetrics = [
   {
     name: 'observed-success-percentage'
     displayName: 'Observed success percentage'
@@ -115,7 +117,7 @@ var callMetrics = [
     dataUnit: 'Percent'
     aggregation: 'avg(100.0 * Value)'
     phase: 'connection'
-    evaluationRules: telemetryMetrics[0].evaluationRules
+    evaluationRules: observationMetrics[0].evaluationRules
   }
   {
     name: 'observed-call-mean-connection-duration'
@@ -123,7 +125,7 @@ var callMetrics = [
     dataUnit: 'Milliseconds'
     aggregation: 'avg(DurationMs)'
     phase: 'connection'
-    evaluationRules: telemetryMetrics[1].evaluationRules
+    evaluationRules: observationMetrics[1].evaluationRules
   }
   {
     name: 'observed-call-disconnection-success-percentage'
@@ -131,7 +133,7 @@ var callMetrics = [
     dataUnit: 'Percent'
     aggregation: 'avg(100.0 * Value)'
     phase: 'disconnection'
-    evaluationRules: telemetryMetrics[0].evaluationRules
+    evaluationRules: observationMetrics[0].evaluationRules
   }
   {
     name: 'observed-call-mean-disconnection-duration'
@@ -139,7 +141,7 @@ var callMetrics = [
     dataUnit: 'Milliseconds'
     aggregation: 'avg(DurationMs)'
     phase: 'disconnection'
-    evaluationRules: telemetryMetrics[1].evaluationRules
+    evaluationRules: observationMetrics[1].evaluationRules
   }
 ]
 var nodes = concat(
@@ -231,10 +233,10 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   properties: {}
 }
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = if (logAnalyticsEnabled) {
   name: workspaceName
 }
-resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = {
+resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = if (logAnalyticsEnabled) {
   parent: model
   name: 'workspace-query'
   properties: {
@@ -243,9 +245,9 @@ resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticat
     managedIdentityName: 'SystemAssigned'
   }
 }
-resource workspaceReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(workspace.id, model.id, 'log-analytics-reader')
-  scope: workspace
+resource workspaceReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (logAnalyticsEnabled) {
+  name: guid(workspace!.id, model.id, 'log-analytics-reader')
+  scope: workspace!
   properties: {
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
@@ -268,23 +270,23 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
           node.rollup ? { dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false } } : {},
           node.kind == 'journey' || node.kind == 'step'
             ? {
-                azureLogAnalytics: {
+                azureLogAnalytics: logAnalyticsEnabled ? {
                   authenticationSetting: 'workspace-query'
-                  logAnalyticsWorkspaceResourceId: workspace.id
+                  logAnalyticsWorkspaceResourceId: workspace!.id
                   signals: flatten(map(
                     filter(signalScopes, scope => contains(scope.journeys, node.journey) && (node.kind == 'journey' || empty(scope.group))),
-                    scope => map(concat(telemetryMetrics, node.name == 'teams-call' ? callMetrics : []), metric => {
-                    name: observationSignalName(metric.name, scope, length(tenantScopes) > 1)
-                    displayName: metric.displayName
-                    signalKind: 'LogAnalyticsQuery'
-                    queryText: bindObservationQuery(observationQuery, service.service, node, scope, metric, policy)
-                    valueColumnName: 'Value'
-                    dataUnit: metric.dataUnit
-                    refreshInterval: 'PT1M'
-                    timeGrain: 'PT${policy.signalWindowMinutes}M'
-                    evaluationRules: metric.evaluationRules
-                  })))
-                }
+                    scope => map(concat(observationMetrics, node.name == 'teams-call' ? callMetrics : []), metric => {
+                      name: observationSignalName(metric.name, scope, length(tenantScopes) > 1)
+                      displayName: metric.displayName
+                      signalKind: 'LogAnalyticsQuery'
+                      queryText: bindObservationQuery(observationQuery, service.service, node, scope, metric, policy)
+                      valueColumnName: 'Value'
+                      dataUnit: metric.dataUnit
+                      refreshInterval: 'PT1M'
+                      timeGrain: 'PT${policy.signalWindowMinutes}M'
+                      evaluationRules: metric.evaluationRules
+                    })))
+                } : null
               }
             : {}
         )
@@ -292,8 +294,8 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey' || node.kind == 'journey-group'
         ? { icon: { iconName: 'UserFlow' } }
         : {},
-      node.kind == 'journey' && service.service != 'teams'
-        ? aggregationGroupsProperty(reportingGroupEntries(
+      node.kind == 'journey'
+        ? aggregationGroupsProperty(service.service == 'teams' ? [] : reportingGroupEntries(
             reportingGroups, service.service, node.journey,
             ['observed-success-percentage', 'observed-mean-duration']
           ))

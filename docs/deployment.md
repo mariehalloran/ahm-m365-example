@@ -138,23 +138,25 @@ Phases, in order:
 1. **Preflight**, no changes: validate the config, check the Azure account, any
    `existing` foundation, worker identity and Teams bot bindings, build both Bicep
    templates and run `what-if` for ingestion, models, foundation and workers.
-2. **Observation foundation:** the existing pay-as-you-go workspace, Analytics
-   table `M365Synthetic_CL`, Standard Event Hub, optional Capture, private archive,
-   managed-identity Function host/storage, DCE and DCR.
-3. **Health models and worker foundation:** KQL-backed journey/step signals, model
-   query permissions, worker identities, image pull, Event Hub sender and private
-   configuration-reader roles. Provider-only health-report grants remain separate.
-4. **Build and ingestion:** pin the ACR worker image by digest, build/deploy the
-   Function package, then upload an immutable, hash-named private Blob snapshot
+2. **Reporting foundation:** private configuration storage in both modes.
+   Only with `logAnalytics.enabled: true`, also provision the pay-as-you-go workspace,
+   `M365Synthetic_CL`, Event Hub, optional Capture, ingestion Function, DCE and DCR.
+3. **Health models and worker foundation:** direct external-report signals when
+   off, native KQL signals/query permissions when on. Worker identities always receive
+   scoped direct-report and configuration-reader roles; Event Hub sender roles are on-only.
+4. **Build and configuration:** pin the ACR worker image by digest. Build/deploy
+   the ingestion Function only when on, then upload an immutable private Blob snapshot
    generated from the root configuration and its resolved `.env` bindings. This is
    a deployment artifact, not another user-maintained configuration file.
-5. **Prove Exchange first:** roll out the Exchange worker and verify fresh live
-   journey/account observations from that exact configuration hash in Log Analytics.
-   Then roll out the remaining services and verify their selected journey/account pairs.
-6. **Operational checks:** enable the independent observation-freshness alert only
-   after live ingestion is verified. Delete only explicitly listed obsolete entities.
+5. **Prove Exchange first:** verify current direct health reports or live observation
+   ingestion, including the exact configuration hash and ready revision. Then roll out
+   the remaining services and verify their selected journey scopes.
+6. **Operational checks:** on enables the log-based freshness rule after ingestion
+   proof. Off verifies direct reporting, allows the old pipeline to drain, and retires
+   only owned Event Hub/Function/DCR resources and obsolete access. Existing workspace
+   history and archived data are retained. The direct mode has no log freshness watchdog.
 
-Completion includes ready revisions and fresh journey/account observations, not
+Completion includes ready revisions and current reports in the selected mode, not
 proof that Microsoft 365 is healthy or notifications were delivered. Verify Capture,
 actual model evaluation and notifications under [acceptance](#acceptance-and-cleanup). Each run
 writes a protected record (what-if results, provenance) to
@@ -166,6 +168,7 @@ already excludes that default `deployment.stateDirectory`; ignore a custom one y
 | Setting | Meaning |
 | --- | --- |
 | `location` | Region for the foundation and workers; it must match an existing environment's actual region |
+| `configurationStorageAccount` | Private hash-verified worker configuration store; required in both modes and independent of the logging pipeline |
 | `healthModelLocation` | Optional region for the health models, default `location` |
 | `azureTenantId` | Optional tenant that hosts the Azure resources, by default the single tenant's `tenantId` (required with several tenants); it must be the subscription's actual tenant, so set it only to host in a different tenant than Microsoft 365 |
 | `stage` | `workers` (default), or `foundation` to stop after the models and foundation, for example until administrators approve the new identities |
@@ -173,7 +176,7 @@ already excludes that default `deployment.stateDirectory`; ignore a custom one y
 | `enableBetaServiceActivity` | Default `false`; required when a service enables `serviceActivity` |
 | `foundation` | `{ "mode": "create", "environmentName", "registryName" }` or `{ "mode": "existing", "environment", "registry" }`, each name a resource in the health model's resource group or a full resource ID ([names](#what-the-config-holds)) |
 | `image` | `{ "mode": "build", "repository", "tag" }`, built in ACR for `linux/amd64` with the run ID appended to the tag, or `{ "mode": "existing", "reference" }`, a `registry/repository@sha256:…` digest in the configured registry |
-| `workspaceName`, `applicationInsightsName` | Shared observation/diagnostic resource names, defaulting to `law-<healthModel.name>` and `appi-<healthModel.name>` |
+| `workspaceName`, `applicationInsightsName` | Optional logging-mode resource names, defaulting to `law-<healthModel.name>` and `appi-<healthModel.name>`; not created for a new direct-only deployment |
 | `retireEntities` | Optional `{ "service", "entityName" }` list of obsolete entities to delete after the rollout |
 | `commandTimeoutSeconds`, `rolloutTimeoutSeconds`, `stateDirectory` | Defaults 1800, 300 and `.monitoring-deployment` |
 
@@ -390,7 +393,8 @@ The [root configuration](../monitoring.config.json) is the only file you maintai
 
 | Section | Owns |
 | --- | --- |
-| `healthModel`, `otel`, `serviceHealth` | Azure destination, thresholds and report TTL; optional OTEL and Service Health context, both off by default |
+| `healthModel`, `serviceHealth` | Azure destination, thresholds/report TTL and optional suppressed Service Health context |
+| `logAnalytics.enabled` | The single reporting toggle: `false` for direct container health reports, `true` for the observation/KQL pipeline |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins, above |
 | `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (certificate references and, for Teams, bot names), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
 | `tenants[].services.exchange.targets`, `….onedrive.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
@@ -404,7 +408,7 @@ generated IDs stay out of it: see [`.env`](#generated-ids-in-env).
 ## Identity and permissions
 
 Use an explicitly selected managed identity per service and separate
-authorization for Microsoft 365 access, Event Hub publication and provider reports.
+authorization for Microsoft 365 access and health reporting.
 
 - **Exchange:** application RBAC scoped to the dedicated test mailboxes; see
   [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md). Both the one-time approval and
@@ -420,10 +424,11 @@ authorization for Microsoft 365 access, Event Hub publication and provider repor
 - **OneDrive:** `Files.SelectedOperations.Selected` with write grants on the
   dedicated folders; app-folder operations separately use
   `Files.ReadWrite.AppFolder`. See [OneDrive setup](../synthetic-tests/onedrive/README.md).
-- **Observation pipeline:** workers have Event Hubs sender and private configuration
-  reader roles. The Function has receiver, host/quarantine storage and DCR ingestion
-  roles. Model identities query the workspace; the root reads its nested models.
-  Worker service-model report permissions are used only for Microsoft provider context.
+- **Reporting:** workers have private configuration-reader and service-model report
+  roles. With logging off, these publish all aggregated journey/action reports directly.
+  When on, workers also have Event Hubs sender access; the Function has receiver,
+  host/quarantine storage and DCR ingestion roles, and model identities query the workspace.
+  The root reads its nested models in both modes.
 
 There is no silent CLI, user, certificate or credential fallback. Explicit
 certificate options for local application access remain separate from hosted
@@ -431,9 +436,10 @@ managed-identity execution.
 
 ## Container Apps boundary
 
-`npm run deploy` deploys the observation foundation, [health models](../health-model/README.md),
-then the [worker foundation](../synthetic-tests/infra/README.md), image and Function.
-It proves fresh Exchange ingestion before rolling out Teams and OneDrive. Workers reuse an
+`npm run deploy` deploys the selected reporting foundation and [health models](../health-model/README.md),
+then the [worker foundation](../synthetic-tests/infra/README.md) and image.
+Only the enabled logging mode deploys an ingestion Function.
+It proves fresh Exchange reports before rolling out Teams and OneDrive. Workers reuse an
 existing approved environment and identities when `deployment.foundation.mode` is
 `existing`, run an immutable image digest and download the same root-config snapshot.
 
@@ -442,10 +448,10 @@ journey execution is not a long-lived ingress request. Lanes run independently
 with bounded execution and cleanup; a timeout is a failed attempt, while
 unexecuted dependent steps are not extra failed requests.
 
-OTEL is optional provider diagnostics and root-controlled. Synthetic observations
-always use Event Hubs, the managed-identity Function/DCR bridge and the pay-as-you-go
-workspace; Capture is independently optional. Model queries and the five administrator
-saved searches do not depend on OTEL. See
+`logAnalytics.enabled` controls the entire log path, not just an exporter.
+Off reports directly from containers and does not use a logging pipeline.
+On uses Event Hubs, the managed-identity Function/DCR bridge and pay-as-you-go workspace,
+with optional Capture and the five administrator saved searches. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 Microsoft-reported provider data
 remains separate, suppressed Service Health context; see
@@ -481,7 +487,7 @@ produced immutable image
 `sha256:763ebdcaf5b3fc5338850818a0a9cb47708cf624225069e95f185a213b845ac1`,
 deployed as revision `m365-ctbcoa-teams--0000018`, config revision `rotd6sga77wp2`.
 It is the sole active normal revision; identities, mounts, probes and routing
-were preserved. OTEL and root-default Service Health remain disabled.
+were preserved. The former diagnostics export and root-default Service Health remained disabled.
 
 Real meetings ended at **14:49:54.562** and **14:51:55.130 UTC** after both
 bots joined, established, verified metadata/both rosters, reconfirmed established

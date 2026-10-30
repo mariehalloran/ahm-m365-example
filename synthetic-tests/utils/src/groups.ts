@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ConfigurationError } from "./config.js";
 import { maxServiceTargets, probeServices, type SyntheticResult } from "./contracts.js";
 import { accountTargetId, type AccountTarget } from "./account-identity.js";
-import type { ResultContext } from "./otel.js";
+import type { ResultContext } from "./results.js";
 import type { ProjectConfig, ProjectDocument } from "./project-config.js";
 
 type TenantInventory = ProjectDocument["tenants"][number];
@@ -100,7 +100,7 @@ function resultAccounts(services: ProjectConfig["services"], result: SyntheticRe
   }
 }
 
-/** What the OTEL logs say about a result: its tenant, the account it exercised and every group its target belongs to. */
+/** The result's tenant, the account it exercised and every group its target belongs to. */
 export function resultContext(project: ProjectConfig, result: SyntheticResult): ResultContext {
   const { service } = probeServices[result.testType];
   return {

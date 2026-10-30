@@ -11,8 +11,9 @@ param reportingGroups array = []
 @description('A region supporting Microsoft.CloudHealth.')
 param location string = resourceGroup().location
 
-@description('The shared observation workspace, created by the ingestion foundation.')
+@description('The shared observation workspace, used only when logAnalytics.enabled is true.')
 param workspaceName string = 'law-${projectConfig.healthModel.name}'
+@description('The observation pipeline Application Insights component, used only when logAnalytics.enabled is true.')
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
 // A tenant runs a journey when it enables the service and the scenario.
@@ -26,6 +27,7 @@ func isJourneySelected(tenants array, service string, journey string) bool =>
 var modelName = projectConfig.healthModel.name
 var alertActionGroupIds = projectConfig.?healthModel.?alertActionGroupIds ?? []
 var enableServiceHealth = projectConfig.?serviceHealth.?enabled ?? false
+var logAnalyticsEnabled = projectConfig.logAnalytics.enabled
 var selectedServices ServiceDefinition[] = map(
   serviceDefinitions,
   service =>
@@ -43,8 +45,6 @@ var journeys = flatten(map(enabledServices, service => service.journeys))
 var journeyGroupCount = length(getJourneyGroups(journeys))
 var stepCount = length(flatten(map(journeys, journey => journey.steps)))
 var serviceHealthCount = enableServiceHealth ? length(enabledServices) : 0
-var useOtel = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor' && !empty(enabledServices)
-
 // Saved searches that show administrators which users, in which reporting group, hit which errors.
 var adminSearches = [
   {
@@ -74,12 +74,12 @@ var adminSearches = [
   }
 ]
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = if (logAnalyticsEnabled) {
   name: workspaceName
 }
 
 resource savedSearches 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = [
-  for search in adminSearches: {
+  for search in adminSearches: if (logAnalyticsEnabled) {
     parent: workspace
     name: search.name
     properties: {
@@ -91,7 +91,7 @@ resource savedSearches 'Microsoft.OperationalInsights/workspaces/savedSearches@2
   }
 ]
 
-resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = {
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (logAnalyticsEnabled) {
   name: applicationInsightsName
 }
 
@@ -101,7 +101,7 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   identity: { type: 'SystemAssigned' }
   tags: {
     purpose: 'Microsoft 365 synthetic monitoring proof of concept'
-    deploymentStage: 'event-hub-observations-kql'
+    deploymentStage: logAnalyticsEnabled ? 'event-hub-observations-kql' : 'direct-external-reports'
     intendedRunnerHost: 'Azure Container Apps'
   }
   properties: {}
@@ -116,6 +116,7 @@ module serviceModels './service.bicep' = [
       service: service
       policy: projectConfig.healthModel
       enableServiceHealth: enableServiceHealth
+      logAnalyticsEnabled: logAnalyticsEnabled
       suppressOneDriveRestore: service.service == 'onedrive' && empty(filter(
         flatten(map(
           projectConfig.tenants,
@@ -242,9 +243,9 @@ output entityCount int = 1 + length(enabledServices) * 2 + serviceHealthCount + 
 output relationshipCount int = length(enabledServices) + serviceHealthCount + journeyGroupCount + length(journeys) + stepCount
 output journeyCount int = length(journeys)
 output stepCount int = stepCount
-output telemetryEnabled bool = useOtel
-output workspaceId string = workspace.id
-output applicationInsightsId string = applicationInsights.id
+output logAnalyticsEnabled bool = logAnalyticsEnabled
+output workspaceId string = logAnalyticsEnabled ? workspace!.id : ''
+output applicationInsightsId string = logAnalyticsEnabled ? applicationInsights!.id : ''
 output rootEntityNames array = concat([modelName], map(enabledServices, service => '${service.service}-experience'))
 output rootRelationshipNames array = [for service in enabledServices: '${modelName}-to-${service.service}']
 output serviceModelInventories array = [

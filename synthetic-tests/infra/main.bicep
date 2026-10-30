@@ -11,7 +11,6 @@ param workerServices array = ['exchange', 'teams', 'onedrive']
 param workerImage string = ''
 param workerConfigBlobUrl string = ''
 param workerConfigSha256 string = ''
-param applicationInsightsName string = projectConfig.deployment.?applicationInsightsName ?? 'appi-${projectConfig.healthModel.name}'
 
 // A tenant service gets one worker when it is enabled with at least one scenario.
 func hostsWorker(selection object) bool =>
@@ -52,11 +51,7 @@ var reportGrants = union(
   []
 )
 var modelServices = union(map(workers, worker => worker.service), [])
-var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'
-
-resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (useAzureMonitor && !empty(workers)) {
-  name: applicationInsightsName
-}
+var logAnalyticsEnabled = projectConfig.logAnalytics.enabled
 resource newRegistry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (createFoundation) {
   name: settings.foundation.registryName
   location: location
@@ -129,23 +124,23 @@ resource reportAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     dependsOn: [newIdentities]
   }
 ]
-resource observationNamespace 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
-  name: projectConfig.observations.eventHubNamespace
+resource observationNamespace 'Microsoft.EventHub/namespaces@2024-01-01' existing = if (logAnalyticsEnabled) {
+  name: logAnalyticsEnabled ? projectConfig.logAnalytics.eventHubNamespace : 'disabled'
 }
-resource observationHub 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' existing = {
+resource observationHub 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' existing = if (logAnalyticsEnabled) {
   parent: observationNamespace
-  name: projectConfig.observations.eventHubName
+  name: logAnalyticsEnabled ? projectConfig.logAnalytics.eventHubName : 'disabled'
 }
 resource observationStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: projectConfig.observations.archiveStorageAccount
+  name: settings.configurationStorageAccount
 }
 resource configurationContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
   name: '${observationStorage.name}/default/worker-config'
 }
 resource observationSenders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for (id, index) in identityIds: {
-    name: guid(observationHub.id, id, 'observation-sender')
-    scope: observationHub
+  for (id, index) in identityIds: if (logAnalyticsEnabled) {
+    name: guid(observationHub!.id, id, 'observation-sender')
+    scope: observationHub!
     properties: {
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
       principalId: identities[index].properties.principalId
@@ -160,18 +155,6 @@ resource configurationReaders 'Microsoft.Authorization/roleAssignments@2022-04-0
     scope: configurationContainer
     properties: {
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
-      principalId: identities[index].properties.principalId
-      principalType: 'ServicePrincipal'
-    }
-    dependsOn: [newIdentities]
-  }
-]
-resource diagnosticWriters 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for (id, index) in identityIds: if (useAzureMonitor) {
-    name: guid(applicationInsights!.id, id, 'worker-diagnostics')
-    scope: applicationInsights!
-    properties: {
-      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
       principalId: identities[index].properties.principalId
       principalType: 'ServicePrincipal'
     }
@@ -212,9 +195,8 @@ module workerApps './worker.bicep' = [
         ? (serviceCertificates[?worker.tenant][?worker.service] ?? '') : ''
       enableLiveProbes: settings.enableLiveProbes
       enableBetaServiceActivity: settings.enableBetaServiceActivity
-      applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
-    dependsOn: [newEnvironment, newIdentities, reportAssignments, imagePullAssignments, observationSenders, configurationReaders, diagnosticWriters]
+    dependsOn: [newEnvironment, newIdentities, reportAssignments, imagePullAssignments, observationSenders, configurationReaders]
   }
 ]
 

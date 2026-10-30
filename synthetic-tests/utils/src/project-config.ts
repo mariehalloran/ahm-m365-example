@@ -78,27 +78,26 @@ const tenantServicesSchema = z.object({
     }).strict().optional(),
   }).strict(),
 }).strict();
+const logAnalyticsResourcesSchema = z.object({
+  eventHubNamespace: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$/),
+  eventHubName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}[a-zA-Z0-9]$/),
+  functionStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
+  functionAppName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+  functionPlanName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+  ingestionIdentityName: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/),
+  dataCollectionEndpointName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+  dataCollectionRuleName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+  captureEnabled: z.boolean().default(false),
+  archiveRetentionDays: z.number().int().min(1).max(3650).default(90),
+});
 export const projectDocumentSchema = z.object({
   schemaVersion: z.literal("2.0"),
   healthModel: healthModelSchema,
-  observations: z.object({
-    eventHubNamespace: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$/),
-    eventHubName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}[a-zA-Z0-9]$/),
-    archiveStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
-    functionStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
-    functionAppName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-    functionPlanName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-    ingestionIdentityName: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/),
-    dataCollectionEndpointName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-    dataCollectionRuleName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-    captureEnabled: z.boolean().default(false),
-    archiveRetentionDays: z.number().int().min(1).max(3650).default(90),
-  }).strict(),
+  logAnalytics: z.discriminatedUnion("enabled", [
+    logAnalyticsResourcesSchema.extend({ enabled: z.literal(true) }).strict(),
+    logAnalyticsResourcesSchema.partial().extend({ enabled: z.literal(false) }).strict(),
+  ]).default({ enabled: false }),
   deployment: deploymentSettingsSchema.optional(),
-  otel: z.object({
-    enabled: z.boolean().default(false),
-    destination: z.enum(["console", "azure-monitor"]).default("console"),
-  }).strict().default({}),
   serviceHealth: z.object({
     enabled: z.boolean().default(false),
   }).strict().default({}),
@@ -246,8 +245,7 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     if (project.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
-    // Allow 12 seconds for cleanup, 30 for reports, and optionally 12 for OTEL.
-    const cycleBudgetSeconds = service.type === "exchange" ? 59 : service.cycleTimeoutSeconds + (project.otel.enabled ? 54 : 42);
+    const cycleBudgetSeconds = service.type === "exchange" ? 59 : service.cycleTimeoutSeconds + 42;
     const lanes = executionLanes(service)
       .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]));
     const largeCohort = selected.targets.length > 30 ||
@@ -266,7 +264,7 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     }
     const longestInterval = Math.max(...lanes.map(lane => lane.intervalSeconds));
     const providerBudget = project.serviceHealth.enabled && (service.serviceHealth || service.serviceActivity.enabled)
-      ? service.providerIntervalSeconds + (project.otel.enabled ? 72 : 60) : 0;
+      ? service.providerIntervalSeconds + 60 : 0;
     if (project.healthModel.signalWindowMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
       throw new ConfigurationError(`Signal window must exceed the service cadence plus the bounded cycle/publication budget (${cycleBudgetSeconds} seconds)`);
     }

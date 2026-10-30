@@ -1,51 +1,17 @@
-import type { TokenCredential } from "@azure/identity";
-import { createHealthReportCredential } from "./auth.js";
 import type { Telemetry } from "./contracts.js";
-import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
+import {
+  createHealthReportPublisher, evaluateHealthState,
+  type EvaluationRules, type HealthReport, type HealthReportClientOptions,
+} from "./health-report-client.js";
 import { tenantSignalName } from "./groups.js";
-import { serviceModelName, type ProjectConfig } from "./project-config.js";
+import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
-import { activityFunctions, isPercentageActivity, type ActivityFunction } from "./provider-catalog.js";
+import { activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 
-const MAX_CONCURRENT_REPORTS = 3;
-const REPORT_TIMEOUT_MS = 5000;
-const REPORT_BATCH_TIMEOUT_MS = 30000;
-
-type HealthState = "Healthy" | "Degraded" | "Unhealthy" | "Unknown";
-type Policy = ProjectConfig["healthModel"];
-interface EvaluationRules {
-  degradedRule: { operator: "LessThan" | "GreaterThan"; threshold: number };
-  unhealthyRule: { operator: "LessThan" | "GreaterThan"; threshold: number };
-}
-export interface HealthReport {
-  entityName: string;
-  body: {
-    signalName: "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}` | `tenant-${string}`;
-    healthState: HealthState;
-    expiresInMinutes: number;
-    additionalContext: string;
-    value?: number;
-    evaluationRules?: EvaluationRules;
-  };
-}
+export type { HealthReport } from "./health-report-client.js";
 export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[]; signal?: AbortSignal }
 export type ProviderReporter = (cycle: ProviderCycle) => Promise<void>;
-interface PublicationContext {
-  http: AuthenticatedHttp;
-  modelPath: string;
-  cycleId: string;
-  telemetry: Telemetry;
-  signal?: AbortSignal | undefined;
-}
-
-function evaluateHealthState(value: number, rules: EvaluationRules): HealthState {
-  const breaches = (rule: EvaluationRules["unhealthyRule"]) =>
-    rule.operator === "LessThan" ? value < rule.threshold : value > rule.threshold;
-  if (breaches(rules.unhealthyRule)) return "Unhealthy";
-  if (breaches(rules.degradedRule)) return "Degraded";
-  return "Healthy";
-}
 
 const serviceStatusScores: Readonly<Record<string, number>> = {
   serviceoperational: 100,
@@ -174,55 +140,12 @@ export function serviceHealthIssuesReport(
   };
 }
 
-async function sendHealthReport(context: PublicationContext, report: HealthReport, signal: AbortSignal): Promise<void> {
-  const response = await context.http.request(
-    `${context.modelPath}/entities/${encodeURIComponent(report.entityName)}/ingestHealthReport?api-version=2026-05-01-preview`,
-    { method: "POST", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report.body) },
-    signal,
-  );
-  await response.body?.cancel();
-  if (response.status !== 204) throw new IntegrationError("collector-failure", response.status);
-}
-
-async function publishHealthReports(reports: HealthReport[], context: PublicationContext): Promise<void> {
-  const signal = context.signal ?? AbortSignal.timeout(REPORT_BATCH_TIMEOUT_MS);
-  let nextReport = 0;
-  let failures = 0;
-  const sendNext = async () => {
-    while (nextReport < reports.length) {
-      const report = reports[nextReport++]!;
-      const metadata = {
-        cycleId: context.cycleId, entityName: report.entityName, signalName: report.body.signalName,
-      };
-      try {
-        await sendHealthReport(context, report, signal);
-        context.telemetry.emit("health-report-published", metadata);
-      } catch (error) {
-        failures++;
-        context.telemetry.emit("health-report-failed", {
-          ...metadata, category: categoryOf(error),
-          ...(error instanceof IntegrationError ? { status: error.status } : {}),
-        });
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_REPORTS, reports.length) }, sendNext));
-  if (failures) throw new IntegrationError("collector-failure");
-}
-
 export function createProviderReporter(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
-  options: HttpOptions & { credential?: TokenCredential } = {},
+  options: HealthReportClientOptions = {},
 ): ProviderReporter {
-  if (!service.enabled) return async () => undefined;
   const policy = project.healthModel;
-  const http = service.mode === "live" ? new AuthenticatedHttp(
-    options.credential ?? createHealthReportCredential(env, service.healthReportAuthentication),
-    "https://management.azure.com/.default", { ...options, attempts: 2, timeoutMs: REPORT_TIMEOUT_MS },
-  ) : undefined;
-  const modelName = serviceModelName(project, service.type);
-  const modelPath = `https://management.azure.com/subscriptions/${encodeURIComponent(policy.subscriptionId)}`
-    + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(modelName)}`;
+  const publish = createHealthReportPublisher(project, service, telemetry, env, options);
   // The one place overall signals gain their tenant; group signals are already qualified by group and tenant.
   const qualified = (report: HealthReport): HealthReport => project.multiTenant
     ? { ...report, body: { ...report.body, signalName: tenantSignalName(project.tenant.id, report.body.signalName) } }
@@ -236,10 +159,6 @@ export function createProviderReporter(
         ...serviceActivityReports(service, cycle, policy.signalWindowMinutes),
       ].filter(report => report.body.value !== undefined) : [];
     const reports = overall.map(qualified);
-    if (!http) {
-      for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
-      return;
-    }
-    await publishHealthReports(reports, { http, modelPath, telemetry, cycleId: cycle.cycleId, signal: cycle.signal });
+    await publish(reports, cycle);
   };
 }

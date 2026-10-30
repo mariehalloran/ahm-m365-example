@@ -14,10 +14,10 @@
     "latencyDegradedMilliseconds": 15000,
     "latencyUnhealthyMilliseconds": 60000
   },
-  "observations": {
+  "logAnalytics": {
+    "enabled": false,
     "eventHubNamespace": "evhns-m365-consto",
     "eventHubName": "m365-synthetic",
-    "archiveStorageAccount": "stm365constosignals",
     "functionStorageAccount": "stm365constoingest",
     "functionAppName": "func-m365-consto-ingestion",
     "functionPlanName": "plan-m365-consto-ingestion",
@@ -29,12 +29,12 @@
   },
   "deployment": {
     "location": "centralus",
+    "configurationStorageAccount": "stm365constosignals",
     "enableLiveProbes": true,
     "enableBetaServiceActivity": true,
     "foundation": { "mode": "existing", "environment": "cae-m365-experience-consto", "registry": "crm365ctbcoagujf67a" },
     "image": { "mode": "build", "repository": "m365-synthetic", "tag": "monitoring" }
   },
-  "otel": { "enabled": true, "destination": "azure-monitor" },
   "serviceHealth": { "enabled": true },
   "tenants": [{
     "id": "consto",

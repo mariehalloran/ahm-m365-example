@@ -230,7 +230,7 @@ these fields in `tenants[].services.onedrive.execution`:
 
 With 300-second lanes, set root `healthModel.signalWindowMinutes` to at least 75 for
 that example. The signal window must exceed cadence + configured cycle budget + 42 seconds
-for cleanup/publication, or +54 with OTEL; enabled providers have an independent
+for cleanup/publication; enabled providers have an independent
 budget too. Configuration rejects insufficient capacity or observation windows before live work.
 Keep existing lane assignments and the separate [live gates](./deployment.md#live-execution-gates).
 

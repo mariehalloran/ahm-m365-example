@@ -4,20 +4,23 @@ import { z } from "zod";
 import { ConfigurationError } from "./config.js";
 import type { Telemetry } from "./contracts.js";
 import { withAbort } from "./http.js";
-import { cycleObservations, type ObservationPublisher } from "./observations.js";
+import { cycleObservations } from "./observations.js";
 import type { ProjectConfig } from "./project-config.js";
+import type { CyclePublisher } from "./results.js";
 import type { ServiceConfig } from "./service-config.js";
 
 export function createObservationPublisher(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
-): { publish: ObservationPublisher; close: () => Promise<void> } {
+): { publish: CyclePublisher; close: () => Promise<void> } {
+  const pipeline = project.logAnalytics;
+  if (!pipeline.enabled) throw new ConfigurationError("Raw observation publication requires logAnalytics.enabled");
   let client: EventHubProducerClient | undefined;
   if (service.mode === "live") {
     const identity = z.string().uuid().safeParse(env.AZURE_CLIENT_ID);
     if (!identity.success) throw new ConfigurationError("Observation publication requires an explicitly selected managed identity");
     client = new EventHubProducerClient(
-      `${project.observations.eventHubNamespace}.servicebus.windows.net`,
-      project.observations.eventHubName,
+      `${pipeline.eventHubNamespace}.servicebus.windows.net`,
+      pipeline.eventHubName,
       new ManagedIdentityCredential({ clientId: identity.data }),
       { retryOptions: { maxRetries: 2, retryDelayInMs: 250, maxRetryDelayInMs: 2000, timeoutInMs: 5000 } },
     );
@@ -53,7 +56,7 @@ export function createObservationPublisher(
         if (batch.count) await withAbort(signal, () => client!.sendBatch(batch, { abortSignal: signal }));
         telemetry.emit("observations-published", {
           cycleId: cycle.cycleId, observationCount: observations.length,
-          destination: project.observations.eventHubName,
+          destination: pipeline.eventHubName,
         });
       } catch (error) {
         telemetry.emit("observation-publication-failed", {

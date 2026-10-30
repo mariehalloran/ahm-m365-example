@@ -42,8 +42,8 @@ Every service model contains:
 - An impact-suppressed `${service}-service-health` supporting entity only when
   root `serviceHealth.enabled` is explicitly `true`.
 - Business-step children for every selected journey.
-- Worker-reported signals on each journey and business step, plus optional OTEL
-  query signals. The only signal aggregation groups are your
+- Numeric signals on each journey and executed business step, supplied either by
+  direct worker reports or native observation queries. The only signal aggregation groups are your
   [Exchange/OneDrive user groups](../docs/monitoring-groups.md), on their journey entities.
 
 The supporting entity receives available stable overview and issue-count signals,
@@ -61,7 +61,7 @@ Exchange groups its existing journeys under two parents:
 | Calendar (`exchange-calendar`) | Private recurring-series lifecycle in the user's own calendar, no attendees |
 
 These parents roll up child health with native `WorstOf` dependencies; they do
-not receive synthetic reports or OTEL signals. A parent is omitted when none of
+not receive synthetic reports or query signals. A parent is omitted when none of
 its children are selected. Teams and OneDrive retain their direct journey children.
 
 The root config and shared catalogue determine the model inventory.
@@ -101,17 +101,40 @@ Journey guides define exact evidence and API boundaries:
 Graph bot readback is not a second bot's receipt, and verified meeting
 connectivity does not prove received audio, bidirectional audio or call quality.
 
-## KQL observation signals
+## Signal delivery modes
 
-Each journey/business step receives native `observed-success-percentage` and
-`observed-mean-duration` Log Analytics query signals.
+The root `logAnalytics.enabled` flag selects one reporting mode for all services:
+
+| Value | Synthetic health source |
+| --- | --- |
+| `false` (default) | Service containers publish direct, per-cycle aggregate health reports after each execution lane settles. Each report includes a numeric value, evaluated health state and a TTL of `healthModel.signalWindowMinutes` minutes. There is no log pipeline, workspace query authentication, workspace reader grant or administrator saved search in a new direct-only deployment. |
+| `true` | Containers publish raw observations through Event Hubs and the managed-identity Function/DCR bridge into `M365Synthetic_CL`. Native Log Analytics queries evaluate historical rolling aggregates over `healthModel.signalWindowMinutes`, requiring `healthModel.minimumSamples`. |
+
+This is the only reporting-mode switch; neither mode requires a telemetry SDK or
+exporter. The flag changes signal delivery, not entity IDs, business-step mappings,
+dependency rollup, reporting-group membership, service schedules or provider context.
+The suppressed Service Health supporting entity, when enabled, always receives
+external reports independently of this flag. Neither mode creates per-target
+signal inventories.
+
+Both modes use `observed-success-percentage` and `observed-mean-duration`.
 Whole journeys aggregate attempts; children aggregate only executed actions.
 Success is `100 * succeeded / executed`; mean duration includes failed executed
-samples. A skipped action produces Unknown without a value, never a failed or
-invented successful request. Queries read `M365Synthetic_CL`, deduplicate `EventId`
-and require the root-configured `minimumSamples` in `signalWindowMinutes`.
+samples. Only collected optional steps have samples. Skipped actions, token
+acquisition and generic cleanup never become action samples; an unobserved action
+does not become a failed or invented successful request. Insufficient samples
+produce no new value. Queries deduplicate `EventId` before evaluating the window.
 
-With more than one tenant in the root config, each model queries every
+Direct mode aggregates the settled cycle, not a local rolling history: workers
+remain stateless between cycles. Each fresh report replaces that signal's previous
+reported measurement until its TTL expires. If a cycle has no samples for a step,
+it publishes no placeholder; its previous report ages out. Missing or expired
+reports become Unknown, not automatically Unhealthy. Native root alerts trigger
+only on Degraded/Unhealthy transitions, so stopped workers or failed publication
+can escape those alerts. Keep independent execution, freshness, ingestion and
+notification checks; direct mode has no Log Analytics missing-data query alert.
+
+With more than one tenant in the root config, each model receives every
 overall signal as `tenant-<tenant id>--<signal>` (for example
 `tenant-contoso--observed-success-percentage`), so tenants never mask one
 another on the shared service model. This covers the journey and step
@@ -129,24 +152,28 @@ Health is evaluated on the aggregate measurements; a single failure in a large
 cohort does not necessarily make the entity Unhealthy. Cleanup/credential failures
 can fail the journey without inventing failed business actions.
 
-The existing `teams-call` entity also has four query-backed call-specific signals:
-connection/disconnection success and duration. These measurements do not add
-journeys or business-step entities.
+The existing `teams-call` entity also has four call-specific signals in either mode:
+`observed-call-connection-success-percentage`,
+`observed-call-mean-connection-duration`,
+`observed-call-disconnection-success-percentage` and
+`observed-call-mean-disconnection-duration`. These measurements do not add journeys,
+business-step entities or unavailable call-quality measurements.
 
-Workers publish raw observations through Event Hubs and the managed-identity
-Function/DCR bridge. Entity definitions use `2026-10-01-preview`; query refresh is
-one minute, with native Percent/Milliseconds units. The model identity queries
-the workspace. Successful CLI queries alone do not prove model-side authorization
-or notification delivery. Microsoft provider context remains separately reported
-on the suppressed supporting entity.
+Entity definitions use `2026-10-01-preview`. In query mode refresh is one minute,
+with native Percent/Milliseconds units. The service-model identity queries the
+workspace. Successful CLI queries alone do not prove model-side authorization
+or notification delivery.
 
-### Provider external-report units
+### External-report units and definitions
 
 Units accompany every report in JSON `additionalContext.unit`, including Unknown
 reports: `Percent`, `Milliseconds`, `Count`, or categorical `status-score`.
 The ingestion request schema does not support `dataUnit`, and external signal
 definitions are read-only. Native unit labels therefore cannot be written by
-the provider reporter; synthetic query-backed signals use native units.
+the reporters; query-backed signals use native units. Direct synthetic and provider
+signals appear only after ingestion; the model template writes no external
+signal definitions or status. Reporting-group member names may remain unresolved
+until their first matching report arrives.
 
 ## User groups
 
@@ -159,14 +186,14 @@ aggregation groups in the model; overall signals publish ungrouped. Each group's
 are its `group-<id>--tenant-<tenant>--<signal>` signal-name strings, one set per tenant
 service the group has users in: `observed-success-percentage` and
 `observed-mean-duration`. Teams has no user groups, including on `teams-call`.
-Step, Service Health and OTEL signals are never included, and no entities,
+Step and Service Health signals are never included, and no entities,
 relationships or models are added. A journey receives a group only when its tenant
 service and scenario are enabled and the group has a member target for it.
 TypeScript derives membership from each group's `users` into the template's
 service-scoped `reportingGroups` parameter. Matching group IDs within one service
 combine tenant views, with consistent `userGroupName`; Exchange and OneDrive IDs
 are independent. Bicep explicitly clears former Teams groups and other removed
-journey groups. Old ingested observations expire after the report TTL.
+journey groups. Old direct reports expire after their report TTL.
 Group health reaches parents through the normal
 dependency roll-up. Under native `WorstOf`, Unknown has the lowest severity and
 `ignoreUnknown: false` does not make a missing signal override a known one, so inspect
@@ -226,21 +253,25 @@ not delete old entities: remove each selected service's
 
 ## Shared observation queries
 
-The observation foundation always creates/reuses `law-<model>`, `appi-<model>`,
-`M365Synthetic_CL` and the DCR. Synthetic query signals are not gated by optional
-OTEL. Five administrator saved searches live in [`queries/admin/`](./queries/admin/).
-Root OTEL remains optional provider diagnostics, not duplicated synthetic data.
+Only `logAnalytics.enabled: true` creates/reuses `law-<model>`, `appi-<model>`,
+`M365Synthetic_CL` and the observation pipeline. Five administrator saved searches
+live in [`queries/admin/`](./queries/admin/); they are deployed only in this mode.
+A new direct-only deployment does not require either component.
 
 [synthetic.kql](./queries/synthetic.kql) binds service, journey/action, tenant,
 optional group and aggregate over the configured signal window. It excludes
 simulation, providers and unexecuted actions and deduplicates replayed event IDs.
 No data or insufficient samples returns no value, not a Healthy zero. Thresholds
-remain in root configuration and are never interpreted by synthetic publishers.
+remain in root configuration. Queries apply them to rolling history; direct
+publishers apply the same rules to each settled cycle's aggregates.
 
-Service-model identities receive workspace-scoped Reader/query authentication.
+Only in query mode do service-model identities receive workspace-scoped
+Reader/query authentication.
 The root identity receives scoped Reader on selected nested models for native
-references. Worker identities receive Event Hub sender and private config-reader
-permissions; provider-context ingestion permission is separate.
+references. Only query-mode worker identities receive Event Hub sender access.
+Private configuration-reader permissions are independent of log collection.
+Direct synthetic and provider-context ingestion permissions are separate from
+workspace access.
 Neither permission authorizes Microsoft 365 access.
 
 ## Apply and migrate
@@ -263,8 +294,8 @@ OneDrive IDs above.
 
 1. Deploy the updated model with `npm run deploy` and the same root config. It creates
    the selected `exchange-mail`/`exchange-calendar` parents and routes the existing
-   journeys through them. Journey/step IDs, direct-report destinations, optional
-   OTEL queries and worker schedules are unchanged by grouping alone. The separate
+   journeys through them. Journey/step IDs, direct-report destinations, observation
+   queries and worker schedules are unchanged by grouping alone. The separate
    attachment/reply migration below does require updated workers.
 2. Verify each new parent has its selected children and native dependency rollup.
    Then remove only the old direct relationships named
@@ -382,10 +413,25 @@ the three OneDrive scenarios above. Delete removed service/scenario keys and
 their execution lanes from the config. Redeploy source/models/workers
 coherently; do not route reports to an undeployed replacement ID.
 
-When disabling OTEL, explicitly retire owned stale query bindings, permissions,
-settings and telemetry resources after review. The checked-in 15-minute TTL removes
-expired reports; it does not guarantee an Unhealthy state or alert.
-Independently monitor execution, ingestion and notifications.
+### Switching reporting mode
+
+Deploy the model and matching workers from the same root configuration. On a
+`true` → `false` switch, the template explicitly sends `azureLogAnalytics: null`
+on every retained journey and business step, removing native query bindings
+rather than relying on omission. It leaves external definitions ingestion-created
+and preserves dependencies, suppression, group members and entity IDs.
+Group lists are likewise cleared with null when no user-defined groups apply;
+the API does not accept an empty group array.
+
+Incremental deployment does not delete old `workspace-query` authentication
+settings, workspace role assignments, saved searches or pipeline resources just
+because they are now conditional. Verify numeric direct reports and group
+membership through the live model first, then review and retire only owned obsolete
+query access and pipeline resources. Do not remove the root identity's nested-model
+Reader grants or provider ingestion access. Likewise, verify actual query evaluation
+when enabling the pipeline; compilation alone cannot establish a live handoff.
+The default 15-minute TTL removes expired reports; it does not guarantee an
+Unhealthy state or alert. Independently monitor execution, ingestion and notifications.
 
 ## Local validation
 
@@ -394,6 +440,7 @@ From the repository root, with the Azure CLI's Bicep tooling available:
 ```sh
 npm --prefix synthetic-tests run catalog:check
 az bicep build --file health-model/infra/main.bicep --stdout > /dev/null
+az bicep build --file health-model/infra/service.bicep --stdout > /dev/null
 az bicep build --file synthetic-tests/infra/main.bicep --stdout > /dev/null
 ```
 

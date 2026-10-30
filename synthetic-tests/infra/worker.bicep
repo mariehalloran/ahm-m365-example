@@ -18,14 +18,11 @@ param projectConfig object
 param m365CertificatePem string = ''
 param enableLiveProbes bool
 param enableBetaServiceActivity bool = false
-@secure()
-param applicationInsightsConnectionString string = ''
 
 var selection = first(filter(projectConfig.tenants, tenant => tenant.id == tenantAlias)).services[service]
 var execution = selection.execution
 var workerSettings = selection.worker
 var access = selection.?access ?? {}
-var useAzureMonitor = (projectConfig.?otel.?enabled ?? false) && (projectConfig.?otel.?destination ?? 'console') == 'azure-monitor'
 var hasTeamsMessages = service == 'teams' && (selection.scenarios[?'channel-conversation'] ?? false)
 var useTeamsBot = service == 'teams' && execution.mode == 'live' && hasTeamsMessages
 var needsTeamsPeer = service == 'teams' && execution.mode == 'live' && (selection.scenarios[?'scheduled-meeting'] ?? false)
@@ -64,10 +61,7 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
         allowInsecure: false
       } : null
       registries: [{ server: registryServer, identity: identityResourceId }]
-      secrets: concat(
-        useAzureMonitor ? [{ name: 'applicationinsights-connection-string', value: applicationInsightsConnectionString }] : [],
-        credentialSecrets
-      )
+      secrets: credentialSecrets
     }
     template: {
       terminationGracePeriodSeconds: 60
@@ -95,8 +89,7 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
             { name: 'BOT_TENANT_ID', value: tenantId }
             { name: 'BOT_CLIENT_ID', value: identityClientId }
           ] : [],
-          needsTeamsPeer ? [{ name: 'TEAMS_CALLING_PEER_CLIENT_ID', value: access.botPeerClientId }] : [],
-          useAzureMonitor ? [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', secretRef: 'applicationinsights-connection-string' }] : []
+          needsTeamsPeer ? [{ name: 'TEAMS_CALLING_PEER_CLIENT_ID', value: access.botPeerClientId }] : []
         )
         resources: { cpu: workerSettings.cpu, memory: workerSettings.memory }
         probes: useTeamsCallback ? [

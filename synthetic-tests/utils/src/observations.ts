@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { isReportedStep, probeServices, reportedResult, type SyntheticResult } from "./contracts.js";
+import { isReportedStep, probeServices, reportedResult } from "./contracts.js";
 import { executionLanes } from "./execution-lanes.js";
 import { resultContext } from "./groups.js";
 import type { ProjectConfig } from "./project-config.js";
+import type { CycleResults } from "./results.js";
 import type { ServiceConfig } from "./service-config.js";
 
 const syntheticDimensions = z.object({
@@ -47,9 +48,6 @@ export const observationSchema = z.object({
   }
 });
 export type Observation = z.infer<typeof observationSchema>;
-export interface CycleResults { cycleId: string; results: SyntheticResult[]; signal?: AbortSignal }
-export type ObservationPublisher = (cycle: CycleResults) => Promise<void>;
-
 const period = (seconds: number) => seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`;
 
 export function cycleObservations(project: ProjectConfig, service: ServiceConfig, cycle: CycleResults): Observation[] {

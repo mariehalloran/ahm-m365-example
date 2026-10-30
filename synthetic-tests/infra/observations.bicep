@@ -8,7 +8,7 @@ param deploymentPrincipalId string
 @allowed(['User', 'ServicePrincipal'])
 param deploymentPrincipalType string = 'User'
 
-var settings = projectConfig.observations
+var settings = projectConfig.logAnalytics
 var tags = { workload: projectConfig.healthModel.name, purpose: 'synthetic-observations' }
 var blobContributor = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 var blobOwner = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
@@ -80,34 +80,16 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
     publicNetworkAccessForQuery: 'Enabled'
   }
 }
-resource archive 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  name: settings.archiveStorageAccount
-  location: location
-  kind: 'StorageV2'
-  sku: { name: 'Standard_LRS' }
-  tags: tags
-  properties: {
-    accessTier: 'Hot'
-    allowBlobPublicAccess: false
-    allowSharedKeyAccess: false
-    minimumTlsVersion: 'TLS1_2'
-    supportsHttpsTrafficOnly: true
-    publicNetworkAccess: 'Enabled'
-  }
+resource archive 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: projectConfig.deployment.configurationStorageAccount
 }
-resource archiveService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource archiveService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
   parent: archive
   name: 'default'
-  properties: {}
 }
 resource captureContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: archiveService
   name: 'capture'
-  properties: { publicAccess: 'None' }
-}
-resource configurationContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: archiveService
-  name: 'worker-config'
   properties: { publicAccess: 'None' }
 }
 resource quarantineContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
@@ -242,11 +224,6 @@ resource quarantineWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   scope: quarantineContainer
   properties: { roleDefinitionId: blobContributor, principalId: identity.properties.principalId, principalType: 'ServicePrincipal' }
 }
-resource configurationUploader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(archive.id, deploymentPrincipalId, 'configuration-uploader')
-  scope: configurationContainer
-  properties: { roleDefinitionId: blobContributor, principalId: deploymentPrincipalId, principalType: deploymentPrincipalType }
-}
 resource captureReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(archive.id, deploymentPrincipalId, 'capture', 'diagnostic-reader')
   scope: captureContainer
@@ -342,7 +319,7 @@ resource function 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'OBSERVATION_EVENT_HUB', value: settings.eventHubName }
         { name: 'OBSERVATION_INGESTION_ENDPOINT', value: endpoint.properties.logsIngestion.endpoint }
         { name: 'OBSERVATION_RULE_ID', value: rule.properties.immutableId }
-        { name: 'OBSERVATION_QUARANTINE_URL', value: '${archive.properties.primaryEndpoints.blob}quarantine' }
+        { name: 'OBSERVATION_QUARANTINE_URL', value: 'https://${archive.name}.blob.${environment().suffixes.storage}/quarantine' }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
         { name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', value: 'ClientId=${identity.properties.clientId};Authorization=AAD' }
       ]
@@ -364,4 +341,3 @@ resource ftpPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-
 output functionName string = function.name
 output workspaceId string = workspace.id
 output eventHubId string = hub.id
-output configContainerUrl string = '${archive.properties.primaryEndpoints.blob}worker-config'

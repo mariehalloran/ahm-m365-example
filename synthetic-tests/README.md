@@ -36,7 +36,7 @@ Requires Node.js 22 or 24 and npm:
 
 The checked-in services are configured for **live** execution. For an offline
 preview, set the chosen service's `execution.mode` to `"simulation"` and root
-`serviceHealth.enabled` and `otel.enabled` to `false` before these commands.
+`serviceHealth.enabled` to `false` before these commands.
 Required generated target IDs must still be present in the adjacent `.env`.
 
 ```sh
@@ -66,7 +66,8 @@ It names things and holds only the few IDs you must supply, never secrets
 | --- | --- |
 | `healthModel` | Azure destination, success/duration thresholds, report TTL and optional `alertActionGroupIds`; recipients are managed in those Azure action groups |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins; see the [`deployment` section](../docs/deployment.md#the-deployment-section) |
-| `otel`, `serviceHealth` | Optional console/Azure Monitor export and Service Health context; both disabled by default |
+| `logAnalytics.enabled` | `false`: direct aggregated container health reports, no logging pipeline; `true`: raw observations and KQL-backed model health |
+| `serviceHealth` | Optional suppressed Microsoft-reported supporting context |
 | `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId` and the three services below |
 | `tenants[].services.<service>.enabled`, `scenarios` | Five single-user Exchange switches (self-mail, draft, self-attachment, SELF-REPLY, private recurrence), only `channel-conversation` and `scheduled-meeting` for Teams, only `user-drive-roundtrip`, `app-folder-lifecycle` and `document-versions` for OneDrive |
 | `….exchange.targets`, `….onedrive.targets` | [User groups](../docs/monitoring-groups.md) keyed by group ID, each with `userGroupName` and `users` containing the approved per-user target objects |
@@ -78,8 +79,8 @@ It names things and holds only the few IDs you must supply, never secrets
 | `….setup` | OneDrive only: the explicit privileged credential used by `onedrive:setup` |
 
 All supported scenarios default to enabled; obsolete service/scenario keys are
-rejected rather than silently migrated. Optional OTEL and provider context default
-off in the schema, but both are enabled in the checked-in tenant configuration.
+rejected rather than silently migrated. Log Analytics and provider context default
+off in the schema; the checked-in tenant uses direct reporting with provider context enabled.
 There is no root `groups` list. Shared users keep the same target ID and settings
 in each group and execute once per selected journey; generated IDs remain outside
 the user target objects.
@@ -207,9 +208,10 @@ aggregate success and duration thresholds; a failed attempt does not automatical
 make a large cohort Unhealthy.
 Reports aggregate by stable journey/action IDs, not targets.
 
-Completed live cycles directly publish health reports and console diagnostics.
-Optional root OTEL runs in-process and does not replace direct reporting; with Azure
-Monitor export, deployment also creates the administrator saved searches
+Completed live cycles emit console diagnostics and use the explicit reporting mode.
+With `logAnalytics.enabled: false`, containers publish aggregated health reports
+directly. With `true`, the observation pipeline feeds KQL model signals and the five
+administrator saved searches
 ([Log Analytics for administrators](../docs/operations.md#log-analytics-for-administrators)).
 No durable outbox, cross-cycle history or exactly-once guarantee exists.
 TTL expiry removes reports rather than guaranteeing an Unhealthy state or alert.

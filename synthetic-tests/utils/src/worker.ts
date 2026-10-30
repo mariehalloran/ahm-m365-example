@@ -11,14 +11,14 @@ import type { ProviderCollectionSummary, ProviderCollector } from "./provider-co
 import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
 import { createProviderReporter, type ProviderReporter } from "./provider-health-reports.js";
 import { createObservationPublisher } from "./observation-publisher.js";
-import type { ObservationPublisher } from "./observations.js";
-import { createResultOutput, type ResultOutput } from "./results.js";
+import { createDirectHealthReporter } from "./health-reports.js";
+import { createResultOutput, type CyclePublisher, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
-import type { ResultTelemetry } from "./otel.js";
 import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
 import { canonicalProjectFile } from "./paths.js";
 
 const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
+const EXCHANGE_COMPLETION_BUDGET_MS = 24000;
 
 export function parseWorkerArguments(args: readonly string[]) {
   let config: string | undefined;
@@ -48,7 +48,6 @@ export interface WorkerOptions {
   createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies | Promise<RunnerDependencies>;
   execute?: typeof runCycle;
   project?: ProjectConfig;
-  createOtel?: (destination: ProjectConfig["otel"]["destination"], output: Telemetry, env: NodeJS.ProcessEnv) => Promise<ResultTelemetry>;
 }
 
 interface InitializedService {
@@ -58,7 +57,7 @@ interface InitializedService {
 
 async function initializeService(
   service: ServiceConfig, options: WorkerOptions, telemetry: Telemetry,
-  env: NodeJS.ProcessEnv, publishObservations: ObservationPublisher | undefined,
+  env: NodeJS.ProcessEnv, publishResults: CyclePublisher | undefined,
   suppliedResults: ResultOutput,
 ): Promise<InitializedService> {
   const config = serviceSettings(service, env, options.project?.services[service.type].scenarios);
@@ -71,7 +70,7 @@ async function initializeService(
   return {
     config,
     dependencies: {
-      ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(publishObservations ? { publishObservations } : {}),
+      ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(publishResults ? { publishResults } : {}),
       ...(service.type === "exchange" && options.project ? {
         capacityGroups: options.project.groups.filter(group => group.service === "exchange").map(group => ({
           id: group.id, displayName: group.displayName, targetIds: group.targetIds,
@@ -82,7 +81,7 @@ async function initializeService(
 }
 
 async function reportInitializationFailure(
-  service: ServiceConfig, probes: Probe[], publishObservations: ObservationPublisher | undefined, telemetry: Telemetry, error: unknown, startedAt: number,
+  service: ServiceConfig, probes: Probe[], publishResults: CyclePublisher | undefined, telemetry: Telemetry, error: unknown, startedAt: number,
   output: ResultOutput, signal: AbortSignal, capacityGroups?: RunnerDependencies["capacityGroups"],
 ): Promise<void> {
   const observedAt = Date.now();
@@ -119,7 +118,7 @@ async function reportInitializationFailure(
     }
   }
   const publicationSignal = AbortSignal.any([signal, AbortSignal.timeout(service.type === "exchange" ? 12000 : 30000)]);
-  try { await withAbort(publicationSignal, async () => publishObservations?.({ cycleId, results, signal: publicationSignal })); }
+  try { await withAbort(publicationSignal, async () => publishResults?.({ cycleId, results, signal: publicationSignal })); }
   catch (error) { outputErrors.push(error); }
   throwFailures(outputErrors);
 }
@@ -179,7 +178,7 @@ export async function collectAndReportServiceProviders(
       });
     } catch (outputError) { errors.push(outputError); }
   }
-  try { await reportHealth?.({ cycleId, providerDiagnostics }); }
+  try { await reportHealth?.({ cycleId, providerDiagnostics, signal }); }
   catch (error) { errors.push(error); }
   throwFailures(errors);
   return summary;
@@ -228,49 +227,25 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
   validateRuntimeConsent(service, env);
-  const reportHealth = options.project ? createProviderReporter(options.project, service, telemetry, env) : undefined;
-  const observationSink = options.project ? createObservationPublisher(options.project, service, telemetry, env) : undefined;
-  const publishObservations = observationSink?.publish;
-  const consoleResults = createResultOutput(telemetry);
-  let otel: ResultTelemetry | undefined;
-  let otelInitializationError: unknown;
-  const otelDiagnosticErrors: unknown[] = [];
-  if (options.project?.otel.enabled) {
-    try {
-      const createOtel = options.createOtel ?? (await import("./azure-monitor.js")).createProbeTelemetry;
-      otel = await createOtel(options.project.otel.destination, telemetry, env);
-    } catch (error) {
-      otelInitializationError = error;
-      telemetry.emit("telemetry-initialization-failed", {
-        category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
-        errorType: error instanceof Error ? error.name : "unknown",
-      });
-    }
-  }
-  const results: ResultOutput = {
-    record(result, mode) {
-      consoleResults.record(result, mode);
-    },
-    recordDiagnostic(record) {
-      consoleResults.recordDiagnostic(record);
-      try { otel?.recordDiagnostic(record); }
-      catch (error) {
-        otelDiagnosticErrors.push(error);
-        telemetry.emit("telemetry-output-failed", { category: "collector-failure" });
-      }
-    },
-  };
+  const reportHealth = options.project && (service.serviceHealth || service.serviceActivity.enabled)
+    ? createProviderReporter(options.project, service, telemetry, env) : undefined;
+  const observationSink = options.project?.logAnalytics.enabled
+    ? createObservationPublisher(options.project, service, telemetry, env) : undefined;
+  const publishResults = options.project
+    ? observationSink?.publish ?? createDirectHealthReporter(options.project, service, telemetry, env) : undefined;
+  const results = createResultOutput(telemetry);
   let initialized: InitializedService | undefined;
   const now = options.now ?? (service.type === "exchange" ? Date.now : () => performance.now());
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const workerErrors: unknown[] = [];
   try {
-    if ((!publishObservations || service.mode !== "live") && !service.serviceHealth && !service.serviceActivity.enabled) {
-      initialized = await initializeService(service, options, telemetry, env, publishObservations, results);
+    if ((!publishResults || service.mode !== "live") && !service.serviceHealth && !service.serviceActivity.enabled) {
+      initialized = await initializeService(service, options, telemetry, env, publishResults, results);
     }
     telemetry.emit("service-worker-started", {
       intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, once: options.once ?? false,
       probeCount: configuredProbes.length,
+      reportingMode: options.project ? options.project.logAnalytics.enabled ? "observations" : "direct-health" : "console-only",
     });
     let initialization: Promise<InitializedService> | undefined;
     const lanes = executionLanes(service).filter(lane =>
@@ -282,14 +257,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     await runExecutionLanes(lanes, async lane => {
       try {
         if (lane === providerLane) {
-          const errors: unknown[] = [];
-          try { await collectAndReportServiceProviders(service, options, signal, telemetry, env, results, reportHealth); }
-          catch (error) { errors.push(error); }
-          try { await otel?.forceFlush(); }
-          catch (error) { errors.push(error); }
-          errors.push(...otelDiagnosticErrors.splice(0));
-          if (otelInitializationError) errors.push(otelInitializationError);
-          throwFailures(errors);
+          await collectAndReportServiceProviders(service, options, signal, telemetry, env, results, reportHealth);
           return;
         }
         const startedAt = Date.now();
@@ -301,14 +269,14 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
         const initializationFailed = async (error: unknown) => {
           if (!signal.aborted) {
             await reportInitializationFailure(
-              service, laneProbes, publishObservations, telemetry, error, startedAt, results, laneSignal,
+              service, laneProbes, publishResults, telemetry, error, startedAt, results, laneSignal,
               options.project?.groups.filter(group => group.service === service.type)
                 .map(group => ({ id: group.id, displayName: group.displayName, targetIds: group.targetIds })),
             );
           }
         };
         initialization ??= initialized ? Promise.resolve(initialized)
-          : initializeService(service, options, telemetry, env, publishObservations, results).then(value => {
+          : initializeService(service, options, telemetry, env, publishResults, results).then(value => {
             initialized = value;
             return value;
           }).catch(error => {
@@ -318,24 +286,14 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
         const laneInitialization = initialization.then(value => ({
           ...value, config: {
             ...value.config, probes: laneProbes, PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000,
-            ...(minuteBudgetMs === undefined ? {} : { CYCLE_TIMEOUT_MS: Math.max(1, Math.min(30000, minuteBudgetMs - 29000)) }),
+            ...(minuteBudgetMs === undefined ? {} : {
+              CYCLE_TIMEOUT_MS: Math.max(1, Math.min(30000, minuteBudgetMs - EXCHANGE_COMPLETION_BUDGET_MS)),
+            }),
           },
         }));
-        const publicationErrors: unknown[] = [];
-        try {
-          const execute = () => executeServiceCycle(laneInitialization, options, laneSignal, telemetry, initializationFailed);
-          if (minuteDeadline) await withAbort(minuteDeadline, execute);
-          else await execute();
-        } catch (error) { publicationErrors.push(error); }
-        try {
-          if (service.type === "exchange") {
-            await withAbort(AbortSignal.any([minuteDeadline!, AbortSignal.timeout(5000)]), async () => otel?.forceFlush());
-          } else await otel?.forceFlush();
-        }
-        catch (error) { publicationErrors.push(error); }
-        publicationErrors.push(...otelDiagnosticErrors.splice(0));
-        if (otelInitializationError) publicationErrors.push(otelInitializationError);
-        throwFailures(publicationErrors);
+        const execute = () => executeServiceCycle(laneInitialization, options, laneSignal, telemetry, initializationFailed);
+        if (minuteDeadline) await withAbort(minuteDeadline, execute);
+        else await execute();
       } catch (error) {
         if (signal.aborted && !options.once) return;
         telemetry.emit("service-cycle-failed", {
@@ -351,8 +309,6 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     try { await initialized?.dependencies.shutdown?.(); }
     catch (error) { workerErrors.push(error); }
     try { await observationSink?.close(); }
-    catch (error) { workerErrors.push(error); }
-    try { await otel?.shutdown(); }
     catch (error) { workerErrors.push(error); }
     telemetry.emit("service-worker-stopped", { cancelled: signal.aborted });
   }
