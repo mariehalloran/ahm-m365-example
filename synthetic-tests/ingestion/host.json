@@ -9,7 +9,8 @@
     "eventHubs": {
       "maxEventBatchSize": 500,
       "prefetchCount": 1000,
-      "batchCheckpointFrequency": 1
+      "batchCheckpointFrequency": 1,
+      "initialOffsetOptions": { "type": "fromStart" }
     }
   },
   "logging": {

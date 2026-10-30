@@ -100,20 +100,33 @@ async function verifyIngestionFunction(run: DeploymentRun): Promise<void> {
     ...run.subscription, "--output", "none",
   ]);
   run.phase = "verify-ingestion-function";
+  const consumerGroup = z.string().min(1).parse(await azJson<unknown>(run, run.phase, [
+    "functionapp", "config", "appsettings", "list",
+    "--resource-group", healthModel.resourceGroup, "--name", logAnalytics.functionAppName,
+    ...run.subscription, "--query", "[?name=='OBSERVATION_CONSUMER_GROUP'] | [0].value",
+  ]));
+  const functionsSchema = z.object({ value: z.array(z.object({
+    name: z.string(),
+    properties: z.object({ config: z.object({ bindings: z.array(z.object({
+      type: z.string(), consumerGroup: z.string().optional(), eventHubName: z.string().optional(),
+      connection: z.string().optional(),
+    })) }) }),
+  })) });
   const deadline = run.now() + 300000;
   while (run.now() < deadline) {
-    const names = z.array(z.string()).parse(await azJson<unknown>(run, run.phase, [
-      "functionapp", "function", "list",
-      "--resource-group", healthModel.resourceGroup, "--name", logAnalytics.functionAppName,
-      ...run.subscription, "--query", "[].name",
-    ]));
-    if (names.some(name => name.endsWith("/ingestObservations"))) {
-      run.emit({ event: "observation-function-indexed", functionApp: logAnalytics.functionAppName });
+    const functions = functionsSchema.parse(await azJson<unknown>(run, run.phase, [
+      "rest", "--method", "get",
+      "--url", `https://management.azure.com${resource}/functions?api-version=2024-04-01`, ...run.subscription,
+    ])).value;
+    if (functions.some(entry => entry.name.endsWith("/ingestObservations") && entry.properties.config.bindings.some(binding =>
+      binding.type === "eventHubTrigger" && binding.consumerGroup === consumerGroup &&
+      binding.eventHubName === logAnalytics.eventHubName && binding.connection === "ObservationEvents"))) {
+      run.emit({ event: "observation-function-indexed", functionApp: logAnalytics.functionAppName, consumerGroup });
       return;
     }
     await run.sleep(5000);
   }
-  throw new ConfigurationError("The ingestion package was uploaded, but ingestObservations was not indexed; inspect the Function deployment and host diagnostics");
+  throw new ConfigurationError("The ingestion package was uploaded, but ingestObservations was not indexed with the expected consumer group; inspect the Function deployment and host diagnostics");
 }
 
 export async function uploadWorkerConfiguration(run: DeploymentRun): Promise<void> {

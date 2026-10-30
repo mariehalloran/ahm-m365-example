@@ -125,6 +125,13 @@ cross-cycle result/outbox state, so a crash before Event Hub acceptance can lose
 observations. After acceptance, Event Hub retention and Capture support replay;
 replay must retain original `EventId` values. This is not an exactly-once guarantee.
 
+The ingestion consumer group is scoped to the Event Hub namespace identity.
+Recreating the namespace after switching logging off/on creates a fresh consumer
+group, so retained checkpoints cannot incorrectly skip the new stream's reset
+sequence numbers. Ordinary redeployments keep the existing group/checkpoints.
+New groups start from the earliest retained event; old checkpoint and archive data
+is not deleted.
+
 Each attempt contributes one binary success observation (1 or 0); executed business actions contribute their own success/duration observations. Failed prerequisites block later actions without invented samples. Token acquisition and cleanup remain internal and unreported as steps. Cleanup still runs after mutation using an independent ten-second budget. Cleanup failure preserves earlier successful action observations but makes overall success zero.
 
 [Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics)

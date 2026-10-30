@@ -20,6 +20,7 @@ const settings = z.object({
       url.pathname === "/quarantine" && !url.username && !url.password && !url.search && !url.hash;
   }),
   OBSERVATION_EVENT_HUB: z.string().min(1),
+  OBSERVATION_CONSUMER_GROUP: z.string().min(1).max(50),
 }).parse(process.env);
 const credential = new ManagedIdentityCredential({ clientId: settings.AZURE_CLIENT_ID });
 const uploader = new LogsIngestionClient(settings.OBSERVATION_INGESTION_ENDPOINT, credential, {
@@ -79,7 +80,7 @@ export async function ingestObservations(events: unknown[], context: InvocationC
 app.eventHub("ingestObservations", {
   connection: "ObservationEvents",
   eventHubName: settings.OBSERVATION_EVENT_HUB,
-  consumerGroup: "log-analytics",
+  consumerGroup: settings.OBSERVATION_CONSUMER_GROUP,
   cardinality: "many",
   retry: { strategy: "exponentialBackoff", maxRetryCount: 5, minimumInterval: 1000, maximumInterval: 30000 },
   handler: ingestObservations,

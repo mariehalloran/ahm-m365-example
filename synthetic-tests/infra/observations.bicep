@@ -191,10 +191,14 @@ resource hub 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
   }
   dependsOn: [captureWriter]
 }
-resource consumer 'Microsoft.EventHub/namespaces/eventhubs/consumergroups@2024-01-01' = {
-  parent: hub
-  name: 'log-analytics'
-  properties: {}
+module consumer './observation-consumer.bicep' = {
+  name: 'observation-consumer'
+  params: {
+    namespaceName: namespace.name
+    eventHubName: settings.eventHubName
+    namespacePrincipalId: namespace.identity.principalId
+  }
+  dependsOn: [hub]
 }
 resource receiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(hub.id, identity.id, 'observation-receiver')
@@ -317,6 +321,7 @@ resource function 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'ObservationEvents__credential', value: 'managedidentity' }
         { name: 'ObservationEvents__clientId', value: identity.properties.clientId }
         { name: 'OBSERVATION_EVENT_HUB', value: settings.eventHubName }
+        { name: 'OBSERVATION_CONSUMER_GROUP', value: consumer.outputs.consumerGroupName }
         { name: 'OBSERVATION_INGESTION_ENDPOINT', value: endpoint.properties.logsIngestion.endpoint }
         { name: 'OBSERVATION_RULE_ID', value: rule.properties.immutableId }
         { name: 'OBSERVATION_QUARANTINE_URL', value: 'https://${archive.name}.blob.${environment().suffixes.storage}/quarantine' }
