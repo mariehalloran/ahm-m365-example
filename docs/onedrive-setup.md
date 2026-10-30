@@ -16,7 +16,8 @@ Follow the [deployment order](./deployment.md#deploy-with-one-command): `npm run
 creates the health models and worker foundation/identities first
 (`deployment.stage: "foundation"` stops there until approvals are in place), then
 approve M365 access following [`docs/setup.md`](./setup.md), run `npm run setup:ids` and
-then this setup, and deploy the live workers. Keep certificates and keys outside Git.
+then this setup, and deploy the live workers. See
+[OneDrive permissions](./onedrive-permissions.md) for the worker/provisioner boundary.
 
 Generate [user groups](./monitoring-groups.md) under
 `tenants[].services.onedrive.targets` in `monitoring.config.json`, each keyed by its

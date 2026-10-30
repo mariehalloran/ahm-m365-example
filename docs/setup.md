@@ -11,6 +11,10 @@ selected services, and an Azure subscription for Azure Monitor Health Models and
 the workers. An Azure subscription alone does not provide Microsoft 365 accounts
 or licenses.
 
+Use the service-specific authorization guides alongside this shared runbook:
+[Exchange](./exchange-permissions.md), [Teams](./teams-permissions.md) and
+[OneDrive](./onedrive-permissions.md).
+
 Install Node.js 22 or 24, npm, Git, the Azure CLI and PowerShell 7.4+. Exchange
 administration also needs the `ExchangeOnlineManagement` PowerShell module:
 `Install-Module ExchangeOnlineManagement -Scope CurrentUser`.
@@ -111,7 +115,7 @@ storage named by `deployment.configurationStorageAccount`; that store is not a l
 pipeline. No additional Microsoft 365 permissions are needed for either Azure reporting path.
 Reference existing Azure Monitor action groups with `healthModel.alertActionGroupIds`;
 manage recipients in the action groups, not this config
-([root alerts](../health-model/README.md#root-health-alerts)).
+([notification checks](./operations.md#enterprise-reliability-acceptance-gate)).
 
 **Review the live settings:** the checked-in config enables live probes, Azure
 Monitor export, stable Service Health, Exchange beta Service Activity and root
@@ -204,24 +208,27 @@ so an audit of "who can pull from the registry" finds it in one place.
 
 ## 4. Exchange: mailbox access
 
-Follow [MAILBOX-SYNTHETIC-ACCESS.md, section 4](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup)
+Follow [Exchange application RBAC setup](./exchange-permissions.md#exchange-application-rbac)
 for the first mailbox and role assignments, then extend the same scope's filter to cover
 every mailbox in `tenants[].services.exchange.targets.<groupId>.users[].mailbox`,
-deduplicated across groups and joined with `-or`:
+deduplicated across groups and joined with `-or`. Review the complete approved
+inventory, including existing scope members: `Set-ManagementScope` replaces the
+filter rather than adding clauses automatically.
 
 ```powershell
 Connect-ExchangeOnline -UserPrincipalName "<approved-admin>"
 
 $scopeName = "AHM-Exchange-<alias>-ManagedIdentity"
-$mailboxes = "user1@contoso.example", "user2@contoso.example"   # every configured target
+$mailboxes = "user1@contoso.example", "user2@contoso.example"   # complete approved scope inventory
 $filter = ($mailboxes | ForEach-Object { "(PrimarySmtpAddress -eq '$_')" }) -join ' -or '
 Set-ManagementScope -Identity $scopeName -RecipientRestrictionFilter $filter
 
 foreach ($mailbox in $mailboxes) { Test-ServicePrincipalAuthorization -Identity $principalId -Resource $mailbox }
 ```
 
-Grant only the roles the selected scenarios use: `Application Mail.ReadWrite` and
-`Application Mail.Send` for send-receive-mail/edit-reopen-draft/attachment-mail/reply-mail,
+Grant only the roles the selected scenarios use: `Application Mail.ReadWrite` for
+the mail/draft journeys, `Application Mail.Send` for
+send-receive-mail/attachment-mail/reply-mail,
 `Application Calendars.ReadWrite` for recurring-calendar. `Test-ServicePrincipalAuthorization`
 reflects a scope change immediately; the running worker can still see HTTP 403 for a newly
 added mailbox for up to 2 hours.
@@ -233,7 +240,7 @@ principal (`az ad sp show --id <principalId>` or `az identity show ... --query p
 
 | Identity | Role | When |
 | --- | --- | --- |
-| Teams worker, Teams peer | `Calls.JoinGroupCall.All` | `scheduled-meeting` selected |
+| Every selected Teams pair's primary and peer UAMIs | `Calls.JoinGroupCall.All` | `scheduled-meeting` selected |
 | OneDrive worker | `Files.SelectedOperations.Selected` | OneDrive enabled |
 | OneDrive worker | `Files.ReadWrite.AppFolder` | `app-folder-lifecycle` selected |
 | `tenants[].providerClientId` app | `ServiceHealth.Read.All` | root `serviceHealth.enabled` and service `execution.serviceHealth` |
