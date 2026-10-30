@@ -244,8 +244,9 @@ These provider application grants are tenant-wide, not scoped by runtime service
 filters. Message Center defaults off and requires separate approval. Readable
 communications use Data annotations on each existing Service Health entity; an
 approved deployment assigns the existing worker identity a separate entity-scoped
-annotation read/add role. It does not broaden its ingest-only report role or its
-Microsoft 365 synthetic permissions. See [annotation access and limits](./provider-monitoring.md#minute-by-minute-data-annotations).
+entity-read and annotation read/add role. It does not broaden its ingest-only
+report role or its Microsoft 365 synthetic permissions.
+See [annotation access and limits](./provider-monitoring.md#minute-by-minute-data-annotations).
 
 ```sh
 GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)

@@ -200,12 +200,15 @@ The existing worker identity needs these additional Azure actions, scoped only t
 its Service Health entity, **separately approved before deployment**:
 
 ```text
+Microsoft.CloudHealth/healthmodels/entities/read
 Microsoft.CloudHealth/healthmodels/entities/getDataAnnotations/action
 Microsoft.CloudHealth/healthmodels/entities/addDataAnnotation/action
 ```
 
-The template uses a separate annotation role; ingest-only report permissions and
-the read-only Graph provider app are not broadened.
+Live ARM authorization also requires entity read for annotation history; the two
+annotation action names alone are insufficient. The template uses a separate
+entity-scoped role, without entity-write permission; ingest-only report permissions
+and the read-only Graph provider app are not broadened.
 
 The signals are plain external signals on the one supporting entity: no aggregation group, child-entity graph or writable external-signal declaration is created for them. Per-signal health and source diagnostics remain authoritative for missing data. `additionalContext.source` and `apiVersion` distinguish each stable endpoint/beta function on the shared entity; the supporting entity remains suppressed.
 ARM can return external signal names in lowercase. Compare those names

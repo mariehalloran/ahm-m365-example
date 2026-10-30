@@ -133,11 +133,12 @@ resource annotationWriter 'Microsoft.Authorization/roleDefinitions@2022-04-01' =
   name: guid(resourceGroup().id, modelName, 'service-communications-annotator')
   properties: {
     roleName: '${modelName} service communications annotator'
-    description: 'Read and append service communications data annotations only; no model administration or Microsoft 365 access.'
+    description: 'Read the supporting entity and append service communications data annotations; no model administration or Microsoft 365 access.'
     type: 'CustomRole'
     assignableScopes: [resourceGroup().id]
     permissions: [{
       actions: [
+        'Microsoft.CloudHealth/healthmodels/entities/read'
         'Microsoft.CloudHealth/healthmodels/entities/addDataAnnotation/action'
         'Microsoft.CloudHealth/healthmodels/entities/getDataAnnotations/action'
       ]
