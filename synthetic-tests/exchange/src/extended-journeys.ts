@@ -272,7 +272,7 @@ function journey(calendar: boolean, operation: (attempt: Attempt) => Promise<voi
     finally {
       context.executionComplete?.();
       await cleanupStep(result, a.mutated, signal => clean(a, signal), context.telemetry, now,
-        calendar || context.config.EXCHANGE_CLEANUP_ENABLED !== "false");
+        calendar || context.config.EXCHANGE_CLEANUP_ENABLED !== "false", context.clock);
     }
     return finishJourney(result, startedAt, now);
   };

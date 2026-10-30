@@ -100,6 +100,7 @@ export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, c
       telemetry,
       now,
       config.EXCHANGE_CLEANUP_ENABLED !== "false",
+      context.clock,
     );
   }
   return finishJourney(result, startedAt, now);

@@ -6,6 +6,7 @@ import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
 import type { CyclePublisher, CycleResults, ResultOutput } from "./results.js";
+import { systemClock, type ExecutionClock } from "./clock.js";
 
 const CLEANUP_GRACE_MS = 12_000;
 
@@ -21,6 +22,8 @@ export interface RunnerDependencies {
   shutdown?: () => Promise<void>;
   handler?: ProbeHandler;
   now?: () => number;
+  sleep?: ProbeContext["sleep"];
+  clock?: ExecutionClock;
   publishResults?: CyclePublisher;
   exchangeRequests?: GraphRequestPermits;
   capacityGroups?: { id: string; displayName: string; targetIds: string[] }[];
@@ -36,20 +39,21 @@ interface CycleContext {
 
 function createCompletionDeadline(
   signal: AbortSignal, config: Pick<Config, "PROBE_TIMEOUT_MS" | "CYCLE_TIMEOUT_MS">, cycleStartedAt: number,
+  clock: ExecutionClock,
 ) {
-  let executionTimer: ReturnType<typeof setTimeout> | undefined;
-  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExecution: (() => void) | undefined;
+  let cancelCleanup: (() => void) | undefined;
   let onCancellation: (() => void) | undefined;
   const promise = new Promise<never>((_, reject) => {
     const probeBudgetMs = config.PROBE_TIMEOUT_MS + CLEANUP_GRACE_MS;
     const remainingCycleMs = config.CYCLE_TIMEOUT_MS + CLEANUP_GRACE_MS
-      - (performance.now() - cycleStartedAt);
+      - (clock.monotonicNow() - cycleStartedAt);
     const completionBudgetMs = Math.max(0, Math.min(probeBudgetMs, remainingCycleMs));
-    executionTimer = setTimeout(() => reject(new IntegrationError("cancelled")), completionBudgetMs);
+    cancelExecution = clock.schedule(completionBudgetMs, () => reject(new IntegrationError("cancelled")));
 
     // Cancellation stops the operation but still gives its cleanup time to finish.
     onCancellation = () => {
-      cleanupTimer = setTimeout(() => reject(new IntegrationError("cancelled")), CLEANUP_GRACE_MS);
+      cancelCleanup = clock.schedule(CLEANUP_GRACE_MS, () => reject(new IntegrationError("cancelled")));
     };
     signal.addEventListener("abort", onCancellation, { once: true });
     if (signal.aborted) onCancellation();
@@ -57,8 +61,8 @@ function createCompletionDeadline(
   return {
     promise,
     dispose() {
-      clearTimeout(executionTimer);
-      clearTimeout(cleanupTimer);
+      cancelExecution?.();
+      cancelCleanup?.();
       if (onCancellation) signal.removeEventListener("abort", onCancellation);
     },
   };
@@ -75,9 +79,10 @@ async function runSingleProbe<P extends Probe>(
   if (liveExchange) {
     config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, exchangeJourneyMilliseconds(probe.type)) };
   }
-  const { telemetry, now = Date.now } = dependencies;
+  const { telemetry, clock = systemClock } = dependencies;
+  const now = dependencies.now ?? (() => clock.wallNow());
   const execution = new AbortController();
-  const executionTimer = setTimeout(() => execution.abort(), config.PROBE_TIMEOUT_MS);
+  const cancelExecution = clock.schedule(config.PROBE_TIMEOUT_MS, () => execution.abort());
   const probeSignal = AbortSignal.any([
     cycle.signal,
     execution.signal,
@@ -92,7 +97,7 @@ async function runSingleProbe<P extends Probe>(
     if (!handler) throw new IntegrationError("collector-failure");
     probeSignal.throwIfAborted();
     cycle.startedAttempts.add(`${probe.type}:${probe.id}`);
-    deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt);
+    deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt, clock);
     const graph = liveExchange && probe.mailbox && dependencies.exchangeRequests && dependencies.graph?.forMailbox
       ? dependencies.graph.forMailbox(probe.mailbox, dependencies.exchangeRequests) : dependencies.graph;
     const pair = probe.botPairId ? dependencies.teamsBotPairs?.get(probe.botPairId) : undefined;
@@ -106,10 +111,12 @@ async function runSingleProbe<P extends Probe>(
         signal: probeSignal,
         telemetry,
         now,
+        clock,
+        ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
         executionComplete: () => {
           cancelledDuringExecution ||= probeSignal.aborted;
           executionFinishedAt ??= now();
-          clearTimeout(executionTimer);
+          cancelExecution();
         },
         ...(graph ? { graph } : {}),
         ...pair,
@@ -157,7 +164,7 @@ async function runSingleProbe<P extends Probe>(
     });
     return result;
   } finally {
-    clearTimeout(executionTimer);
+    cancelExecution();
     deadline?.dispose();
   }
 }
@@ -217,7 +224,7 @@ async function publishCycleResults(
   }
   if (cycle.results.length) {
     const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
-    const deadline = AbortSignal.timeout(exchange ? 12000 : 30000);
+    const deadline = (dependencies.clock ?? systemClock).timeout(exchange ? 12000 : 30000);
     const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
     await withAbort(signal, async () => dependencies.publishResults?.({ ...cycle, signal }));
   }
@@ -270,12 +277,12 @@ export async function runCycle(
     ),
   };
   const permitStart = dependencies.exchangeRequests?.snapshot();
-  const { telemetry } = dependencies;
+  const { telemetry, clock = systemClock } = dependencies;
   const cycleId = randomUUID();
-  const cycleStartedAt = performance.now();
+  const cycleStartedAt = clock.monotonicNow();
   const stopOtherProbes = new AbortController();
   const deadline = new AbortController();
-  const cycleTimer = setTimeout(() => deadline.abort(), config.CYCLE_TIMEOUT_MS);
+  const cancelCycle = clock.schedule(config.CYCLE_TIMEOUT_MS, () => deadline.abort());
   const cancellationSignals = [
     stopOtherProbes.signal,
     deadline.signal,
@@ -316,5 +323,5 @@ export async function runCycle(
       errorType: error instanceof Error ? error.name : "unknown",
     });
     throw new Error(`Synthetic cycle failed (${category}); see correlation ${cycleId}`);
-  } finally { clearTimeout(cycleTimer); }
+  } finally { cancelCycle(); }
 }

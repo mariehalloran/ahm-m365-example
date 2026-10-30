@@ -46,8 +46,8 @@ files.
 | C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Initial feature `1410917`; entity-read fix `bd0f751`; notice-only JSON `5214c49` |
 | V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Accepted by user: live quiet/count/topology plus local formatting evidence; no natural update observed |
 | R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Complete: `588dca7`, validated live inputs, typed handlers and structural client ports |
-| R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Complete: pure measurement mapping and injected ingestion sinks |
-| R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Planned |
+| R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Complete: `fd4cf48`, pure measurement mapping and injected ingestion sinks |
+| R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Complete: scoped lane execution, injectable deadlines and owned-resource models |
 | R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Planned |
 | V1 | Complete local integration verification | R4 | Final checks, focused behavior comparisons, reviewed diff and local checkpoint history | Planned |
 
@@ -313,3 +313,14 @@ does not meet the acceptance gate.
   limits, retry exhaustion, quarantine hashes/logs and failure propagation.
   The processor imports with an empty environment; validation made no network
   requests. Function packaging recursively includes all emitted modules.
+- R3 isolates synthetic lane execution from worker startup/provider orchestration.
+  An injectable clock separates wall timestamps, monotonic completion budgets,
+  cancellable timers and deadline signals; sleep reaches journey polling.
+  OneDrive has named roundtrip, app-folder and version workflows, with required
+  folder/file IDs after successful creation. Teams retains only owned call legs
+  with required clients/IDs, including teardown after a failed peer join.
+- R3 passes `typecheck`, `build`, the no-cloud plan and all previous baseline and
+  communications comparisons. Eight virtual-time groups verify all-target timeout
+  failures, independent bounded cleanup, hung-handler grace, publication bounds,
+  aligned minutes without catch-up, shared initialization/lane scope, provider
+  isolation from initialization failures, and explicit shutdown errors.

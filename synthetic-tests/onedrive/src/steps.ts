@@ -35,6 +35,8 @@ export interface FileAttempt {
   fileId?: string;
   mutationAttempted: boolean;
 }
+export type OwnedFolderAttempt = FileAttempt & { folderId: string };
+export type WrittenFileAttempt = OwnedFolderAttempt & { fileId: string };
 
 const encoded = encodeURIComponent;
 export const digest = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
@@ -73,21 +75,21 @@ export async function verifySelectedFolder(graph: GraphFileOperations, attempt: 
       folder.parentReference.driveId !== attempt.driveId) throw new IntegrationError("configuration-failure");
 }
 
-async function createFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+async function createFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<OwnedFolderAttempt> {
   attempt.mutationAttempted = true;
   const folder = await graph.json(`${itemPath(attempt, attempt.parentId)}/children`, itemSchema, signal, "POST", {
     name: attempt.folderName, folder: {}, "@microsoft.graph.conflictBehavior": "fail",
   }, false);
-  attempt.folderId = validateItem(attempt, folder, attempt.folderName, attempt.parentId, true).id;
+  return Object.assign(attempt, { folderId: validateItem(attempt, folder, attempt.folderName, attempt.parentId, true).id });
 }
 
-export async function createOwnedFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+export async function createOwnedFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<OwnedFolderAttempt> {
   await verifySelectedFolder(graph, attempt, signal);
-  await createFolder(graph, attempt, signal);
+  return createFolder(graph, attempt, signal);
 }
 
 export async function writeFile(
-  graph: GraphFileOperations, attempt: FileAttempt, value: Payload, signal: AbortSignal, name = "probe.json",
+  graph: GraphFileOperations, attempt: OwnedFolderAttempt, value: Payload, signal: AbortSignal, name = "probe.json",
 ): Promise<string> {
   if (!attempt.folderId) throw new IntegrationError("configuration-failure");
   attempt.mutationAttempted = true;
@@ -103,14 +105,14 @@ export function verifyBytes(actual: Buffer, expected: Payload): void {
   if (digest(actual) !== digest(JSON.stringify(expected))) throw new IntegrationError("read-failure");
 }
 
-export async function reopenOwnedFile(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<Buffer> {
-  const collection = `${itemPath(attempt, attempt.folderId!)}/children`;
+export async function reopenOwnedFile(graph: GraphFileOperations, attempt: WrittenFileAttempt, signal: AbortSignal): Promise<Buffer> {
+  const collection = `${itemPath(attempt, attempt.folderId)}/children`;
   let path: string | undefined = `${collection}?$top=200`;
   for (let page = 0; page < 5 && path; page++) {
     const items: z.infer<typeof collectionSchema> = await graph.json(path, collectionSchema, signal);
     const file = items.value.find(item => item.id === attempt.fileId);
     if (file) {
-      validateItem(attempt, file, "probe.json", attempt.folderId!, false);
+      validateItem(attempt, file, "probe.json", attempt.folderId, false);
       return downloadFile(graph, attempt, file.id, signal);
     }
     path = items["@odata.nextLink"] ? graphNextPagePath(items["@odata.nextLink"], collection) : undefined;
@@ -140,7 +142,7 @@ export async function deleteOwnedFolder(graph: GraphFileOperations, attempt: Fil
   attempt.mutationAttempted = false;
 }
 
-export async function openAppFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+export async function openAppFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<OwnedFolderAttempt> {
   // AppFolder-only access need not permit reading the drive root; resolve through the approved user instead.
   const root = await graph.json(`/users/${encoded(attempt.probe.userId)}/drive/special/approot`,
     z.object({
@@ -150,11 +152,11 @@ export async function openAppFolder(graph: GraphFileOperations, attempt: FileAtt
   if (attempt.driveId && root.parentReference.driveId !== attempt.driveId) throw new IntegrationError("configuration-failure");
   attempt.driveId = root.parentReference.driveId;
   attempt.parentId = root.id;
-  await createFolder(graph, attempt, signal);
+  return createFolder(graph, attempt, signal);
 }
 
-export async function listVersions(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<string[]> {
-  const collection = `${itemPath(attempt, attempt.fileId!)}/versions`;
+export async function listVersions(graph: GraphFileOperations, attempt: WrittenFileAttempt, signal: AbortSignal): Promise<string[]> {
+  const collection = `${itemPath(attempt, attempt.fileId)}/versions`;
   let path: string | undefined = `${collection}?$top=200`;
   const ids: string[] = [];
   for (let page = 0; page < 5 && path; page++) {
@@ -167,11 +169,11 @@ export async function listVersions(graph: GraphFileOperations, attempt: FileAtte
 }
 
 export async function findPriorVersion(
-  graph: GraphFileOperations, attempt: FileAttempt, versions: string[], expected: Payload, signal: AbortSignal,
+  graph: GraphFileOperations, attempt: WrittenFileAttempt, versions: string[], expected: Payload, signal: AbortSignal,
 ): Promise<Payload | undefined> {
   // Graph returns newest/current first; /versions/{current}/content is explicitly unsupported.
   for (const version of versions.slice(1).reverse().slice(0, 10)) {
-    const bytes = await graph.downloadContent(`${itemPath(attempt, attempt.fileId!)}/versions/${encoded(version)}/content`, signal);
+    const bytes = await graph.downloadContent(`${itemPath(attempt, attempt.fileId)}/versions/${encoded(version)}/content`, signal);
     if (digest(bytes) === digest(JSON.stringify(expected))) return expected;
   }
   return undefined;

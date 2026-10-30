@@ -4,6 +4,7 @@ import type { GraphFileOperations, GraphOperations } from "./graph.js";
 import type { TeamsBotOperations } from "./teams.js";
 import { IntegrationError } from "./http.js";
 import type { LiveProbeFor } from "./resolved-probes.js";
+import type { ExecutionClock } from "./clock.js";
 
 export interface ProbeContext {
   config: {
@@ -23,6 +24,7 @@ export interface ProbeContext {
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  clock?: ExecutionClock;
   executionComplete?: () => void;
 }
 export type ProbeHandler<Type extends TestType = TestType> =

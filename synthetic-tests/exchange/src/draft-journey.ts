@@ -81,6 +81,7 @@ export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, 
       telemetry,
       now,
       context.config.EXCHANGE_CLEANUP_ENABLED !== "false",
+      context.clock,
     );
   }
   return finishJourney(result, startedAt, now);

@@ -145,6 +145,7 @@ export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = asy
       telemetry,
       now,
       config.TEAMS_CLEANUP_ENABLED !== "false",
+      context.clock,
     );
   }
   return finishJourney(result, startedAt, now);

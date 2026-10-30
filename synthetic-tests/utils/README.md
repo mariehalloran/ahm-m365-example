@@ -95,6 +95,10 @@ matching input type. Retained reply fixtures and OneDrive folder ownership still
 get checked in their existing journey steps, not as worker-wide prerequisites.
 Journey helpers accept structural Graph/Bot operation interfaces rather than
 concrete authenticated clients, so isolated callers can supply focused fakes.
+OneDrive separates roundtrip, app-folder and version workflows; successful
+creation yields required folder/file IDs while partial attempts retain enough
+state for safe cleanup. Teams call legs acquire required clients/IDs before
+verification; partial joins still tear down every owned leg.
 
 The checked-in configuration uses one aligned-minute Exchange lane for all five
 single-user journeys, one Teams lane for both journeys, and three explicit
@@ -106,6 +110,11 @@ lanes run concurrently. Missed slots are logged/skipped without catch-up bursts.
 Configuration changes require restart. SIGINT/SIGTERM stop scheduling, cancel
 work and permit bounded cleanup/publication. One authoritative instance per
 target set avoids duplicate traffic; statelessness is not a distributed lock.
+
+Worker/runner dependencies accept `ExecutionClock`: wall time for timestamps and
+minute alignment, monotonic time for completion budgets, cancellable timers and
+deadline signals. Existing `now`/`sleep` hooks remain; sleep also reaches journey
+polling. Defaults retain native clocks and the existing execution/cleanup budgets.
 
 ## Credentials and report publication
 

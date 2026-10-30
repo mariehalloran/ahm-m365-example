@@ -2,6 +2,7 @@ import {
   maxStepDetailLength, probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
 } from "./contracts.js";
 import { categoryOf, IntegrationError } from "./http.js";
+import { systemClock, type ExecutionClock } from "./clock.js";
 
 export async function measureStep<T>(
   result: SyntheticResult, name: StepName, operation: () => Promise<T>,
@@ -43,6 +44,7 @@ export function journeyFailure(result: SyntheticResult, error: unknown, telemetr
 export async function cleanupStep(
   result: SyntheticResult, mutationAttempted: boolean,
   operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry, now: () => number, enabled = true,
+  clock: ExecutionClock = systemClock,
 ): Promise<void> {
   if (!enabled) {
     result.steps.push({ name: "cleanup", status: "skipped", observedAt: new Date(now()).toISOString(), reason: "cleanup-disabled" });
@@ -58,7 +60,7 @@ export async function cleanupStep(
   }
   try {
     // Cleanup has its own budget, independent of the cancelled journey.
-    await measureStep(result, "cleanup", () => operation(AbortSignal.timeout(10000)), now, () => "cleanup-failure");
+    await measureStep(result, "cleanup", () => operation(clock.timeout(10000)), now, () => "cleanup-failure");
     result.diagnosticContext.cleanupSucceeded = true;
   } catch {
     result.diagnosticContext.cleanupSucceeded = false;

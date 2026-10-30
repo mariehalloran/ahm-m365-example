@@ -16,7 +16,25 @@ import {
 } from "./call-steps.js";
 import { teamsCallingCallbackUrlSchema } from "../../utils/src/config.js";
 import type { GraphOperations } from "../../utils/src/graph.js";
+import type { SyntheticResult } from "../../utils/src/contracts.js";
+import { systemClock } from "../../utils/src/clock.js";
 import { z } from "zod";
+
+interface AuthenticatedCallLeg {
+  name: "primary" | "peer";
+  graph: GraphOperations;
+}
+interface OwnedCallLeg extends AuthenticatedCallLeg {
+  id: string;
+  established: boolean;
+  disconnected: boolean;
+}
+
+async function settleBoth(operations: Promise<unknown>[]): Promise<void> {
+  const settled = await Promise.allSettled(operations);
+  const failure = settled.find(item => item.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+}
 
 export interface ConnectedTeamsCall {
   primary: { graph: GraphOperations; id: string };
@@ -33,34 +51,17 @@ export const createTeamsCallProbe =
   (onConnected?: TeamsCallConnectedHook): ProbeHandler<"teams-call"> =>
   async (probe, context) => {
     const { config, signal, telemetry, now = Date.now } = context;
+    const clock = context.clock ?? systemClock;
     const startedAt = now();
     const deadline = startedAt + config.PROBE_TIMEOUT_MS;
     const executionSignal = AbortSignal.any([
       signal,
-      AbortSignal.timeout(config.PROBE_TIMEOUT_MS),
+      clock.timeout(config.PROBE_TIMEOUT_MS),
     ]);
     const result = baseResult(probe, startedAt);
-    result.call = { resultCodes: [] };
-    const legs: {
-      name: "primary" | "peer";
-      graph: GraphOperations | undefined;
-      id?: string;
-      established: boolean;
-      disconnected: boolean;
-    }[] = [
-      {
-        name: "primary",
-        graph: context.teamsCalling,
-        established: false,
-        disconnected: false,
-      },
-      {
-        name: "peer",
-        graph: context.teamsCallingPeer,
-        established: false,
-        disconnected: false,
-      },
-    ];
+    const call: NonNullable<SyntheticResult["call"]> = { resultCodes: [] };
+    result.call = call;
+    const legs: OwnedCallLeg[] = [];
     let mutationAttempted = false;
     let unknownCreation = false;
     let phase = "join";
@@ -79,8 +80,8 @@ export const createTeamsCallProbe =
         // Teardown metadata must not replace that record or prevent verified departure.
         if (callChainId && (state === "established" || !leg.established)) {
           callChainId = callChainId.toLowerCase();
-          const previousCallChainId = result.call![field];
-          result.call![field] = callChainId;
+          const previousCallChainId = call[field];
+          call[field] = callChainId;
           if (
             previousCallChainId &&
             previousCallChainId !== callChainId &&
@@ -100,10 +101,10 @@ export const createTeamsCallProbe =
         if (state === "established") leg.established = true;
         if (
           resultCode !== undefined &&
-          !result.call!.resultCodes.includes(resultCode) &&
-          result.call!.resultCodes.length < 12
+          !call.resultCodes.includes(resultCode) &&
+          call.resultCodes.length < 12
         ) {
-          result.call!.resultCodes.push(resultCode);
+          call.resultCodes.push(resultCode);
         }
         if (stateDiagnostics++ < 24)
           telemetry.emit("teams-call-state-observed", {
@@ -124,47 +125,47 @@ export const createTeamsCallProbe =
           ? "delivery-timeout"
           : categoryOf(error);
     const interval = Math.min(config.POLL_INTERVAL_MS, 250);
-    const settleBoth = async (operations: Promise<unknown>[]) => {
-      const settled = await Promise.allSettled(operations);
-      const failure = settled.find((item) => item.status === "rejected");
-      if (failure?.status === "rejected") throw failure.reason;
-    };
     try {
       result.diagnosticContext.testStage = "authentication";
-      await measureStep(
+      const clients = await measureStep(
         result,
         "authenticate",
-        async () => {
+        async function authenticateCallLegs() {
+          const primary = context.teamsCalling;
+          const peer = context.teamsCallingPeer;
+          const answerTimeoutSeconds = config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS;
           if (
-            legs.some((leg) => !leg.graph) ||
-            legs[0]!.graph === legs[1]!.graph ||
+            !primary || !peer || primary === peer ||
             "callUserId" in probe ||
             probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase() ||
             !teamsCallingCallbackUrlSchema.safeParse(
               config.TEAMS_CALLING_CALLBACK_URL,
             ).success ||
-            !config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS
+            !answerTimeoutSeconds
           ) {
             throw new IntegrationError("configuration-failure");
           }
-          await settleBoth(
-            legs.map((leg) => leg.graph!.authenticate(executionSignal)),
-          );
+          await settleBoth([primary.authenticate(executionSignal), peer.authenticate(executionSignal)]);
+          return {
+            primary: { name: "primary" as const, graph: primary },
+            peer: { name: "peer" as const, graph: peer },
+            answerTimeoutSeconds,
+          };
         },
         now,
         classify,
       );
       result.diagnosticContext.testStage = "send";
-      await measureStep(
+      const [primary, peer] = await measureStep(
         result,
         "place-call",
         async () => {
-          for (const leg of legs) {
+          const joinLeg = async (client: AuthenticatedCallLeg): Promise<OwnedCallLeg> => {
             executionSignal.throwIfAborted();
             mutationAttempted = true;
             unknownCreation = true;
             // Graph Create call, example 5: join scheduled meeting with service-hosted media.
-            const created = await leg.graph!.json(
+            const created = await client.graph.json(
               "/communications/calls",
               z.object({
                 id: callIdSchema,
@@ -196,7 +197,10 @@ export const createTeamsCallProbe =
               "v1.0",
               16384,
             );
-            leg.id = created.id;
+            const leg: OwnedCallLeg = {
+              ...client, id: created.id, established: false, disconnected: false,
+            };
+            legs.push(leg);
             unknownCreation = false;
             telemetry.emit("teams-call-created", {
               testId: result.testId,
@@ -217,16 +221,18 @@ export const createTeamsCallProbe =
               undefined,
               chain.data ?? undefined,
             );
-            if (leg.name === "peer" && leg.id === legs[0]!.id)
+            if (leg.name === "peer" && leg.id === legs[0]?.id)
               throw new IntegrationError("read-failure");
-          }
+            return leg;
+          };
+          return [await joinLeg(clients.primary), await joinLeg(clients.peer)] as const;
         },
         now,
         classify,
       );
       result.diagnosticContext.testStage = "poll";
       const joinDeadline = Math.min(
-        now() + config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS! * 1000,
+        now() + clients.answerTimeoutSeconds * 1000,
         deadline - 1000,
       );
       await measureStep(
@@ -238,14 +244,15 @@ export const createTeamsCallProbe =
           await settleBoth(
             legs.map((leg) =>
               waitForAnswer(
-                leg.graph!,
-                leg.id!,
+                leg.graph,
+                leg.id,
                 executionSignal,
                 joinDeadline,
                 interval,
                 now,
                 context.sleep,
                 onState(leg),
+                clock,
               ),
             ),
           );
@@ -260,8 +267,8 @@ export const createTeamsCallProbe =
           await settleBoth(
             legs.map((leg) =>
               verifyMeetingMetadata(
-                leg.graph!,
-                leg.id!,
+                leg.graph,
+                leg.id,
                 {
                   threadId: probe.meetingThreadId,
                   organizerUserId: probe.organizerUserId,
@@ -281,32 +288,34 @@ export const createTeamsCallProbe =
         "verify-participants",
         async () => {
           if (
-            result.call!.callChainId &&
-            result.call!.peerCallChainId &&
-            result.call!.callChainId !== result.call!.peerCallChainId
+            call.callChainId &&
+            call.peerCallChainId &&
+            call.callChainId !== call.peerCallChainId
           )
             throw new IntegrationError("read-failure");
           await settleBoth(
             legs.map(async (leg) => {
               await verifyParticipants(
-                leg.graph!,
-                leg.id!,
+                leg.graph,
+                leg.id,
                 [probe.botClientId, probe.peerBotClientId],
                 executionSignal,
                 joinDeadline,
                 interval,
                 now,
                 context.sleep,
+                clock,
               );
               await waitForAnswer(
-                leg.graph!,
-                leg.id!,
+                leg.graph,
+                leg.id,
                 executionSignal,
                 joinDeadline,
                 interval,
                 now,
                 context.sleep,
                 onState(leg),
+                clock,
               );
             }),
           );
@@ -317,16 +326,16 @@ export const createTeamsCallProbe =
       if (onConnected) {
         phase = "pilot";
         await onConnected({
-          primary: { graph: legs[0]!.graph!, id: legs[0]!.id! },
-          peer: { graph: legs[1]!.graph!, id: legs[1]!.id! },
+          primary: { graph: primary.graph, id: primary.id },
+          peer: { graph: peer.graph, id: peer.id },
           signal: executionSignal,
           deadline,
           verifyConnected: (signal) =>
             settleBoth(
               legs.map((leg) =>
                 verifyCallEstablished(
-                  leg.graph!,
-                  leg.id!,
+                  leg.graph,
+                  leg.id,
                   AbortSignal.any([executionSignal, signal]),
                   onState(leg),
                 ),
@@ -357,12 +366,12 @@ export const createTeamsCallProbe =
       const disconnect = async (budgetMs: number) => {
         const attempts = await Promise.allSettled(
           legs
-            .filter((leg) => leg.id && !leg.disconnected)
+            .filter((leg) => !leg.disconnected)
             .map(async (leg) => {
               await leaveCall(
-                leg.graph!,
-                leg.id!,
-                AbortSignal.timeout(budgetMs),
+                leg.graph,
+                leg.id,
+                clock.timeout(budgetMs),
                 now() + budgetMs - 100,
                 interval,
                 now,
@@ -379,15 +388,15 @@ export const createTeamsCallProbe =
               });
             }),
         );
-        if (legs.every((leg) => leg.id && leg.disconnected))
-          result.call!.endedAt = new Date(now()).toISOString();
+        if (legs.length === 2 && legs.every((leg) => leg.disconnected))
+          call.endedAt = new Date(now()).toISOString();
         const failed = attempts.find(
           (attempt) => attempt.status === "rejected",
         );
         if (failed?.status === "rejected") throw failed.reason;
       };
       // Both owned legs get independent bounded teardown, even after cancellation or a failed peer join.
-      if (legs.some((leg) => leg.id)) {
+      if (legs.length) {
         phase = "end";
         try {
           await measureStep(result, "end-call", () => disconnect(4000), now);
@@ -399,13 +408,15 @@ export const createTeamsCallProbe =
       await cleanupStep(
         result,
         mutationAttempted &&
-          (unknownCreation || legs.some((leg) => leg.id && !leg.disconnected)),
+          (unknownCreation || legs.some((leg) => !leg.disconnected)),
         async () => {
           await disconnect(5000);
           if (unknownCreation) throw new IntegrationError("cleanup-failure");
         },
         telemetry,
         now,
+        true,
+        clock,
       );
     }
     if (result.success) result.diagnosticContext.testStage = "complete";
