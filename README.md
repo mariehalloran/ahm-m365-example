@@ -55,9 +55,10 @@ end. A finished deployment proves only the rollout; see
 
 The diagram shows the **live** data path with all three services selected for one
 tenant. Each tenant/service worker has its own Container App and managed identity
-and mounts the same root config. The
+and reads a hash-verified private Blob snapshot generated from the same root config. The
 [shared runtime](./synthetic-tests/utils/README.md), including scheduling,
-aggregation and reporting, runs inside each worker, not as a separate service.
+measurement and observation publication, runs inside each worker. One shared
+event-triggered Function handles ingestion, not probe execution.
 [Exchange and OneDrive user groups](./docs/monitoring-groups.md) add named signal
 aggregation groups to their journey entities, not extra models or entity branches.
 Teams targets stay ungrouped; workers stay centrally hosted.
@@ -69,9 +70,9 @@ flowchart LR
     m365["Microsoft 365<br/>Microsoft Graph<br/>Teams Bot Connector"]
 
     subgraph workers["Azure Container Apps"]
-        exchange["Exchange worker<br/>Execution lanes<br/>Aggregation / reporter"]
-        teams["Teams worker<br/>Execution lanes<br/>Aggregation / reporter"]
-        onedrive["OneDrive worker<br/>Execution lanes<br/>Aggregation / reporter"]
+        exchange["Exchange worker<br/>Execution lanes<br/>Observation publisher"]
+        teams["Teams worker<br/>Execution lanes<br/>Observation publisher"]
+        onedrive["OneDrive worker<br/>Execution lanes<br/>Observation publisher"]
     end
 
     config -.-> exchange
@@ -92,9 +93,19 @@ flowchart LR
         onedriveModel -->|"Experience health"| root
     end
 
-    exchange -->|"Direct ingestHealthReport"| exchangeModel
-    teams -->|"Direct ingestHealthReport"| teamsModel
-    onedrive -->|"Direct ingestHealthReport"| onedriveModel
+    hub["Shared Event Hub"]
+    archive["Optional Capture<br/>Private Blob archive"]
+    bridge["Managed-identity Function"]
+    dcr["DCR transformation"]
+    logs["Log Analytics<br/>M365Synthetic_CL"]
+    exchange --> hub
+    teams --> hub
+    onedrive --> hub
+    hub --> archive
+    hub --> bridge --> dcr --> logs
+    logs -->|"KQL"| exchangeModel
+    logs -->|"KQL"| teamsModel
+    logs -->|"KQL"| onedriveModel
 ```
 
 1. **Execute:** the root config selects journeys and targets and sets each
@@ -103,32 +114,32 @@ flowchart LR
    before reporting that cycle. Exchange runs all selected journeys for every unique
    mailbox on one wall-clock minute boundary (100 mailboxes = 500 attempts/minute),
    with global/per-mailbox actual Graph-request permits including retries and cleanup.
-2. **Publish:** the in-process [reporter](./synthetic-tests/utils/src/health-reports.ts)
-   aggregates journey and executed-step results, then sends HTTPS `POST`
-   `ingestHealthReport` requests to existing entities in
-   `<healthModel.name>-<service>`. The worker's selected managed identity has
-   ingest-only access to that service model; Microsoft 365 API grants are separate.
-3. **Evaluate:** reports update the entities' external signals. Native model
+2. **Publish:** the shared [publisher](./synthetic-tests/utils/src/observation-publisher.ts)
+   batches compact journey and executed-step observations into Event Hubs. Capture
+   optionally retains the original events. A managed-identity Function forwards
+   them through the Logs Ingestion API and DCR into `M365Synthetic_CL`.
+3. **Evaluate:** native KQL signals deduplicate observations and calculate success
+   percentage and latency; Health Models applies the root-configured rules. Native model
    dependencies roll business-step and journey health into the service Experience,
    then into the root model through service references. Opt-in provider lanes
    report separately to that service model's suppressed Service Health entity,
    without affecting synthetic health or Experience rollup.
 
-Console diagnostics are always emitted. Optional in-process OpenTelemetry is a
-parallel export, not a prerequisite for direct health-report ingestion.
+Console diagnostics are always emitted. Optional OpenTelemetry retains provider
+diagnostics; it is not a second copy of synthetic observations or a competing health source.
 
 ## How health is reported
 
 ![Exchange Experience health model, with Service Health, Mail and Calendar entities and their business steps](./docs/images/exchange-health-model.png)
 
 One Container App per enabled tenant and service (three for the checked-in single
-tenant) runs stateless cycles and publishes aggregated
-journey/action health reports directly. Each attempt contributes success
+tenant) runs stateless cycles and publishes raw
+journey/action observations. Each attempt contributes success
 **1 or 0** and a measured duration; executed actions are measured separately.
 A timeout contributes a failed attempt, not an Unknown sample: Exchange attempts
 are cancelled at 15 seconds, or 30 for SELF-REPLY (`reply-mail`). Entity health
 comes from the aggregate success percentage and mean duration, not a per-attempt
-state. With the checked-in thresholds, a mean duration above 15 seconds is
+state. KQL uses `healthModel.signalWindowMinutes` and `minimumSamples`. With the checked-in thresholds, a mean duration above 15 seconds is
 Degraded; a small number of failures in a large cohort need not make it Unhealthy.
 Skipped actions are not failed requests. Authentication and compensating cleanup
 remain internal, while deliberate draft/file/private-series deletion and call
@@ -171,11 +182,11 @@ the five Exchange functions, not Teams beta collection; without configured
 thresholds, their numeric measurements have diagnostic `Unknown` health.
 Unavailable sources publish **no health reports**; collection failures remain
 diagnostic-only. Observed Service Health statuses map to 100/50/0 availability.
-Root-configured [OpenTelemetry](./health-model/README.md#optional-otel-signals)
-is optional and disabled by default; no separate telemetry worker is needed. With
-`otel.enabled: true` and `destination: "azure-monitor"`, deployment also creates a
-Log Analytics workspace and three saved searches that show which reporting group and
-which users are affected, and why: see
+Root-configured OpenTelemetry is optional provider diagnostics. The
+[shared observation pipeline](./health-model/README.md#shared-observation-queries)
+always provides the synthetic table and five administrator saved searches. There
+is one shared event-triggered ingestion Function, not a telemetry container per account.
+The queries show which groups and users are affected, and why: see
 [Log Analytics for administrators](./docs/operations.md#log-analytics-for-administrators).
 
 ## Guides and acceptance

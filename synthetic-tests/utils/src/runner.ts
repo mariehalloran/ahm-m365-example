@@ -7,7 +7,7 @@ import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeHandler } from "./probes.js";
 import type { ResultOutput } from "./results.js";
-import type { CycleResults, HealthReporter } from "./health-reports.js";
+import type { CycleResults, ObservationPublisher } from "./observations.js";
 
 const CLEANUP_GRACE_MS = 12_000;
 
@@ -21,7 +21,7 @@ export interface RunnerDependencies {
   shutdown?: () => Promise<void>;
   handler?: ProbeHandler;
   now?: () => number;
-  reportHealth?: HealthReporter;
+  publishObservations?: ObservationPublisher;
   exchangeRequests?: GraphRequestPermits;
   capacityGroups?: { id: string; displayName: string; targetIds: string[] }[];
 }
@@ -203,15 +203,15 @@ async function publishCycleResults(
   telemetryErrors: unknown[],
 ): Promise<void> {
   const complete = cycle.results.length === config.probes.length;
-  if (!complete && dependencies.reportHealth) {
-    dependencies.telemetry.emit("health-report-skipped-incomplete-cycle", {
+  if (!complete && dependencies.publishObservations) {
+    dependencies.telemetry.emit("observations-skipped-incomplete-cycle", {
       cycleId: cycle.cycleId, probeCount: cycle.results.length,
     });
   }
   if (complete) {
     const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
     const signal = AbortSignal.timeout(exchange ? 12000 : 30000);
-    await withAbort(signal, async () => dependencies.reportHealth?.({ ...cycle, signal }));
+    await withAbort(signal, async () => dependencies.publishObservations?.({ ...cycle, signal }));
   }
   if (telemetryErrors.length) throw telemetryErrors[0];
 }

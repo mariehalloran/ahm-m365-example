@@ -13,11 +13,12 @@ import {
 } from "./deploy-phases.js";
 import { canonicalProjectFile } from "./paths.js";
 import { prepareProjectDeployment, type PreparedDeployment } from "./prepare-deployment.js";
+import { deployFreshnessAlert, deployIngestionFunction, deployPipeline, uploadWorkerConfiguration, verifyObservations, writePipelineParameters } from "./pipeline-deployment.js";
 
 const execFileAsync = promisify(execFile);
 const placeholderSubscriptionId = "00000000-0000-0000-0000-000000000000";
 export interface DeploymentCommand {
-  tool: "az" | "git";
+  tool: "az" | "git" | "npm" | "zip";
   args: string[];
   phase: string;
   timeoutSeconds: number;
@@ -60,6 +61,12 @@ export function deploymentPlan(prepared: PreparedDeployment) {
     configFile: canonicalProjectFile, subscriptionConfigured: prepared.document.healthModel.subscriptionId !== placeholderSubscriptionId,
     stage: prepared.settings.stage, location: prepared.settings.location, models: prepared.modelNames,
     workerCount: prepared.workers.length, reportingGroups: prepared.reportingGroups.map(({ service, id }) => ({ service, id })),
+    observations: {
+      ...prepared.document.observations,
+      workspaceName: prepared.settings.workspaceName ?? `law-${prepared.document.healthModel.name}`,
+      table: "M365Synthetic_CL", workspaceBilling: "PerGB2018",
+      transport: "Event Hubs -> managed-identity Function -> DCR Logs Ingestion API",
+    },
     workers: prepared.workers.map(worker => ({
       tenant: worker.tenant, service: worker.type, appName: worker.appName, identityResourceId: worker.identityResourceId,
       targetCount: worker.service.targets.length + (worker.service.type === "teams" ? worker.service.callTargets.length : 0),
@@ -67,9 +74,10 @@ export function deploymentPlan(prepared: PreparedDeployment) {
     })),
     foundationMode: prepared.settings.foundation.mode, imageMode: prepared.settings.image.mode,
     retiredEntityCount: prepared.settings.retireEntities.length,
-    phases: ["credential-and-binding-preflight", "build-bicep", "models-what-if", "foundation-what-if", "workers-what-if",
-      "deploy-models", "deploy-foundation", ...(deploysWorkers(prepared)
-        ? ["pin-image", "workers-what-if-with-digest", "deploy-workers", "verify-rollout", "retire-explicit-obsolete-entities"] : [])],
+    phases: ["credential-and-binding-preflight", "build-bicep", "observations-what-if", "models-what-if", "foundation-what-if", "workers-what-if",
+      "deploy-observation-foundation", "deploy-models", "deploy-foundation", ...(deploysWorkers(prepared)
+        ? ["pin-image", "deploy-ingestion-function", "upload-worker-configuration", "deploy-exchange-pilot",
+          "verify-observations", "deploy-workers", "verify-rollout", "retire-explicit-obsolete-entities"] : [])],
     note: "Local plan only: Azure permissions, actual Graph access, bot routes, image availability and rollout are not verified.",
   };
 }
@@ -95,14 +103,28 @@ export async function deployMonitoring(options: DeploymentOptions = {}) {
     const { registry, retirements } = await preflight(run);
     await buildBicep(run);
     await writeParameterFiles(run, registry);
+    await writePipelineParameters(run);
+    await deployPipeline(run, "what-if");
     await previewChanges(run, registry);
     await beginMutations(run);
+    await deployPipeline(run, "create");
     await deployModels(run);
     await deployFoundation(run);
     if (deploysWorkers(prepared)) {
       const image = await pinImage(run, registry);
+      await deployIngestionFunction(run);
+      await uploadWorkerConfiguration(run);
+      const pilot = prepared.workers.find(worker => worker.type === "exchange") ?? prepared.workers[0]!;
+      const pilotStarted = new Date(run.now()).toISOString();
+      await deployWorkers(run, image, [pilot.type]);
+      await verifyRollout(run, image, [pilot.type]);
+      await verifyObservations(run, pilot.type, pilotStarted);
       await deployWorkers(run, image);
       await verifyRollout(run, image);
+      for (const service of [...new Set(prepared.workers.map(worker => worker.type))]) {
+        await verifyObservations(run, service, pilotStarted);
+      }
+      await deployFreshnessAlert(run);
       await retireObsoleteEntities(run, retirements);
     }
     return await recordSuccess(run); // awaited so a failure while recording success is recorded as a failed run

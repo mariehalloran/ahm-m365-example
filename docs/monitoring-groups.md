@@ -58,9 +58,9 @@ does not rename its bindings. See [generated IDs](./deployment.md#generated-ids-
 
 Each user group adds **one signal aggregation group, named after its `userGroupName`,
 to each Exchange/OneDrive journey entity** it has runnable users for. It holds the
-group's `synthetic-success-percentage` and `synthetic-mean-duration`,
-published as `group-<id>--tenant-<tenant>--<signal>`,
-for example `group-united-states-users--tenant-contoso--synthetic-success-percentage`.
+group's `observed-success-percentage` and `observed-mean-duration`,
+queried as `group-<id>--tenant-<tenant>--<signal>`,
+for example `group-united-states-users--tenant-contoso--observed-success-percentage`.
 `<tenant>` is the tenant entry's `id`; a group spanning tenants has one signal set
 per tenant, combined worst-of rather than as a pooled percentage. These are the only
 aggregation groups in the model; overall signals publish ungrouped.
@@ -76,8 +76,8 @@ aggregation groups in the model; overall signals publish ungrouped.
   being refreshed and expire after the report TTL.
 
 Naming rule: with one tenant in the config, overall signals keep their plain names
-(`synthetic-success-percentage`). With more than one, every overall signal a worker
-publishes is `tenant-<tenant>--<signal>`, so tenants do not overwrite one another on
+(`observed-success-percentage`). With more than one, every overall model query
+uses `tenant-<tenant>--<signal>`, so tenants do not mask one another on
 the shared service model. Group signals stay `group-<id>--tenant-<tenant>--<signal>`
 and are never qualified twice. Adding a second tenant renames every overall signal in
 one step: deploy with `npm run deploy` so models and workers change together; old
@@ -101,13 +101,11 @@ centrally hosted: group names are reporting labels, not execution regions.
 
 ## Per-group searches in Log Analytics
 
-With `otel.enabled: true` and `destination: "azure-monitor"`, Exchange/OneDrive step
-and result records carry the group's `monitoring.group` (id) and `monitoring.group_name`, so the
-three saved searches break failures, impacted users and success rates down per group. A
-target that belongs to several groups writes one record per group; every record after
-the first is marked `monitoring.group_duplicate = "true"`, which the overall model
-signals skip so each attempt counts once and the per-group searches keep.
-Teams records have no user-group attributes. See
+`M365Synthetic_CL` retains `GroupIds` and `GroupNames` arrays on each Exchange/OneDrive
+observation. A shared account emits one observation, not one duplicate per group.
+Model queries filter memberships; administrator queries expand them only after
+event-ID deduplication. The five saved searches cover failures, impacted users,
+success rates, latency and ingestion volume. Teams arrays remain empty. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 
 ## Limits
@@ -115,8 +113,8 @@ Teams records have no user-group attributes. See
 - Group health joins each journey's worst-of composite, so a small group (one
   account) can turn an entity Degraded or Unhealthy on a single failed attempt that
   the overall percentage would absorb.
-- Each group adds journey-level health reports every cycle, so report requests grow
-  with groups x journeys.
+- Each group adds journey-level KQL signals, so model-query work grows with
+  groups x journeys, not with one model/entity per account.
 - Unknown never overrides a known state, so a stopped worker is not visible through
   a group; use the [operations checks](./operations.md#enterprise-reliability-acceptance-gate).
 - Groups label API-backed results; they do not measure employee experience or

@@ -101,25 +101,26 @@ Journey guides define exact evidence and API boundaries:
 Graph bot readback is not a second bot's receipt, and verified meeting
 connectivity does not prove received audio, bidirectional audio or call quality.
 
-## Health reports target signals
+## KQL observation signals
 
-Each journey/business step receives `synthetic-success-percentage` and
-`synthetic-mean-duration` as ungrouped external signals.
+Each journey/business step receives native `observed-success-percentage` and
+`observed-mean-duration` Log Analytics query signals.
 Whole journeys aggregate attempts; children aggregate only executed actions.
 Success is `100 * succeeded / executed`; mean duration includes failed executed
 samples. A skipped action produces Unknown without a value, never a failed or
-invented successful request.
+invented successful request. Queries read `M365Synthetic_CL`, deduplicate `EventId`
+and require the root-configured `minimumSamples` in `signalWindowMinutes`.
 
-With more than one tenant in the root config, each tenant's worker publishes every
+With more than one tenant in the root config, each model queries every
 overall signal as `tenant-<tenant id>--<signal>` (for example
-`tenant-contoso--synthetic-success-percentage`), so tenants never overwrite one
+`tenant-contoso--observed-success-percentage`), so tenants never mask one
 another on the shared service model. This covers the journey and step
 signals above, the `teams-call` signals below and the Service Health and
 activity signals. With exactly one tenant the names stay plain, as listed here.
-Group signals keep `group-<id>--tenant-<tenant id>--<signal>` and are not qualified
+Group signals use `group-<id>--tenant-<tenant id>--<signal>` and are not qualified
 twice. Adding a second tenant (or dropping back to one) renames every overall signal
 at once: `npm run deploy` changes models and workers together, and reports under the
-old names expire after the report TTL.
+old direct-report names expire after their last report's lifetime.
 
 The checked-in Degraded/Unhealthy rules are below 99%/95% success or above
 15,000/60,000 ms mean duration; equality does not breach. A timed-out attempt
@@ -128,24 +129,24 @@ Health is evaluated on the aggregate measurements; a single failure in a large
 cohort does not necessarily make the entity Unhealthy. Cleanup/credential failures
 can fail the journey without inventing failed business actions.
 
-The existing `teams-call` entity also has four immediate call-specific signals:
+The existing `teams-call` entity also has four query-backed call-specific signals:
 connection/disconnection success and duration. These measurements do not add
 journeys or business-step entities.
 
-Live ingestion uses the
-[Health Report Ingestion API](https://learn.microsoft.com/azure/azure-monitor/health-models/health-report-ingestion)
-with `2026-05-01-preview`; entity definitions use `2026-10-01-preview` for grouped
-signals. Reports create named external signals on **existing** entities.
-A 204 acknowledges ingestion, not propagation or alert delivery. Reports replace
-the prior cycle's aggregates; they are not historical metrics or percentiles.
+Workers publish raw observations through Event Hubs and the managed-identity
+Function/DCR bridge. Entity definitions use `2026-10-01-preview`; query refresh is
+one minute, with native Percent/Milliseconds units. The model identity queries
+the workspace. Successful CLI queries alone do not prove model-side authorization
+or notification delivery. Microsoft provider context remains separately reported
+on the suppressed supporting entity.
 
-### Direct-report units: platform limitation
+### Provider external-report units
 
 Units accompany every report in JSON `additionalContext.unit`, including Unknown
 reports: `Percent`, `Milliseconds`, `Count`, or categorical `status-score`.
 The ingestion request schema does not support `dataUnit`, and external signal
 definitions are read-only. Native unit labels therefore cannot be written by
-this reporter; optional query-backed signals have native units.
+the provider reporter; synthetic query-backed signals use native units.
 
 ## User groups
 
@@ -156,8 +157,8 @@ to their **journey** entities only
 displayed with the group's `userGroupName` and combined `WorstOf`. They are the only
 aggregation groups in the model; overall signals publish ungrouped. Each group's `members`
 are its `group-<id>--tenant-<tenant>--<signal>` signal-name strings, one set per tenant
-service the group has users in: `synthetic-success-percentage` and
-`synthetic-mean-duration`. Teams has no user groups, including on `teams-call`.
+service the group has users in: `observed-success-percentage` and
+`observed-mean-duration`. Teams has no user groups, including on `teams-call`.
 Step, Service Health and OTEL signals are never included, and no entities,
 relationships or models are added. A journey receives a group only when its tenant
 service and scenario are enabled and the group has a member target for it.
@@ -223,29 +224,23 @@ not delete old entities: remove each selected service's
 `<model-name>-<service>-to-<service>-service-health` relationship, then its
 `<service>-service-health` entity. Do not delete the service model or its journeys.
 
-## Optional OTEL signals
+## Shared observation queries
 
-Root `otel.enabled` defaults to false. Only enabled `destination: "azure-monitor"`
-with a selected journey creates the Log Analytics workspace (`law-<model>`),
-workspace-backed Application Insights (`appi-<model>`), three administrator saved
-searches ([`queries/admin/`](./queries/admin/); see
-[Log Analytics for administrators](../docs/operations.md#log-analytics-for-administrators))
-and the query-backed `otel-success-percentage` and `otel-mean-duration` signals on
-journeys and business steps. `destination: "console"` is a local export preview, not
-Azure infrastructure. Direct reports and topology remain intact; providers stay
-direct-report-only.
+The observation foundation always creates/reuses `law-<model>`, `appi-<model>`,
+`M365Synthetic_CL` and the DCR. Synthetic query signals are not gated by optional
+OTEL. Five administrator saved searches live in [`queries/admin/`](./queries/admin/).
+Root OTEL remains optional provider diagnostics, not duplicated synthetic data.
 
-[synthetic.kql](./queries/synthetic.kql) binds the Application Insights resource,
-service, journey and action. It averages live schema-2.0 observations over the last
-15 minutes, so one failure can hold an entity below Healthy for up to 15 minutes. It
-excludes skipped/internal actions, simulation, provider logs and records marked
-`monitoring.group_duplicate` (so each attempt counts once). Query
-refresh is one minute; its rolling window/ingestion latency can differ from
-current-cycle direct reports. No data is not a healthy fallback.
+[synthetic.kql](./queries/synthetic.kql) binds service, journey/action, tenant,
+optional group and aggregate over the configured signal window. It excludes
+simulation, providers and unexecuted actions and deduplicates replayed event IDs.
+No data or insufficient samples returns no value, not a Healthy zero. Thresholds
+remain in root configuration and are never interpreted by synthetic publishers.
 
 Service-model identities receive workspace-scoped Reader/query authentication.
 The root identity receives scoped Reader on selected nested models for native
-references. Worker identities separately receive ingest-only permissions.
+references. Worker identities receive Event Hub sender and private config-reader
+permissions; provider-context ingestion permission is separate.
 Neither permission authorizes Microsoft 365 access.
 
 ## Apply and migrate

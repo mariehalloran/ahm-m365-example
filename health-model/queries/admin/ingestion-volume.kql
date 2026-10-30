@@ -1,0 +1,8 @@
+M365Synthetic_CL
+| where TimeGenerated > ago(24h)
+| summarize Records = count(), UniqueEvents = dcount(EventId),
+    BillableGB = sumif(_BilledSize, tolower(tostring(_IsBillable)) == 'true') / 1e9,
+    MeanRecordBytes = avg(_BilledSize), LastObserved = max(Timestamp)
+    by Service, Kind, Mode
+| extend DuplicateRows = Records - UniqueEvents
+| order by BillableGB desc

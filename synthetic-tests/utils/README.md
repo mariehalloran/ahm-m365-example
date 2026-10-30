@@ -2,7 +2,7 @@
 
 The root configuration selects journeys/targets and report policy. Each service
 entry supplies its real handlers; shared code owns strict contracts, HTTP/auth,
-execution lanes, measurements, direct reports and optional in-process OTEL.
+execution lanes, measurements, generic observations and optional provider diagnostics.
 Only journey metadata is imported by shared contracts, not service execution.
 No durable outbox, aggregation history, user-token cache or state service exists.
 
@@ -136,15 +136,16 @@ at most 42 seconds of execution/settlement, 12 seconds of reports and 5 seconds
 of flush fit inside a minute. Per-reporting-group `exchange-minute-capacity`
 diagnostics expose expected/started/completed/timed-out attempts and request-permit
 waiting separately from Exchange availability. Live OneDrive configurations must budget for all selected accounts,
-and report TTL must cover the configured cycle plus cadence/publication.
+and the signal window must cover the configured cycle plus cadence/publication.
 See [bulk setup and sizing](../../docs/onedrive-setup.md).
 Exchange send/confirmed-delivery and Teams send/confirmed-publication durations
 remain distinct from total journey time.
 
 Each complete lane cycle publishes only its observed journeys. An incomplete
-cycle skips aggregate publication and emits `health-report-skipped-incomplete-cycle`
+cycle skips observation publication and emits `observations-skipped-incomplete-cycle`
 rather than presenting a partial cohort as complete. Every journey/action
-uses the fixed `synthetic-success-percentage` / `synthetic-mean-duration` signals;
+contributes raw success and duration observations. Models query the fixed
+`observed-success-percentage` / `observed-mean-duration` signals;
 with more than one tenant in the config each is named `tenant-<tenant id>--<signal>`
 (group signals: `group-<id>--tenant-<tenant id>--<signal>`).
 OneDrive maps semantic actions to deployed `step-1`…`step-4` IDs; its historical
@@ -154,9 +155,11 @@ per-target signal inventories. Skipped actions receive Unknown without a value.
 Valid-but-incomplete live setup produces unsuccessful/unexecutable journey
 evidence when reporting credentials are usable. Unsafe schemas/reporting
 credentials can prevent publication and require independent freshness checks.
-Publication uses bounded retries and a five-second request budget; the synthetic
-Exchange batch has 12 seconds, other batches 30. A 204 is ingestion acceptance, not evaluated rollup or notification.
-TTL expiry removes signals; it is not a guaranteed Unhealthy alert.
+Event Hub publication uses bounded retries; the synthetic
+Exchange batch has 12 seconds, other batches 30. The Function forwards batches through
+the DCR Logs Ingestion API. Acceptance is not evaluated rollup or notification delivery.
+Queries deduplicate event IDs and preserve no-data Unknown; a separate freshness alert
+does not provide independent protection against the workspace itself failing.
 
 ## Optional provider collectors
 
@@ -179,12 +182,12 @@ See [permissions, exact endpoints and bounded contracts](../../docs/provider-mon
 Console diagnostics always include labeled mode, opaque test/correlation IDs,
 bounded category, optional value-free failure hints, executed/skipped actions and
 durations; never target addresses, message bodies, credentials or raw HTTP failures.
-Direct reports always accompany live result publication. Root OTEL is optional,
-disabled by default and runs in
-the same process, with live-only model queries when Azure export is selected.
-Its Exchange/OneDrive step and result records additionally carry the test accounts and user group
-(`monitoring.user`, `monitoring.peer`, `monitoring.group`, `monitoring.group_name`)
-for the administrator searches; Teams records have no user/group attributes. See
+Journey/step observations use the shared [publisher](./src/observation-publisher.ts)
+and [generic contract](./src/observations.ts). Event Hub Capture is optional.
+The [Function](../ingestion/src/index.ts) preserves invalid/exhausted records in private
+quarantine and submits valid batches to DCR ingestion. Root OTEL is optional provider
+diagnostics only and does not duplicate synthetic observations. Exchange/OneDrive
+observations retain mailbox/UPN and reporting-group arrays; Teams stays ungrouped. See
 [Log Analytics for administrators](../../docs/operations.md#log-analytics-for-administrators).
 Azure export uses Microsoft's OpenTelemetry exporters directly, retaining
 observable export callbacks and bounded flush/shutdown. The distribution would

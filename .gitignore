@@ -3,6 +3,7 @@ dist/
 coverage/
 .azure/
 .monitoring-deployment/
+.function-package/
 local.settings.json
 .env
 *.zip

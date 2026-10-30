@@ -67,6 +67,14 @@ export interface DeploymentRun {
 }
 
 export const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+export function runtimeConfiguration(run: DeploymentRun) {
+  const text = `${JSON.stringify(run.prepared.document, null, 2)}\n`;
+  const sha256 = hash(text);
+  return {
+    text, sha256,
+    url: `https://${run.prepared.document.observations.archiveStorageAccount}.blob.core.windows.net/worker-config/${sha256}.json`,
+  };
+}
 export const deploysWorkers = (prepared: PreparedDeployment) => prepared.settings.stage === "workers";
 const equal = (left: string | undefined, right: string | undefined) => left?.toLowerCase() === right?.toLowerCase();
 // Azure reports a region by display name ("Central US"); configuration uses the ARM name ("centralus").
@@ -74,7 +82,7 @@ const sameRegion = (actual: string, configured: string) =>
   actual.toLowerCase().replace(/\s+/g, "") === configured.toLowerCase().replace(/\s+/g, "");
 const isMissing = (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
-const runFile = (run: DeploymentRun, name: string) => join(run.directory, name);
+export const runFile = (run: DeploymentRun, name: string) => join(run.directory, name);
 
 export function parseJson<T>(text: string, phase: string): T {
   try { return JSON.parse(text) as T; }
@@ -84,7 +92,7 @@ export function parseJson<T>(text: string, phase: string): T {
 export const saveProvenance = (run: DeploymentRun) =>
   writeFile(runFile(run, "provenance.json"), prettyJson(run.provenance), { mode: 0o600 });
 
-const writeJson = (run: DeploymentRun, name: string, value: unknown) =>
+export const writeJson = (run: DeploymentRun, name: string, value: unknown) =>
   writeFile(runFile(run, name), prettyJson(value), { flag: "wx", mode: 0o600 });
 
 async function execute(run: DeploymentRun, tool: DeploymentCommand["tool"], phase: string, args: string[],
@@ -96,10 +104,10 @@ async function execute(run: DeploymentRun, tool: DeploymentCommand["tool"], phas
 
 const git = (run: DeploymentRun, phase: string, args: string[]) => execute(run, "git", phase, args);
 
-const az = (run: DeploymentRun, phase: string, args: string[], timeoutSeconds?: number) =>
+export const az = (run: DeploymentRun, phase: string, args: string[], timeoutSeconds?: number) =>
   execute(run, "az", phase, [...args, "--only-show-errors"], timeoutSeconds);
 
-async function azJson<T>(run: DeploymentRun, phase: string, args: string[], timeoutSeconds?: number): Promise<T> {
+export async function azJson<T>(run: DeploymentRun, phase: string, args: string[], timeoutSeconds?: number): Promise<T> {
   return parseJson<T>(await az(run, phase, [...args, "--output", "json"], timeoutSeconds), phase);
 }
 
@@ -152,7 +160,7 @@ async function sourceFiles(directory: string): Promise<string[]> {
 export async function sourceFingerprint(): Promise<string> {
   const files: string[] = [];
   for (const directory of ["health-model/infra", "health-model/queries", "synthetic-tests/infra", "synthetic-tests/utils/src",
-    "synthetic-tests/exchange/src", "synthetic-tests/teams/src", "synthetic-tests/onedrive/src"]) {
+    "synthetic-tests/exchange/src", "synthetic-tests/teams/src", "synthetic-tests/onedrive/src", "synthetic-tests/ingestion"]) {
     files.push(...await sourceFiles(directory));
   }
   files.push(...["package.json", "package-lock.json", "Dockerfile", ".dockerignore", "tsconfig.json", "tsconfig.build.json"]
@@ -336,6 +344,7 @@ export async function buildBicep(run: DeploymentRun) {
   const builds = [
     ["build-model-bicep", join(repositoryDirectory, "health-model/infra/main.bicep"), healthTemplate],
     ["build-worker-bicep", join(nodeProjectDirectory, "infra/main.bicep"), workerTemplate],
+    ["build-observation-bicep", join(nodeProjectDirectory, "infra/observations.bicep"), "observations-template.json"],
   ] as const;
   for (const [phase, source, template] of builds) {
     const text = await az(run, phase, ["bicep", "build", "--file", source, "--stdout"]);
@@ -345,7 +354,12 @@ export async function buildBicep(run: DeploymentRun) {
 
 function workerParameters(run: DeploymentRun, overrides: Record<string, { value: unknown }>) {
   const { workerParameters } = run.prepared;
-  return { ...workerParameters, parameters: { ...workerParameters.parameters, ...overrides } };
+  const snapshot = runtimeConfiguration(run);
+  return { ...workerParameters, parameters: {
+    ...workerParameters.parameters,
+    workerConfigBlobUrl: { value: snapshot.url }, workerConfigSha256: { value: snapshot.sha256 },
+    ...overrides,
+  } };
 }
 
 export async function writeParameterFiles(run: DeploymentRun, registry: Registry) {
@@ -381,10 +395,15 @@ export const deployModels = (run: DeploymentRun) => deployStack(run, "create", s
 
 export const deployFoundation = (run: DeploymentRun) => deployStack(run, "create", stacks.foundation);
 
-export async function deployWorkers(run: DeploymentRun, image: string) {
-  await writeJson(run, stacks.workers.parameters, workerParameters(run, { workerImage: { value: image } }));
-  await deployStack(run, "what-if", stacks.workers);
-  await deployStack(run, "create", stacks.workers);
+export async function deployWorkers(run: DeploymentRun, image: string, services?: string[]) {
+  const stack = services ? {
+    ...stacks.workers, name: `workers-${services.join("-")}`, parameters: `workers-${services.join("-")}.parameters.json`,
+  } : stacks.workers;
+  await writeJson(run, stack.parameters, workerParameters(run, {
+    workerImage: { value: image }, ...(services ? { workerServices: { value: services } } : {}),
+  }));
+  await deployStack(run, "what-if", stack);
+  await deployStack(run, "create", stack);
 }
 
 async function deployStack(run: DeploymentRun, operation: "what-if" | "create", stack: Stack) {
@@ -441,10 +460,10 @@ async function buildImage(run: DeploymentRun, registry: Registry, image: BuildIm
 const rolloutDeadlineExceeded = () =>
   new ConfigurationError("Container Apps rollout deadline exceeded; inspect protected provenance and Azure revision status");
 
-export async function verifyRollout(run: DeploymentRun, image: string) {
+export async function verifyRollout(run: DeploymentRun, image: string, services?: string[]) {
   run.phase = "verify-rollout";
   const deadline = run.now() + run.prepared.settings.rolloutTimeoutSeconds * 1000;
-  const pending = new Set(run.prepared.workers.map(worker => worker.appName));
+  const pending = new Set(run.prepared.workers.filter(worker => !services || services.includes(worker.type)).map(worker => worker.appName));
   while (pending.size) {
     run.signal.throwIfAborted();
     for (const appName of [...pending]) {

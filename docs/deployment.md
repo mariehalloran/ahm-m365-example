@@ -137,19 +137,26 @@ Phases, in order:
 
 1. **Preflight**, no changes: validate the config, check the Azure account, any
    `existing` foundation, worker identity and Teams bot bindings, build both Bicep
-   templates and run `what-if` for the models, foundation and workers.
-2. **Health models:** the root model and one model per enabled service.
-3. **Foundation:** the Container Apps environment, registry, worker identities and
-   their scoped image-pull and health-report roles, or the bound existing ones.
-4. **Image and workers:** build the image in ACR, pin it by digest and deploy one
-   worker per enabled tenant and service. Each mounts the whole root config at
-   `/etc/probe/monitoring.config.json`.
-5. **Rollout check:** wait until each worker's latest revision is ready on that
-   image, up to `deployment.rolloutTimeoutSeconds`.
-6. **Retirement:** delete only the entities listed in `deployment.retireEntities`.
+   templates and run `what-if` for ingestion, models, foundation and workers.
+2. **Observation foundation:** the existing pay-as-you-go workspace, Analytics
+   table `M365Synthetic_CL`, Standard Event Hub, optional Capture, private archive,
+   managed-identity Function host/storage, DCE and DCR.
+3. **Health models and worker foundation:** KQL-backed journey/step signals, model
+   query permissions, worker identities, image pull, Event Hub sender and private
+   configuration-reader roles. Provider-only health-report grants remain separate.
+4. **Build and ingestion:** pin the ACR worker image by digest, build/deploy the
+   Function package, then upload an immutable, hash-named private Blob snapshot
+   generated from the root configuration and its resolved `.env` bindings. This is
+   a deployment artifact, not another user-maintained configuration file.
+5. **Prove Exchange first:** roll out the Exchange worker and verify fresh live
+   journey/account observations from that exact configuration hash in Log Analytics.
+   Then roll out the remaining services and verify their selected journey/account pairs.
+6. **Operational checks:** enable the independent observation-freshness alert only
+   after live ingestion is verified. Delete only explicitly listed obsolete entities.
 
-Completion means ARM and ready revisions only; verify journey reports, freshness and
-notifications as described under [acceptance](#acceptance-and-cleanup). Each run
+Completion includes ready revisions and fresh journey/account observations, not
+proof that Microsoft 365 is healthy or notifications were delivered. Verify Capture,
+actual model evaluation and notifications under [acceptance](#acceptance-and-cleanup). Each run
 writes a protected record (what-if results, provenance) to
 `.monitoring-deployment/<runId>/` in the repository root. The root `.gitignore`
 already excludes that default `deployment.stateDirectory`; ignore a custom one yourself.
@@ -166,7 +173,7 @@ already excludes that default `deployment.stateDirectory`; ignore a custom one y
 | `enableBetaServiceActivity` | Default `false`; required when a service enables `serviceActivity` |
 | `foundation` | `{ "mode": "create", "environmentName", "registryName" }` or `{ "mode": "existing", "environment", "registry" }`, each name a resource in the health model's resource group or a full resource ID ([names](#what-the-config-holds)) |
 | `image` | `{ "mode": "build", "repository", "tag" }`, built in ACR for `linux/amd64` with the run ID appended to the tag, or `{ "mode": "existing", "reference" }`, a `registry/repository@sha256:…` digest in the configured registry |
-| `workspaceName`, `applicationInsightsName` | Optional OTEL resource names, defaulting to `law-<healthModel.name>` and `appi-<healthModel.name>` |
+| `workspaceName`, `applicationInsightsName` | Shared observation/diagnostic resource names, defaulting to `law-<healthModel.name>` and `appi-<healthModel.name>` |
 | `retireEntities` | Optional `{ "service", "entityName" }` list of obsolete entities to delete after the rollout |
 | `commandTimeoutSeconds`, `rolloutTimeoutSeconds`, `stateDirectory` | Defaults 1800, 300 and `.monitoring-deployment` |
 
@@ -389,14 +396,15 @@ The [root configuration](../monitoring.config.json) is the only file you maintai
 | `tenants[].services.exchange.targets`, `….onedrive.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
 
 It holds names, choices and the few [IDs only you can supply](#what-the-config-holds),
-never secrets. Model and worker deployment use this same file, and every worker mounts
-all of it with names expanded to resource IDs and defaults applied. Looked-up and
+never secrets. Model and worker deployment use this same file. Each worker downloads
+its immutable, hash-verified generated Blob snapshot using managed identity, with
+names expanded to resource IDs and defaults applied. Looked-up and
 generated IDs stay out of it: see [`.env`](#generated-ids-in-env).
 
 ## Identity and permissions
 
 Use an explicitly selected managed identity per service and separate
-authorization for Microsoft 365 access and health-report ingestion.
+authorization for Microsoft 365 access, Event Hub publication and provider reports.
 
 - **Exchange:** application RBAC scoped to the dedicated test mailboxes; see
   [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md). Both the one-time approval and
@@ -412,8 +420,10 @@ authorization for Microsoft 365 access and health-report ingestion.
 - **OneDrive:** `Files.SelectedOperations.Selected` with write grants on the
   dedicated folders; app-folder operations separately use
   `Files.ReadWrite.AppFolder`. See [OneDrive setup](../synthetic-tests/onedrive/README.md).
-- **Health reports:** ingest-only access to the worker's service model. Root
-  model Reader access to nested models is a separate permission.
+- **Observation pipeline:** workers have Event Hubs sender and private configuration
+  reader roles. The Function has receiver, host/quarantine storage and DCR ingestion
+  roles. Model identities query the workspace; the root reads its nested models.
+  Worker service-model report permissions are used only for Microsoft provider context.
 
 There is no silent CLI, user, certificate or credential fallback. Explicit
 certificate options for local application access remain separate from hosted
@@ -421,20 +431,21 @@ managed-identity execution.
 
 ## Container Apps boundary
 
-`npm run deploy` deploys the [health models](../health-model/README.md) first, then
-the [foundation and workers](../synthetic-tests/infra/README.md). Workers reuse an
+`npm run deploy` deploys the observation foundation, [health models](../health-model/README.md),
+then the [worker foundation](../synthetic-tests/infra/README.md), image and Function.
+It proves fresh Exchange ingestion before rolling out Teams and OneDrive. Workers reuse an
 existing approved environment and identities when `deployment.foundation.mode` is
-`existing`, run an immutable image digest and mount the same root config.
+`existing`, run an immutable image digest and download the same root-config snapshot.
 
 Only scheduled Teams meetings need public HTTPS callback ingress. Background
 journey execution is not a long-lived ingress request. Lanes run independently
 with bounded execution and cleanup; a timeout is a failed attempt, while
 unexecuted dependent steps are not extra failed requests.
 
-OTEL is root-controlled and disabled by default. Azure Monitor export requires
-the model's telemetry resources before workers; direct health reports and
-console diagnostics do not depend on OTEL. Deployment with Azure Monitor export also
-creates the administrator saved searches described in
+OTEL is optional provider diagnostics and root-controlled. Synthetic observations
+always use Event Hubs, the managed-identity Function/DCR bridge and the pay-as-you-go
+workspace; Capture is independently optional. Model queries and the five administrator
+saved searches do not depend on OTEL. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 Microsoft-reported provider data
 remains separate, suppressed Service Health context; see

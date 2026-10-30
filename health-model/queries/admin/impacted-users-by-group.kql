@@ -1,13 +1,12 @@
-// Users with failed live steps per group, most affected first.
-AppTraces
-| where Message == 'synthetic-step' and tostring(Properties['probe.mode']) == 'live'
-| where tostring(Properties['probe.step_status']) == 'failed'
-| summarize Failures = count(),
-    Journeys = make_set(tostring(Properties['probe.journey'])),
-    Errors = make_set(tostring(Properties['probe.diagnostic_category'])),
-    FirstFailure = min(TimeGenerated),
-    LastFailure = max(TimeGenerated)
-    by Group = coalesce(tostring(Properties['monitoring.group_name']), '(no group)'),
-    GroupId = tostring(Properties['monitoring.group']),
-    User = coalesce(tostring(Properties['monitoring.user']), '(n/a)')
-| order by Group asc, GroupId asc, Failures desc
+M365Synthetic_CL
+| where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
+| where Kind == 'journey' and Value == 0
+| summarize arg_max(Timestamp, *) by EventId
+| extend Groups = iff(array_length(GroupIds) > 0, GroupIds, dynamic(['']))
+| mv-expand with_itemindex=GroupIndex GroupId = Groups to typeof(string)
+| extend Group = iff(isempty(GroupId), '(no group)', tostring(GroupNames[GroupIndex])),
+    User = coalesce(SyntheticUser, TestAccountId, '(n/a)')
+| summarize Failures = count(), Journeys = make_set(Journey), Errors = make_set(FailureCategory),
+    FirstFailure = min(Timestamp), LastFailure = max(Timestamp)
+    by TenantAlias, Group, GroupId, User
+| order by Group asc, Failures desc

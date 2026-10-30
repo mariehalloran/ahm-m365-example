@@ -1,8 +1,8 @@
 import type { TokenCredential } from "@azure/identity";
 import { createHealthReportCredential } from "./auth.js";
-import { isReportedStep, journeyStepEntities, probeServices, testTypes, type DiagnosticCategory, type ReportedStepName, type StepName, type SyntheticResult, type Telemetry } from "./contracts.js";
+import type { Telemetry } from "./contracts.js";
 import { AuthenticatedHttp, categoryOf, IntegrationError, type HttpOptions } from "./http.js";
-import { groupSignalName, tenantSignalName } from "./groups.js";
+import { tenantSignalName } from "./groups.js";
 import { serviceModelName, type ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
@@ -11,11 +11,6 @@ import { activityFunctions, isPercentageActivity, type ActivityFunction } from "
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
 const REPORT_BATCH_TIMEOUT_MS = 30000;
-
-export const teamsCallSignals = [
-  "teams-call-connection-success-percentage", "teams-call-mean-connection-duration",
-  "teams-call-disconnection-success-percentage", "teams-call-mean-disconnection-duration",
-] as const;
 
 type HealthState = "Healthy" | "Degraded" | "Unhealthy" | "Unknown";
 type Policy = ProjectConfig["healthModel"];
@@ -26,7 +21,7 @@ interface EvaluationRules {
 export interface HealthReport {
   entityName: string;
   body: {
-    signalName: "synthetic-success-percentage" | "synthetic-mean-duration" | "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}` | (typeof teamsCallSignals)[number] | `group-${string}` | `tenant-${string}`;
+    signalName: "microsoft-reported-service-status" | "microsoft-reported-issue-count" | `microsoft-activity-${ActivityFunction}` | `tenant-${string}`;
     healthState: HealthState;
     expiresInMinutes: number;
     additionalContext: string;
@@ -34,26 +29,8 @@ export interface HealthReport {
     evaluationRules?: EvaluationRules;
   };
 }
-export interface CycleResults { cycleId: string; results: SyntheticResult[]; signal?: AbortSignal }
 export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[]; signal?: AbortSignal }
-export type HealthReporter = (cycle: CycleResults | ProviderCycle) => Promise<void>;
-
-interface MeasurementSample {
-  success: boolean;
-  durationMs: number;
-  diagnosticCategory?: DiagnosticCategory;
-}
-interface EntitySamples {
-  entityName: string;
-  samples: MeasurementSample[];
-  skipped: number;
-}
-interface Measurement {
-  signalName: HealthReport["body"]["signalName"];
-  unit: "Percent" | "Milliseconds";
-  rules: EvaluationRules;
-  value: number | undefined;
-}
+export type ProviderReporter = (cycle: ProviderCycle) => Promise<void>;
 interface PublicationContext {
   http: AuthenticatedHttp;
   modelPath: string;
@@ -68,165 +45,6 @@ function evaluateHealthState(value: number, rules: EvaluationRules): HealthState
   if (breaches(rules.unhealthyRule)) return "Unhealthy";
   if (breaches(rules.degradedRule)) return "Degraded";
   return "Healthy";
-}
-
-function collectActionSamples(name: ReportedStepName, results: SyntheticResult[]): MeasurementSample[] {
-  const samples: MeasurementSample[] = [];
-  for (const result of results) {
-    for (const step of result.steps) {
-      if (step.name !== name || step.status === "skipped") continue;
-      samples.push({
-        success: step.status === "succeeded", durationMs: step.durationMs,
-        ...(step.status === "failed" ? { diagnosticCategory: step.diagnosticCategory } : {}),
-      });
-    }
-  }
-  return samples;
-}
-
-function collectEntitySamples(service: ServiceConfig["type"], results: SyntheticResult[]): EntitySamples[] {
-  const supported = testTypes.filter(type => probeServices[type].service === service);
-  const observed = results.length
-    ? supported.filter(type => results.some(result => result.testType === type))
-    : supported.slice(0, 1);
-  return observed.flatMap(testType => {
-    const journey = probeServices[testType];
-    const journeyResults = results.filter(result => result.testType === testType);
-    const groups: EntitySamples[] = [
-      {
-        entityName: journey.entityName,
-        samples: journeyResults.map(result => ({
-          success: result.success, durationMs: result.durationMs,
-          ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
-        })),
-        skipped: 0,
-      },
-      ...(journey.steps as readonly StepName[]).filter(isReportedStep).map(name => {
-        const samples = collectActionSamples(name, journeyResults);
-        return {
-          entityName: `${journey.entityName}-${journeyStepEntities[testType]?.[name] ?? name}`, samples,
-          skipped: journeyResults.length - samples.length,
-        };
-      }),
-    ];
-    return groups;
-  });
-}
-
-function createMeasurementReport(
-  entityName: string, measurement: Measurement, context: string, ttlMinutes: number,
-): HealthReport {
-  return {
-    entityName,
-    body: {
-      signalName: measurement.signalName, expiresInMinutes: ttlMinutes,
-      additionalContext: JSON.stringify({ ...JSON.parse(context), unit: measurement.unit }),
-      healthState: measurement.value === undefined ? "Unknown" : evaluateHealthState(measurement.value, measurement.rules),
-      ...(measurement.value === undefined ? {} : { value: measurement.value, evaluationRules: measurement.rules }),
-    },
-  };
-}
-
-function createEntityReports(group: EntitySamples, cycleId: string, policy: Policy): HealthReport[] {
-  const attempted = group.samples.length;
-  const succeeded = group.samples.filter(sample => sample.success).length;
-  const diagnosticCategories = [...new Set(group.samples.flatMap(sample =>
-    sample.diagnosticCategory ? [sample.diagnosticCategory] : []))];
-  const context = JSON.stringify({
-    aggregation: "single-cycle", cycleId, attempted, succeeded, skipped: group.skipped,
-    ...(diagnosticCategories.length ? { diagnosticCategories } : {}),
-  });
-  const successRules: EvaluationRules = {
-    degradedRule: { operator: "LessThan", threshold: policy.successDegradedPercent },
-    unhealthyRule: { operator: "LessThan", threshold: policy.successUnhealthyPercent },
-  };
-  const durationRules: EvaluationRules = {
-    degradedRule: { operator: "GreaterThan", threshold: policy.latencyDegradedMilliseconds },
-    unhealthyRule: { operator: "GreaterThan", threshold: policy.latencyUnhealthyMilliseconds },
-  };
-  const measurements: Measurement[] = [
-    {
-      signalName: "synthetic-success-percentage", unit: "Percent", rules: successRules,
-      value: attempted ? 100 * succeeded / attempted : undefined,
-    },
-    {
-      signalName: "synthetic-mean-duration", unit: "Milliseconds", rules: durationRules,
-      value: attempted ? group.samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
-    },
-  ];
-  return measurements.map(measurement => createMeasurementReport(group.entityName, measurement, context, policy.reportTtlMinutes));
-}
-
-export function aggregateHealthReports(
-  service: ServiceConfig["type"], cycle: CycleResults, policy: Policy,
-): HealthReport[] {
-  return [
-    ...collectEntitySamples(service, cycle.results).flatMap(group =>
-      createEntityReports(group, cycle.cycleId, policy)),
-    ...(service === "teams" ? callMeasurementReports(cycle, policy) : []),
-  ];
-}
-
-// Each group re-aggregates only its own results into journey-level signals; groups never publish placeholders.
-export function groupHealthReports(project: ProjectConfig, service: ServiceConfig["type"], cycle: CycleResults): HealthReport[] {
-  return project.groups.filter(group => group.service === service).flatMap(group => {
-    const members = new Set(group.targetIds);
-    const results = cycle.results.filter(result => members.has(result.testId));
-    if (!results.length) return [];
-    const journeys = new Set<string>(results.map(result => probeServices[result.testType].entityName));
-    return aggregateHealthReports(service, { ...cycle, results }, project.healthModel)
-      .filter(report => journeys.has(report.entityName) && report.body.value !== undefined)
-      .map(report => ({
-        ...report,
-        body: { ...report.body, signalName: groupSignalName(group.id, project.tenant.id, report.body.signalName) },
-      }));
-  });
-}
-
-function callMeasurementReports(cycle: CycleResults, policy: Policy): HealthReport[] {
-  const calls = cycle.results.filter(result => result.testType === "teams-call");
-  if (!calls.length) return [];
-  const phases = [
-    { step: "wait-for-answer", success: teamsCallSignals[0], duration: teamsCallSignals[1] },
-    { step: "end-call", success: teamsCallSignals[2], duration: teamsCallSignals[3] },
-  ] as const;
-  return phases.flatMap(phase => {
-    const samples = calls.flatMap(result => {
-      const step = result.steps.find(step => step.name === phase.step);
-      if (!step || step.status === "skipped") return [];
-      const placed = result.steps.find(step => step.name === "place-call");
-      const submissionMs = phase.step === "wait-for-answer" && placed && placed.status !== "skipped" ? placed.durationMs : 0;
-      return [{ success: step.status === "succeeded", durationMs: step.durationMs + submissionMs, observedAt: step.observedAt }];
-    });
-    const attempted = samples.length;
-    const succeeded = samples.filter(sample => sample.success).length;
-    const context = JSON.stringify({
-      aggregation: "single-cycle", cycleId: cycle.cycleId, attempted, succeeded,
-      skipped: calls.length - attempted,
-      observedAt: samples.map(sample => sample.observedAt).sort().at(-1) ?? null,
-      callChainIds: calls.flatMap(result => result.call?.callChainId ? [result.call.callChainId] : []),
-      resultCodes: [...new Set(calls.flatMap(result => result.call?.resultCodes ?? []))],
-      evidence: "graph-confirmed-meeting-connectivity",
-    });
-    return [
-      createMeasurementReport("teams-call", {
-        signalName: phase.success, unit: "Percent",
-        rules: {
-          degradedRule: { operator: "LessThan", threshold: policy.successDegradedPercent },
-          unhealthyRule: { operator: "LessThan", threshold: policy.successUnhealthyPercent },
-        },
-        value: attempted ? 100 * succeeded / attempted : undefined,
-      }, context, policy.reportTtlMinutes),
-      createMeasurementReport("teams-call", {
-        signalName: phase.duration, unit: "Milliseconds",
-        rules: {
-          degradedRule: { operator: "GreaterThan", threshold: policy.latencyDegradedMilliseconds },
-          unhealthyRule: { operator: "GreaterThan", threshold: policy.latencyUnhealthyMilliseconds },
-        },
-        value: attempted ? samples.reduce((sum, sample) => sum + sample.durationMs, 0) / attempted : undefined,
-      }, context, policy.reportTtlMinutes),
-    ];
-  });
 }
 
 const serviceStatusScores: Readonly<Record<string, number>> = {
@@ -392,10 +210,10 @@ async function publishHealthReports(reports: HealthReport[], context: Publicatio
   if (failures) throw new IntegrationError("collector-failure");
 }
 
-export function createHealthReporter(
+export function createProviderReporter(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
   options: HttpOptions & { credential?: TokenCredential } = {},
-): HealthReporter {
+): ProviderReporter {
   if (!service.enabled) return async () => undefined;
   const policy = project.healthModel;
   const http = service.mode === "live" ? new AuthenticatedHttp(
@@ -410,18 +228,14 @@ export function createHealthReporter(
     ? { ...report, body: { ...report.body, signalName: tenantSignalName(project.tenant.id, report.body.signalName) } }
     : report;
   return async cycle => {
-    const overall = "results" in cycle ? aggregateHealthReports(service.type, cycle, policy)
-      : project.serviceHealth.enabled && service.mode === "live" ? [
+    const overall = project.serviceHealth.enabled && service.mode === "live" ? [
         ...(service.serviceHealth ? [
-          serviceHealthReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
-          serviceHealthIssuesReport(service.type, cycle, policy.reportTtlMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
+          serviceHealthReport(service.type, cycle, policy.signalWindowMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
+          serviceHealthIssuesReport(service.type, cycle, policy.signalWindowMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
         ] : []),
-        ...serviceActivityReports(service, cycle, policy.reportTtlMinutes),
+        ...serviceActivityReports(service, cycle, policy.signalWindowMinutes),
       ].filter(report => report.body.value !== undefined) : [];
-    const reports = [
-      ...overall.map(qualified),
-      ...("results" in cycle ? groupHealthReports(project, service.type, cycle) : []),
-    ];
+    const reports = overall.map(qualified);
     if (!http) {
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;

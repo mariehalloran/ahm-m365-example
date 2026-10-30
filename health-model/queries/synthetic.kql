@@ -1,21 +1,13 @@
-AppTraces
-| where TimeGenerated > ago(15m)
-| where _ResourceId =~ '__APPLICATION_INSIGHTS_RESOURCE_ID__'
-| where Message == '__MESSAGE__'
-| where tostring(Properties['probe.schema_version']) == '2.0'
-| where tostring(Properties['probe.mode']) == 'live'
-| where tostring(Properties['monitoring.group_duplicate']) != 'true'
-| where tostring(Properties['probe.service']) == '__SERVICE__'
-| where tostring(Properties['probe.journey']) == '__JOURNEY__'
-| where '__STEP__' == '' or tostring(Properties['probe.step']) == '__STEP__'
-| where Message != 'synthetic-step' or tostring(Properties['probe.step_status']) in ('succeeded', 'failed')
-| where Message == 'synthetic-step' or isnotnull(tobool(Properties['probe.success']))
-| extend ObservedAt = todatetime(Properties['probe.observed_at'])
-| where ObservedAt > ago(15m) and ObservedAt <= now()
-| extend Success = iff(Message == 'synthetic-step',
-    iff(tostring(Properties['probe.step_status']) == 'succeeded', 1.0, 0.0),
-    iff(tobool(Properties['probe.success']), 1.0, 0.0)),
-    Duration = todouble(Properties['probe.duration_ms'])
-| where isnotnull(Duration) and Duration >= 0
-| summarize Value = __AGGREGATION__
-| where isnotnull(Value)
+M365Synthetic_CL
+| where TimeGenerated > ago(__WINDOW__m) and TimeGenerated <= now()
+| where Timestamp > ago(__WINDOW__m) and Timestamp <= now()
+| where Category == 'M365Synthetic' and Version == '1' and Mode == 'live' and Unit == 'success'
+| where Service == '__SERVICE__' and Journey == '__JOURNEY__'
+| where Kind == '__KIND__' and Step == '__STEP__'
+| where TenantAlias == '__TENANT__'
+| where '__GROUP__' == '' or set_has_element(GroupIds, '__GROUP__')
+| where Value in (0.0, 1.0) and isnotnull(DurationMs) and DurationMs >= 0
+| summarize arg_max(Timestamp, *) by EventId
+| summarize Samples = count(), Value = __AGGREGATION__
+| where Samples >= __MINIMUM__ and isnotnull(Value)
+| project Value

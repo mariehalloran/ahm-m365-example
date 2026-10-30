@@ -109,9 +109,11 @@ report assignments update; `{ "mode": "create", ... }` creates them.
 `{ "mode": "existing", "reference": "<registry>/<repository>@sha256:<digest>" }`
 skips the build and requires that digest in the configured registry. The non-root
 runtime image contains only production dependencies and compiled code, not the config
-or credentials. Each worker mounts the whole root config read-only at
-`/etc/probe/monitoring.config.json`, with names expanded, defaults applied and the `.env`
-IDs already filled in by `npm run deploy`, so workers need no `.env`; verify the actual
+or credentials. Each worker downloads a private, immutable Blob snapshot generated
+from the root config, with names expanded, defaults applied and the `.env`
+IDs already filled in by `npm run deploy`. The URI and SHA-256 are explicit environment
+bindings and download uses the selected managed identity. This avoids secret-size
+limits as target counts grow; workers need no `.env`. Verify the actual
 ready revision, image and config after every rollout.
 
 ### Excluding a previously deployed service
@@ -195,12 +197,14 @@ secret-reading/application-modification access.
 - Default sizing is 0.25 CPU/0.5 GiB per app, not a performance/reliability guarantee.
   Always-running replicas and the registry incur charges.
 - Each worker runs `node dist/<service>/src/worker.js` with
-  `--config /etc/probe/monitoring.config.json --tenant <tenant id>` against the
-  read-only mounted root config. Config changes create a new revision; secret-only
+  `--tenant <tenant id>` against the hash-verified root-config Blob snapshot.
+  Config changes create a new revision; credential-only
   rotations may require an explicit restart.
 - Selected live calls expose only the Teams HTTPS callback on `/api/calls`.
   `/healthz` is static readiness, not proof of journey progress.
-- Live workers publish direct reports; all modes emit console diagnostics.
+- Live workers publish raw observations to Event Hubs; all modes emit console diagnostics.
+  The Function/DCR bridge ingests them into Log Analytics and Health Models evaluates KQL.
+  External Microsoft provider context remains separately reported and suppressed.
   Setup-created environments use `--logs-destination none`; reused environments
   retain their existing logging configuration. Durable platform log retention
   needs separate configuration from in-process OTEL.
@@ -236,7 +240,7 @@ Root `otel` is disabled by default. Disabled/console-only modes add no Applicati
 Insights settings or platform log forwarding. Azure Monitor export runs in the
 same workers, not a separate telemetry service.
 
-For `destination: azure-monitor`, the [model/telemetry resources](../../health-model/README.md#optional-otel-signals)
+For `destination: azure-monitor`, the [observation/diagnostic resources](../../health-model/README.md#shared-observation-queries)
 deploy before the workers. The worker template reads `appi-<healthModel.name>` (or the
 matching `deployment.applicationInsightsName`) and passes its connection string as a
 secret reference, not a normal parameter. Verify live ingestion/query evaluation,

@@ -16,6 +16,7 @@
     "exchange/src/**/*.ts",
     "teams/src/**/*.ts",
     "onedrive/src/**/*.ts",
+    "ingestion/src/**/*.ts",
     "utils/src/**/*.ts"
   ]
 }

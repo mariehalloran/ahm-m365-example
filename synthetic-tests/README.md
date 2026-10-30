@@ -236,5 +236,6 @@ changes; it does not verify permissions or live access. There is no unit-test or
 Python template-test suite. See [local Bicep validation](../health-model/README.md#local-validation).
 
 The Docker build context is this directory. The runtime image contains only
-compiled code and production dependencies; workers mount the root config at
-deployment (`npm run deploy` builds and pins the image). [Hosting details](./infra/README.md).
+compiled code and production dependencies; workers download a private hash-verified
+Blob snapshot of the root config using managed identity. `npm run deploy` builds and
+pins the image and snapshot. [Hosting details](./infra/README.md).

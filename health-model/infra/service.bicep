@@ -10,34 +10,27 @@ param service ServiceDefinition
 param policy object
 param enableServiceHealth bool = false
 param suppressOneDriveRestore bool = false
-param enableOtel bool = false
 param workspaceName string
-param applicationInsightsResourceId string
+param tenantScopes array
 @description('Exchange/OneDrive user groups with at least one runnable scope for this service.')
 param reportingGroups array = []
 
-func bindTelemetryQuery(queryText string, service string, journey string, step string, applicationId string, aggregation string) string =>
-  replace(
-    replace(
-      replace(
-        replace(
-          replace(
-            replace(queryText, '__APPLICATION_INSIGHTS_RESOURCE_ID__', applicationId),
-            '__MESSAGE__',
-            empty(step) ? 'synthetic-result' : 'synthetic-step'
-          ),
-          '__SERVICE__',
-          service
-        ),
-        '__JOURNEY__',
-        journey
-      ),
-      '__STEP__',
-      step
-    ),
-    '__AGGREGATION__',
-    aggregation
-  )
+func bindObservationQuery(query string, service string, node object, scope object, metric object, policy object) string =>
+  replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
+    query, '__SERVICE__', service),
+    '__JOURNEY__', node.journey),
+    '__STEP__', empty(metric.phase) ? node.step : metric.phase),
+    '__KIND__', empty(metric.phase) ? node.kind : 'call-phase'),
+    '__TENANT__', scope.tenant),
+    '__GROUP__', scope.group),
+    '__AGGREGATION__', metric.aggregation),
+    '__WINDOW__', string(policy.signalWindowMinutes)),
+    '__MINIMUM__', string(policy.minimumSamples)),
+    '\r', '')
+
+func observationSignalName(name string, scope object, multiTenant bool) string =>
+  !empty(scope.group) ? 'group-${scope.group}--tenant-${scope.tenant}--${name}'
+    : multiTenant ? 'tenant-${scope.tenant}--${name}' : name
 
 // One aggregation group per reporting group with a scope for this journey. Members are the per-tenant
 // signals (group-<id>--tenant-<alias>--<signal>) that each tenant worker publishes.
@@ -82,27 +75,71 @@ var rootChildPositions = concat(
     journey => journeyPositions[indexOf(service.journeys, journey)]
   )
 )
-var telemetryQuery = loadTextContent('../queries/synthetic.kql')
+var observationQuery = loadTextContent('../queries/synthetic.kql')
+var signalScopes = concat(
+  map(tenantScopes, scope => { tenant: scope.id, group: '', journeys: scope.journeys }),
+  flatten(map(reportingGroups, group => map(group.scopes, scope => {
+    tenant: scope.tenant
+    group: group.id
+    journeys: scope.journeys
+  })))
+)
 var telemetryMetrics = [
   {
-    name: 'otel-success-percentage'
-    displayName: 'OTEL success percentage'
+    name: 'observed-success-percentage'
+    displayName: 'Observed success percentage'
     dataUnit: 'Percent'
-    aggregation: 'avg(100.0 * Success)'
+    aggregation: 'avg(100.0 * Value)'
+    phase: ''
     evaluationRules: {
       degradedRule: { operator: 'LessThan', threshold: policy.successDegradedPercent }
       unhealthyRule: { operator: 'LessThan', threshold: policy.successUnhealthyPercent }
     }
   }
   {
-    name: 'otel-mean-duration'
-    displayName: 'OTEL mean duration'
+    name: 'observed-mean-duration'
+    displayName: 'Observed mean duration'
     dataUnit: 'Milliseconds'
-    aggregation: 'avg(Duration)'
+    aggregation: 'avg(DurationMs)'
+    phase: ''
     evaluationRules: {
       degradedRule: { operator: 'GreaterThan', threshold: policy.latencyDegradedMilliseconds }
       unhealthyRule: { operator: 'GreaterThan', threshold: policy.latencyUnhealthyMilliseconds }
     }
+  }
+]
+var callMetrics = [
+  {
+    name: 'observed-call-connection-success-percentage'
+    displayName: 'Observed meeting connection success'
+    dataUnit: 'Percent'
+    aggregation: 'avg(100.0 * Value)'
+    phase: 'connection'
+    evaluationRules: telemetryMetrics[0].evaluationRules
+  }
+  {
+    name: 'observed-call-mean-connection-duration'
+    displayName: 'Observed mean meeting connection duration'
+    dataUnit: 'Milliseconds'
+    aggregation: 'avg(DurationMs)'
+    phase: 'connection'
+    evaluationRules: telemetryMetrics[1].evaluationRules
+  }
+  {
+    name: 'observed-call-disconnection-success-percentage'
+    displayName: 'Observed meeting departure success'
+    dataUnit: 'Percent'
+    aggregation: 'avg(100.0 * Value)'
+    phase: 'disconnection'
+    evaluationRules: telemetryMetrics[0].evaluationRules
+  }
+  {
+    name: 'observed-call-mean-disconnection-duration'
+    displayName: 'Observed mean meeting departure duration'
+    dataUnit: 'Milliseconds'
+    aggregation: 'avg(DurationMs)'
+    phase: 'disconnection'
+    evaluationRules: telemetryMetrics[1].evaluationRules
   }
 ]
 var nodes = concat(
@@ -197,16 +234,16 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
   name: workspaceName
 }
-resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = if (enableOtel) {
+resource workspaceAuthentication 'Microsoft.CloudHealth/healthmodels/authenticationsettings@2026-05-01-preview' = {
   parent: model
   name: 'workspace-query'
   properties: {
-    displayName: 'Service-model identity for optional OTEL queries'
+    displayName: 'Service-model identity for observation queries'
     authenticationKind: 'ManagedIdentity'
     managedIdentityName: 'SystemAssigned'
   }
 }
-resource workspaceReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOtel) {
+resource workspaceReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(workspace.id, model.id, 'log-analytics-reader')
   scope: workspace
   properties: {
@@ -229,25 +266,24 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
         canvasPosition: { x: node.x, y: node.y }
         signalGroups: union(
           node.rollup ? { dependencies: { aggregationType: 'WorstOf', ignoreUnknown: false } } : {},
-          enableOtel && (node.kind == 'journey' || node.kind == 'step')
+          node.kind == 'journey' || node.kind == 'step'
             ? {
                 azureLogAnalytics: {
                   authenticationSetting: 'workspace-query'
                   logAnalyticsWorkspaceResourceId: workspace.id
-                  signals: map(telemetryMetrics, metric => {
-                    name: metric.name
+                  signals: flatten(map(
+                    filter(signalScopes, scope => contains(scope.journeys, node.journey) && (node.kind == 'journey' || empty(scope.group))),
+                    scope => map(concat(telemetryMetrics, node.name == 'teams-call' ? callMetrics : []), metric => {
+                    name: observationSignalName(metric.name, scope, length(tenantScopes) > 1)
                     displayName: metric.displayName
                     signalKind: 'LogAnalyticsQuery'
-                    queryText: bindTelemetryQuery(
-                      telemetryQuery, service.service, node.journey, node.step,
-                      applicationInsightsResourceId, metric.aggregation
-                    )
+                    queryText: bindObservationQuery(observationQuery, service.service, node, scope, metric, policy)
                     valueColumnName: 'Value'
                     dataUnit: metric.dataUnit
                     refreshInterval: 'PT1M'
-                    timeGrain: 'PT15M'
+                    timeGrain: 'PT${policy.signalWindowMinutes}M'
                     evaluationRules: metric.evaluationRules
-                  })
+                  })))
                 }
               }
             : {}
@@ -259,7 +295,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey' && service.service != 'teams'
         ? aggregationGroupsProperty(reportingGroupEntries(
             reportingGroups, service.service, node.journey,
-            ['synthetic-success-percentage', 'synthetic-mean-duration']
+            ['observed-success-percentage', 'observed-mean-duration']
           ))
         : {}
     )

@@ -103,6 +103,12 @@ Put Exchange/OneDrive user targets in
 each `users` array; there is no separate root group list. Supply the ungrouped Teams channel and meeting
 references and approved provider/readback app registrations where selected.
 See [what the config holds](./deployment.md#what-the-config-holds) for each field.
+The root `observations` block names the shared Event Hub, private storage,
+ingestion Function and DCR resources. `npm run deploy` provisions these with managed
+identities and keeps Log Analytics on pay-as-you-go. Capture is optional
+(`captureEnabled`); the checked-in setting enables its separately billed raw archive.
+Workers publish observations, and Health Models evaluates KQL. No additional
+Microsoft 365 permissions are needed for this Azure ingestion path.
 Reference existing Azure Monitor action groups with `healthModel.alertActionGroupIds`;
 manage recipients in the action groups, not this config
 ([root alerts](../health-model/README.md#root-health-alerts)).

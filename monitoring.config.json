@@ -7,11 +7,25 @@
     "alertActionGroupIds": [
       "/subscriptions/17A37FFF-B1EF-4AF7-9BD2-70898B286AAF/resourceGroups/rg-m365-consto/providers/microsoft.insights/actionGroups/ag-m365-experience-consto"
     ],
-    "reportTtlMinutes": 15,
+    "signalWindowMinutes": 15,
+    "minimumSamples": 1,
     "successDegradedPercent": 99,
     "successUnhealthyPercent": 95,
     "latencyDegradedMilliseconds": 15000,
     "latencyUnhealthyMilliseconds": 60000
+  },
+  "observations": {
+    "eventHubNamespace": "evhns-m365-consto",
+    "eventHubName": "m365-synthetic",
+    "archiveStorageAccount": "stm365constosignals",
+    "functionStorageAccount": "stm365constoingest",
+    "functionAppName": "func-m365-consto-ingestion",
+    "functionPlanName": "plan-m365-consto-ingestion",
+    "ingestionIdentityName": "uami-m365-consto-ingestion",
+    "dataCollectionEndpointName": "dce-m365-consto-synthetic",
+    "dataCollectionRuleName": "dcr-m365-consto-synthetic",
+    "captureEnabled": true,
+    "archiveRetentionDays": 90
   },
   "deployment": {
     "location": "centralus",

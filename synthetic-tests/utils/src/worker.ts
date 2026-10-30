@@ -9,12 +9,13 @@ import { providerGraphClient, serviceRuntime, validateProjectTenantBinding, vali
 import { parseServiceConfig, serviceProbes, serviceSettings, type ServiceConfig } from "./service-config.js";
 import type { ProviderCollectionSummary, ProviderCollector } from "./provider-collection.js";
 import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
-import { createHealthReporter, type HealthReporter } from "./health-reports.js";
+import { createProviderReporter, type ProviderReporter } from "./provider-health-reports.js";
+import { createObservationPublisher } from "./observation-publisher.js";
+import type { ObservationPublisher } from "./observations.js";
 import { createResultOutput, type ResultOutput } from "./results.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import type { ResultTelemetry } from "./otel.js";
 import { executionLanes, runExecutionLanes } from "./execution-lanes.js";
-import { resultContext } from "./groups.js";
 import { canonicalProjectFile } from "./paths.js";
 
 const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
@@ -57,7 +58,7 @@ interface InitializedService {
 
 async function initializeService(
   service: ServiceConfig, options: WorkerOptions, telemetry: Telemetry,
-  env: NodeJS.ProcessEnv, reportHealth: HealthReporter | undefined,
+  env: NodeJS.ProcessEnv, publishObservations: ObservationPublisher | undefined,
   suppliedResults: ResultOutput,
 ): Promise<InitializedService> {
   const config = serviceSettings(service, env, options.project?.services[service.type].scenarios);
@@ -70,7 +71,7 @@ async function initializeService(
   return {
     config,
     dependencies: {
-      ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(reportHealth ? { reportHealth } : {}),
+      ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(publishObservations ? { publishObservations } : {}),
       ...(service.type === "exchange" && options.project ? {
         capacityGroups: options.project.groups.filter(group => group.service === "exchange").map(group => ({
           id: group.id, displayName: group.displayName, targetIds: group.targetIds,
@@ -81,7 +82,7 @@ async function initializeService(
 }
 
 async function reportInitializationFailure(
-  service: ServiceConfig, probes: Probe[], reportHealth: HealthReporter | undefined, telemetry: Telemetry, error: unknown, startedAt: number,
+  service: ServiceConfig, probes: Probe[], publishObservations: ObservationPublisher | undefined, telemetry: Telemetry, error: unknown, startedAt: number,
   output: ResultOutput, signal: AbortSignal, capacityGroups?: RunnerDependencies["capacityGroups"],
 ): Promise<void> {
   const observedAt = Date.now();
@@ -118,7 +119,7 @@ async function reportInitializationFailure(
     }
   }
   const publicationSignal = AbortSignal.any([signal, AbortSignal.timeout(service.type === "exchange" ? 12000 : 30000)]);
-  try { await withAbort(publicationSignal, async () => reportHealth?.({ cycleId, results, signal: publicationSignal })); }
+  try { await withAbort(publicationSignal, async () => publishObservations?.({ cycleId, results, signal: publicationSignal })); }
   catch (error) { outputErrors.push(error); }
   throwFailures(outputErrors);
 }
@@ -151,7 +152,7 @@ async function collectServiceProviders(
 export async function collectAndReportServiceProviders(
   service: ServiceConfig,
   options: WorkerOptions, signal: AbortSignal, telemetry: Telemetry,
-  env: NodeJS.ProcessEnv, results: ResultOutput, reportHealth: HealthReporter | undefined,
+  env: NodeJS.ProcessEnv, results: ResultOutput, reportHealth: ProviderReporter | undefined,
 ): Promise<ProviderCollectionSummary | undefined> {
   const cycleId = randomUUID();
   const providerDiagnostics: ProviderDiagnostic[] = [];
@@ -227,7 +228,9 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
   validateRuntimeConsent(service, env);
-  const reportHealth = options.project ? createHealthReporter(options.project, service, telemetry, env) : undefined;
+  const reportHealth = options.project ? createProviderReporter(options.project, service, telemetry, env) : undefined;
+  const observationSink = options.project ? createObservationPublisher(options.project, service, telemetry, env) : undefined;
+  const publishObservations = observationSink?.publish;
   const consoleResults = createResultOutput(telemetry);
   let otel: ResultTelemetry | undefined;
   let otelInitializationError: unknown;
@@ -247,7 +250,6 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const results: ResultOutput = {
     record(result, mode) {
       consoleResults.record(result, mode);
-      if (otel && options.project) otel.record(result, mode, resultContext(options.project, result));
     },
     recordDiagnostic(record) {
       consoleResults.recordDiagnostic(record);
@@ -263,8 +265,8 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const workerErrors: unknown[] = [];
   try {
-    if ((!reportHealth || service.mode !== "live") && !service.serviceHealth && !service.serviceActivity.enabled) {
-      initialized = await initializeService(service, options, telemetry, env, reportHealth, results);
+    if ((!publishObservations || service.mode !== "live") && !service.serviceHealth && !service.serviceActivity.enabled) {
+      initialized = await initializeService(service, options, telemetry, env, publishObservations, results);
     }
     telemetry.emit("service-worker-started", {
       intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, once: options.once ?? false,
@@ -299,14 +301,14 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
         const initializationFailed = async (error: unknown) => {
           if (!signal.aborted) {
             await reportInitializationFailure(
-              service, laneProbes, reportHealth, telemetry, error, startedAt, results, laneSignal,
+              service, laneProbes, publishObservations, telemetry, error, startedAt, results, laneSignal,
               options.project?.groups.filter(group => group.service === service.type)
                 .map(group => ({ id: group.id, displayName: group.displayName, targetIds: group.targetIds })),
             );
           }
         };
         initialization ??= initialized ? Promise.resolve(initialized)
-          : initializeService(service, options, telemetry, env, reportHealth, results).then(value => {
+          : initializeService(service, options, telemetry, env, publishObservations, results).then(value => {
             initialized = value;
             return value;
           }).catch(error => {
@@ -347,6 +349,8 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     if (options.once || !signal.aborted) workerErrors.push(error);
   } finally {
     try { await initialized?.dependencies.shutdown?.(); }
+    catch (error) { workerErrors.push(error); }
+    try { await observationSink?.close(); }
     catch (error) { workerErrors.push(error); }
     try { await otel?.shutdown(); }
     catch (error) { workerErrors.push(error); }

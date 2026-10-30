@@ -1,13 +1,13 @@
-// Success rate of live attempts per group, service and journey, weakest first.
-AppTraces
-| where Message == 'synthetic-result' and tostring(Properties['probe.mode']) == 'live'
-| extend Success = tobool(Properties['probe.success'])
-| where isnotnull(Success)
-| summarize Attempts = count(), Succeeded = countif(Success)
-    by Group = coalesce(tostring(Properties['monitoring.group_name']), '(no group)'),
-    GroupId = tostring(Properties['monitoring.group']),
-    Service = tostring(Properties['probe.service']),
-    Journey = tostring(Properties['probe.journey'])
-| project Group, GroupId, Service, Journey, Attempts, Failures = Attempts - Succeeded,
-    SuccessPercent = round(100.0 * Succeeded / Attempts, 1)
-| order by Group asc, GroupId asc, SuccessPercent asc
+M365Synthetic_CL
+| where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
+| where Kind == 'journey' and Value in (0.0, 1.0)
+| summarize arg_max(Timestamp, *) by EventId
+| extend Groups = iff(array_length(GroupIds) > 0, GroupIds, dynamic(['']))
+| mv-expand with_itemindex=GroupIndex GroupId = Groups to typeof(string)
+| extend Group = iff(isempty(GroupId), '(no group)', tostring(GroupNames[GroupIndex]))
+| summarize Attempts = count(), Succeeded = countif(Value == 1), MeanDurationMs = avg(DurationMs),
+    P95DurationMs = percentile(DurationMs, 95)
+    by TenantAlias, Group, GroupId, Service, Journey
+| project TenantAlias, Group, GroupId, Service, Journey, Attempts, Failures = Attempts - Succeeded,
+    SuccessPercent = round(100.0 * Succeeded / Attempts, 1), MeanDurationMs, P95DurationMs
+| order by Group asc, SuccessPercent asc

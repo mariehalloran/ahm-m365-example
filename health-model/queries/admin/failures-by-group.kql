@@ -1,16 +1,13 @@
-// Failed live steps with the impacted group and user, the error and the target, newest first.
-AppTraces
-| where Message == 'synthetic-step' and tostring(Properties['probe.mode']) == 'live'
-| where tostring(Properties['probe.step_status']) == 'failed'
+M365Synthetic_CL
+| where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
+| where Kind in ('journey', 'step') and Value == 0
+| summarize arg_max(Timestamp, *) by EventId
+| extend Groups = iff(array_length(GroupIds) > 0, GroupIds, dynamic(['']))
+| mv-expand with_itemindex=GroupIndex GroupId = Groups to typeof(string)
 | project TimeGenerated,
-    Group = coalesce(tostring(Properties['monitoring.group_name']), '(no group)'),
-    User = coalesce(tostring(Properties['monitoring.user']), '(n/a)'),
-    Peer = tostring(Properties['monitoring.peer']),
-    Service = tostring(Properties['probe.service']),
-    Journey = tostring(Properties['probe.journey']),
-    Step = tostring(Properties['probe.step']),
-    Error = tostring(Properties['probe.diagnostic_category']),
-    Detail = tostring(Properties['probe.detail']),
-    Target = tostring(Properties['probe.id']),
-    CorrelationId = tostring(Properties['probe.correlation_id'])
+    Group = iff(isempty(GroupId), '(no group)', tostring(GroupNames[GroupIndex])),
+    User = coalesce(SyntheticUser, TestAccountId, '(n/a)'),
+    TenantAlias, Service, Journey, Step, Kind, Region, ExecutionRegion,
+    Error = FailureCategory, Detail = ErrorMessage, HttpStatus, Target = TestAccountId,
+    CorrelationId, RunId
 | order by TimeGenerated desc

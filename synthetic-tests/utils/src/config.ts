@@ -1,15 +1,42 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { ManagedIdentityCredential } from "@azure/identity";
+import { BlobClient } from "@azure/storage-blob";
 import { z } from "zod";
 import { probeSchema, probeServices, scenarios, serviceProbeLimits, type Probe } from "./contracts.js";
 import { validateTeamsServiceUrl } from "./teams.js";
+import { canonicalProjectFile } from "./paths.js";
 
 export class ConfigurationError extends Error {
   constructor(message: string) { super(message); this.name = "ConfigurationError"; }
 }
 export async function readConfigJson(file: string): Promise<unknown> {
   let text: string;
-  try { text = await readFile(file, "utf8"); }
-  catch { throw new ConfigurationError("Cannot read the project config file"); }
+  const blobUrl = process.env.MONITORING_CONFIG_BLOB_URL;
+  if (blobUrl !== undefined) {
+    if (file !== canonicalProjectFile) throw new ConfigurationError("Hosted workers cannot override the root configuration snapshot");
+    const identity = z.string().uuid().safeParse(process.env.AZURE_CLIENT_ID);
+    const expectedHash = process.env.MONITORING_CONFIG_SHA256;
+    let url: URL;
+    try { url = new URL(blobUrl); }
+    catch { throw new ConfigurationError("Hosted configuration snapshot URL is invalid"); }
+    if (!identity.success || !expectedHash || !/^[a-f0-9]{64}$/.test(expectedHash) ||
+        url.protocol !== "https:" || !/^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) ||
+        url.pathname !== `/worker-config/${expectedHash}.json` || url.search || url.hash || url.username || url.password) {
+      throw new ConfigurationError("Hosted configuration requires a private Azure Blob snapshot, its hash and an explicit identity");
+    }
+    const client = new BlobClient(blobUrl, new ManagedIdentityCredential({ clientId: identity.data }));
+    let bytes: Buffer;
+    try { bytes = await client.downloadToBuffer(0, undefined, { abortSignal: AbortSignal.timeout(15000) }); }
+    catch { throw new ConfigurationError("Cannot download the root configuration snapshot with the selected managed identity"); }
+    if (createHash("sha256").update(bytes).digest("hex") !== expectedHash) {
+      throw new ConfigurationError("Hosted configuration snapshot hash mismatch");
+    }
+    text = bytes.toString("utf8");
+  } else {
+    try { text = await readFile(file, "utf8"); }
+    catch { throw new ConfigurationError("Cannot read the project config file"); }
+  }
   try { return JSON.parse(text); }
   catch { throw new ConfigurationError("Project config must contain a valid JSON object"); }
 }

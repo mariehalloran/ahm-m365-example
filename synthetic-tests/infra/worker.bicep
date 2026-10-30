@@ -11,6 +11,8 @@ param tenantId string
 param tenantAlias string
 param service string
 param workerImage string
+param workerConfigBlobUrl string
+param workerConfigSha256 string
 param projectConfig object
 @secure()
 param m365CertificatePem string = ''
@@ -63,7 +65,6 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
       } : null
       registries: [{ server: registryServer, identity: identityResourceId }]
       secrets: concat(
-        [{ name: 'monitoring-config', value: string(projectConfig) }],
         useAzureMonitor ? [{ name: 'applicationinsights-connection-string', value: applicationInsightsConnectionString }] : [],
         credentialSecrets
       )
@@ -74,10 +75,12 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
         name: '${service}-synthetic'
         image: workerImage
         command: ['node']
-        args: ['dist/${service}/src/worker.js', '--config', '/etc/probe/monitoring.config.json', '--tenant', tenantAlias]
+        args: ['dist/${service}/src/worker.js', '--tenant', tenantAlias]
         env: concat(
           [
             { name: 'SYNTHETIC_CONFIG_REVISION', value: uniqueString(string(projectConfig)) }
+            { name: 'MONITORING_CONFIG_BLOB_URL', value: workerConfigBlobUrl }
+            { name: 'MONITORING_CONFIG_SHA256', value: workerConfigSha256 }
             { name: 'AZURE_CLIENT_ID', value: identityClientId }
             { name: 'AZURE_TENANT_ID', value: tenantId }
             { name: 'ENABLE_LIVE_M365', value: enableLiveProbes ? 'true' : 'false' }
@@ -100,21 +103,14 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
           { type: 'Readiness', httpGet: { path: '/healthz', port: execution.teamsCallingPort }, periodSeconds: 10, timeoutSeconds: 2 }
           { type: 'Liveness', httpGet: { path: '/healthz', port: execution.teamsCallingPort }, initialDelaySeconds: 30, periodSeconds: 30, timeoutSeconds: 2 }
         ] : []
-        volumeMounts: concat(
-          [{ volumeName: 'probe-config', mountPath: '/etc/probe' }],
-          !empty(credentialFiles) ? [{ volumeName: 'credentials', mountPath: '/etc/credentials' }] : []
-        )
+        volumeMounts: !empty(credentialFiles) ? [{ volumeName: 'credentials', mountPath: '/etc/credentials' }] : []
       }]
       scale: { minReplicas: 1, maxReplicas: 1 }
-      volumes: concat([{
-        name: 'probe-config'
-        storageType: 'Secret'
-        secrets: [{ secretRef: 'monitoring-config', path: 'monitoring.config.json' }]
-      }], !empty(credentialFiles) ? [{
+      volumes: !empty(credentialFiles) ? [{
         name: 'credentials'
         storageType: 'Secret'
         secrets: credentialFiles
-      }] : [])
+      }] : []
     }
   }
 }

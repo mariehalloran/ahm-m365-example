@@ -2,22 +2,29 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and aggregates only the settled lane cycle's results by journey/action. It publishes success-percentage and mean-duration health reports directly, independently of optional OTEL. **No journey history, cross-cycle health state or user-token cache is stored.** Ten journeys reuse three Container Apps (one per enabled tenant and service); the default family has four models, 57 entities, 53 relationships and 38 business-step entities, including Exchange's Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
+Each service process runs its selected journeys and publishes settled per-attempt
+journey and executed-business-step observations. Workers do not calculate synthetic
+health states. Event Hubs, optional Capture and Log Analytics retain observations;
+Azure Monitor Health Models evaluates success percentages and mean durations with KQL.
+Workers retain no cross-cycle history or user-token cache. Ten journeys reuse three
+Container Apps (one per enabled tenant and service); the default family has four models,
+57 entities, 53 relationships and 38 business-step entities, including Exchange's
+Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
 
 Exchange, Teams, and OneDrive use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
-Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey and tests; shared code and Node tooling also live in that project, while the single root [monitoring.config.json](../monitoring.config.json) holds all configuration, apart from the IDs that setup looks up or generates in the gitignored `.env` beside it ([details](./deployment.md#generated-ids-in-env)). In `simulation` mode, console diagnostics and report previews make no live mutations or Azure calls.
+Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey and tests; shared code and Node tooling also live in that project, while the single root [monitoring.config.json](../monitoring.config.json) holds all configuration, apart from the IDs that setup looks up or generates in the gitignored `.env` beside it ([details](./deployment.md#generated-ids-in-env)). In `simulation` mode, console diagnostics and observation-count previews make no live mutations or Azure calls.
 
 ## Scheduling and shutdown
 
 - Exchange continuous execution waits for an aligned wall-clock minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts/minute. `--once` is an immediate single-cycle diagnostic. Other products/provider lanes retain their independent cadences and immediate first run.
-- Live Exchange execution deadlines are 30 seconds for explicit SELF-REPLY (`reply-mail`), 15 seconds for the other four journeys. Timeouts contribute success 0/Unhealthy; bounded cleanup can finish afterward. Latency degradation remains 15000 ms, so slower successful replies report Degraded. Actual Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
+- Live Exchange execution deadlines are 30 seconds for explicit SELF-REPLY (`reply-mail`), 15 seconds for the other four journeys. Timeouts contribute success 0, not Unknown; bounded cleanup can finish afterward. Model queries apply the configured thresholds to these observations. Latency degradation remains 15000 ms; slower successful replies contribute to latency degradation. Actual Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
 - The Exchange minute bounds execution/settlement to 42 seconds, reporting to 12 and telemetry flush to 5; late starts reduce the remaining budget. `exchange-minute-capacity` emits expected/started/completed/timed-out attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
-- Lane reports update only observed journeys, not empty/Unknown reports for sibling lanes; provider status remains separate suppressed context.
+- Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
-- SIGINT/SIGTERM stop new runs, cancel current work, and allow bounded probe cleanup and report publication.
-- Restarting loses transient execution/report data, not a persisted health history; none exists.
+- SIGINT/SIGTERM stop new runs, cancel current work, and allow bounded probe cleanup and observation publication.
+- Restarting can lose unpublished observations. Already accepted events and external history remain subject to Event Hub, archive and workspace retention.
 - Run one authoritative instance per target set. Statelessness does not prevent duplicate test emails across replicas.
 
 ## Identity and permission gates
@@ -50,32 +57,70 @@ The existing Teams app attaches the approved peer through
 `tenants[].services.teams.access.peerIdentity`; no runtime
 grants or extra app/host are created.
 
-Live workers require scoped health-report permission on their own service model, independently of Graph/mailbox permissions; see the [model guide](../health-model/README.md). Default bot/mail/file journeys need no user password, interactive sign-in or Blob access. Calling's tenant-wide application permission is a separate approved exception, not a scoped recipient grant. Optional provider collection requires separately approved read-only application permissions; it never grants them.
+Live workers require scoped Event Hubs sender and private configuration Blob reader
+roles, independently of Graph/mailbox permissions. Service-model report permission is
+for optional Microsoft provider context, not synthetic state publication; see the
+[model guide](../health-model/README.md). Default bot/mail/file journeys need no user
+password or interactive sign-in. Calling's tenant-wide application permission is a
+separate approved exception, not a scoped recipient grant. Optional provider collection
+requires separately approved read-only application permissions; it never grants them.
 
 Explicit certificate-backed cross-tenant Graph is supported; generic cross-tenant
 managed-identity federation is not. The Teams readback federation above is same-tenant.
 The Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra
 Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
 
-## Direct health reporting
+## Observation publication and health evaluation
 
-The [root configuration](../monitoring.config.json) is the only source for service/scenario selection, account/target metadata, health-report destination/policy and each service's independent mode/cadence/authentication/provider settings (`execution`); redundant `enabled`, `targets` and obsolete `telemetry` fields are rejected inside `execution`.
+The [root configuration](../monitoring.config.json) owns service/scenario selection,
+account metadata, observation resources and model policy. Each service retains its
+independent execution cadence, authentication and provider settings.
 
-Live workers submit aggregated external health reports and retain structured console diagnostics. Live probes mutate only their approved targets. Simulation prints report previews only; it must not publish simulated cloud health.
+Live workers batch raw journey and executed-step observations into the shared Event
+Hub using their explicit managed identities. Capture optionally archives the original
+Avro event payloads in private Blob Storage. An event-triggered managed-identity
+Function submits `RawData` through the Logs Ingestion API and DCR to `M365Synthetic_CL`.
+The Function checkpoints after acceptance; invalid events or exhausted batches are
+preserved in private `quarantine` storage and logged as errors, never silently dropped.
+Simulation prints counts only and does not publish cloud health.
 
-Report success is `100 * successful executed samples / executed samples`; mean duration includes failed executed samples. Evaluate each action separately and the whole journey separately. Skipped actions have no fabricated sample and receive Unknown reports without values. Defaults are below 99%/95% success or above 15/60 seconds mean duration; these are demo thresholds, not per-action SLOs. Reports cover one complete cycle, not a rolling historical window.
+Health Models queries the table, deduplicates `EventId`, separates journey and step
+records, and applies root-configured thresholds over `signalWindowMinutes`. The
+`minimumSamples` gate and no-data queries produce Unknown rather than fabricated
+Healthy. Success is `100 * successful attempts / attempts`; latency includes failed
+executed attempts. Skipped/internal actions emit no success/failure sample. Defaults
+remain below 99%/95% success or above 15/60 seconds mean duration.
 
-With more than one tenant in the config, each tenant's worker publishes every overall signal as `tenant-<tenant id>--<signal>` (one tenant keeps the plain names; group signals are `group-<id>--tenant-<tenant id>--<signal>`), so tenants share a service model without overwriting each other. Adding a second tenant renames every overall signal at once: deploy models and workers together with `npm run deploy`, point freshness and report checks at the new names, and expect reports under the old names to expire after the report TTL.
+Each observation retains tenant, account, journey, step, duration, failure category,
+safe error detail, run/correlation IDs and reporting-group arrays. Group membership
+does not duplicate observations. Queries preserve tenant separation and user-named
+journey aggregation groups; Teams stays ungrouped. Configured target-region labels
+are separate from `ExecutionRegion` and do not establish backend placement.
 
-The reporter uses the service identity and ARM audience, with bounded requests/retries: 12 seconds for an Exchange synthetic batch, 30 seconds for other batches. It never substitutes provider health for synthetic reports. Publication failures are explicit; startup configuration/credential validation can still prevent execution. Check `health-report-failed` and `service-cycle-failed`; one-shot reporting errors return nonzero. A 204 acknowledges ingestion, not model propagation or notification delivery.
+Publication remains bounded to 12 seconds for Exchange and 30 seconds for other
+synthetic batches. Check `observations-published`, `observation-publication-failed`
+and `service-cycle-failed`. The Function logs `observations-ingested`,
+`observation-ingestion-failed` and `observations-quarantined`. API acceptance does
+not prove model propagation or notification delivery.
 
-Valid-but-incomplete live runtime setup is an observed monitoring failure, not a reason to manufacture simulated health. With usable report credentials, initialization exceptions publish an unsuccessful/unexecutable journey and keep unexecuted action signals Unknown; workers retry on their service cadence. Inspect `service-initialization-failed`, its bounded diagnostic category, and the actual stage before attributing the failure to Microsoft 365. One-shot commands still fail. Unsafe schemas and unusable report credentials can stop publication and need independent platform/freshness detection.
+Initialization failures publish unsuccessful journey observations when Azure
+publication is usable; unexecuted steps are not invented. Workers retry on their
+cadence. Unsafe schemas or unusable Azure publication credentials can prevent
+observations and require independent platform/freshness detection.
 
-Incomplete/cancelled cycles log `health-report-skipped-incomplete-cycle`; they do not publish a healthy partial aggregate. Reports have a 15-minute default TTL; expiry **removes external signals**, not a guaranteed Unhealthy state or alert. Monitor last successful ingestion and actual execution independently, with detection targets shorter than the TTL and measured publication/propagation delays. Incremental deployment does not delete old bindings/resources; follow the [migration procedure](../health-model/README.md#apply-and-migrate).
+Incomplete cycles log `observations-skipped-incomplete-cycle`. Workers retain no
+cross-cycle result/outbox state, so a crash before Event Hub acceptance can lose
+observations. After acceptance, Event Hub retention and Capture support replay;
+replay must retain original `EventId` values. This is not an exactly-once guarantee.
 
 Each attempt contributes one binary success observation (1 or 0); executed business actions contribute their own success/duration observations. Failed prerequisites block later actions without invented samples. Token acquisition and cleanup remain internal and unreported as steps. Cleanup still runs after mutation using an independent ten-second budget. Cleanup failure preserves earlier successful action observations but makes overall success zero.
 
-[Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics) explain per-cycle aggregates and reporting gaps. Reports are not a full metrics store, percentile history, or arbitrary logs query interface; cross-cycle weighted statistics cannot be inferred from means alone. Crashes/network failures can lose observations, with no durable outbox or exactly-once guarantee. Alert configuration and notification delivery are separate from report acceptance.
+[Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics)
+apply to raw observations. Log Analytics can now calculate percentiles and weighted
+cross-cycle statistics from individual attempts rather than precomputed means.
+The independent freshness alert uses two service intervals plus three minutes
+(5 minutes Exchange, 7 Teams, 13 OneDrive with the checked-in cadences). It shares
+the workspace dependency and does not detect every workspace/region/notification outage.
 
 Root-configured `healthModel.alertActionGroupIds` connects existing Azure Monitor
 action groups to the main model's root: Degraded alerts at Sev 2 and Unhealthy at
@@ -86,33 +131,55 @@ worker/report-freshness monitoring or prove notification delivery.
 
 ## Optional OpenTelemetry
 
-OTEL is disabled by default and configured only at root. If enabled, monitor `telemetry-initialization-failed`, `telemetry-output-failed` and `telemetry-export-failed` separately from journey and direct-report failures. Export flush/shutdown are bounded; failures still allow direct report attempts and make one-shot execution fail. An OTEL diagnostic-recording error does not rewrite an observed provider status as a Graph collection failure. No disk buffer/outbox or replay is added. Azure ingestion acceptance is not proof of query evaluation or model propagation. Verify both paths end to end, approve ingestion authentication and retention/cost, and retain independent stopped/stalled-worker and notification tests. See [optional export semantics](../synthetic-tests/utils/README.md#console-otel-and-reliability).
+OTEL remains root-configured optional provider diagnostics. It does not duplicate
+journey/step observations into `AppTraces` or calculate a second set of synthetic
+health signals. Export uses the selected managed identity, with bounded flush and
+shutdown. Check `telemetry-initialization-failed`, `telemetry-output-failed` and
+`telemetry-export-failed` separately from Event Hub publication and Function ingestion.
 
 ## Log Analytics for administrators
 
-With `otel.enabled: true` and `destination: "azure-monitor"`, `npm run deploy` creates the workspace `law-<model>`, Application Insights `appi-<model>` (`<model>` is `healthModel.name`) and three saved searches in the category **M365 Synthetic Monitoring**. Their KQL is in [`health-model/queries/admin/`](../health-model/queries/admin/). Administrators need Log Analytics Reader on the workspace.
+`npm run deploy` creates or reuses `law-<model>`, `appi-<model>` and the
+`M365Synthetic_CL` Analytics table. Five saved searches in **M365 Synthetic Monitoring**
+cover failures, affected users/groups, success rate, step latency and ingestion volume.
+Their KQL is in [`health-model/queries/admin/`](../health-model/queries/admin/).
+Administrators need Log Analytics Reader. Data remains pay-as-you-go, with 30-day
+queryable retention; Capture retention is separately configured at root.
 
 | Saved search | File | Output columns, live records only |
 | --- | --- | --- |
-| Synthetic failures by group and user | `failures-by-group.kql` | `TimeGenerated`, `Group`, `User`, `Peer`, `Service`, `Journey`, `Step`, `Error`, `Detail`, `Target`, `CorrelationId`: every failed step, newest first |
+| Synthetic failures by group and user | `failures-by-group.kql` | Failed journey/step observations with group, user, error, correlation and kind |
 | Impacted users by group | `impacted-users-by-group.kql` | `Group`, `User`, `Failures`, `Journeys`, `Errors`, `FirstFailure`, `LastFailure`: most affected first |
-| Success rate by group and journey | `success-by-group.kql` | `Group`, `Service`, `Journey`, `Attempts`, `Failures`, `SuccessPercent`: weakest first |
+| Success rate by group and journey | `success-by-group.kql` | Deduplicated journey attempts, success percentage and latency percentiles |
+| Latency and failures by journey step | `latency-by-step.kql` | Step mean, P95/max duration and failures |
+| Observation ingestion volume and duplicates | `ingestion-volume.kql` | Records, unique event IDs and billed GB by service/kind |
 
-A record without a reporting group shows `(no group)` and one without a user `(n/a)`. The rows are in `AppTraces`, with their attributes in `Properties`, where `Message` is `synthetic-step` or `synthetic-result`:
+A record without a reporting group shows `(no group)` and one without a user `(n/a)`.
+The table preserves the generic envelope (`Timestamp`, `Category`, `Subject`,
+`Period`, `Unit`, `Version`, `Value`) and dimensions. `Kind` distinguishes journey,
+executed step and measured Teams call phase; do not combine them into one failure-rate
+denominator. Always deduplicate `EventId` before health or reliability aggregation.
+The following legacy attribute names correspond to the normalized columns:
 
 | Attribute | Meaning |
 | --- | --- |
-| `monitoring.tenant` | The tenant alias in the config |
-| `monitoring.user` | The sole configured Exchange mailbox or the OneDrive `userPrincipalName`; never set for Teams, whose participants are bots |
+| `monitoring.tenant` | `TenantAlias`: the tenant alias in the config |
+| `monitoring.user` | `SyntheticUser`: the configured Exchange mailbox or OneDrive UPN; empty for Teams bots |
 | `monitoring.peer` | Not populated by single-user Exchange journeys |
-| `monitoring.group`, `monitoring.group_name` | The Exchange/OneDrive user group's id and `userGroupName`; absent for Teams |
-| `monitoring.group_duplicate` | `"true"` on every record after the first when one target belongs to several groups. The overall model signals skip these so each attempt counts once; the per-group searches keep them |
+| `monitoring.group`, `monitoring.group_name` | `GroupIds`/`GroupNames`: aligned arrays of user-defined groups; empty for Teams |
+| `monitoring.group_duplicate` | Not needed in the new table: one event carries all memberships |
 | `probe.service`, `probe.journey`, `probe.step`, `probe.step_status`, `probe.diagnostic_category` | What ran, and how the step ended |
 | `probe.detail` | Failed steps only: a short hint from the integration error, truncated to 200 characters, never message or Graph content |
 | `probe.http_status`, `probe.failed_step` | Result rows only |
 | `probe.correlation_id`, `probe.id`, `probe.mode`, `probe.success`, `probe.duration_ms` | Correlation, target, mode and outcome |
 
-Ingestion takes a few minutes. The model's own OTEL-backed signals average a 15-minute window, so one failure can hold an entity below Healthy for up to 15 minutes. The records contain test-account UPNs, so use dedicated test accounts only. They describe live API-backed attempts, not employee experience.
+Ingestion and model evaluation are asynchronous. With the checked-in 15-minute
+signal window, a failure can influence health until it ages out. Queries do not
+silently convert missing data to Healthy. Records contain dedicated test-account
+UPNs; protect workspace/archive access. Use `TenantAlias`/`M365TenantId` for the
+monitored tenant; Log Analytics reserves `TenantId` for its workspace metadata.
+They are API-backed observations, not proof
+of employee UI, real-time message receipt or received audio.
 
 ## Optional Microsoft provider context
 
@@ -142,11 +209,20 @@ See the [strict schema, limits, diagnostics and first-party references](../synth
 
 ## Privacy, retention, and costs
 
-Console result/step diagnostics contain opaque configured/correlation IDs, mode, timings, and bounded diagnostics. Reports aggregate by fixed service/journey/business-step destinations, not target inventories. No raw mailbox address, message body/subject/ID, token, Graph response, or private key belongs in diagnostics or reports. The one exception is the optional OTEL export to Log Analytics: its step and result records carry the test accounts' UPNs (`monitoring.user`, `monitoring.peer`) so administrators can see who is impacted. Use dedicated test accounts only, and apply workspace access and retention accordingly ([details](#log-analytics-for-administrators)).
+Console diagnostics contain derived target/correlation IDs, mode, timings and
+bounded failure hints, never mailbox contents, credentials or full HTTP responses.
+Private Event Hub observations, Capture files and Log Analytics deliberately retain
+dedicated test-account UPNs and reporting groups so administrators can identify impact.
+No message bodies, file bytes, tokens or passwords belong in that pipeline. Restrict
+archive/workspace access, use dedicated accounts and review retention and volume.
 
 Synthetic content is fixed boilerplate or a generated correlation ID. Protect dedicated mailbox/channel/file artifacts under their own retention rules. Normal deletion can leave Deleted Items/recycle-bin or compliance-retained copies.
 
-Do not enable HTTP-body/token logging, disable TLS validation, or export business content. Approve console access, any external diagnostic retention, and budget. One target every minute can produce approximately 43,200 console result records per thirty-day month plus health reports; the worker does not persist them.
+Do not enable HTTP-body/token logging, disable TLS validation, or export business content.
+Health observations are unsampled and compact; no record is added for every retry,
+poll or SDK operation. One target every minute produces about 43,200 journey observations
+per thirty-day month plus executed business steps. Capture adds a separate hourly
+charge when enabled. Use the ingestion-volume saved search before scaling.
 
 ## Disablement and teardown
 

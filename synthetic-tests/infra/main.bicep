@@ -7,7 +7,10 @@ param projectConfig object = loadJsonContent('../../monitoring.config.json')
 param serviceCertificates object = {}
 param location string = projectConfig.deployment.location
 param deployWorkers bool = false
+param workerServices array = ['exchange', 'teams', 'onedrive']
 param workerImage string = ''
+param workerConfigBlobUrl string = ''
+param workerConfigSha256 string = ''
 param applicationInsightsName string = projectConfig.deployment.?applicationInsightsName ?? 'appi-${projectConfig.healthModel.name}'
 
 // A tenant service gets one worker when it is enabled with at least one scenario.
@@ -126,6 +129,55 @@ resource reportAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     dependsOn: [newIdentities]
   }
 ]
+resource observationNamespace 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
+  name: projectConfig.observations.eventHubNamespace
+}
+resource observationHub 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' existing = {
+  parent: observationNamespace
+  name: projectConfig.observations.eventHubName
+}
+resource observationStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: projectConfig.observations.archiveStorageAccount
+}
+resource configurationContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  name: '${observationStorage.name}/default/worker-config'
+}
+resource observationSenders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (id, index) in identityIds: {
+    name: guid(observationHub.id, id, 'observation-sender')
+    scope: observationHub
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
+      principalId: identities[index].properties.principalId
+      principalType: 'ServicePrincipal'
+    }
+    dependsOn: [newIdentities]
+  }
+]
+resource configurationReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (id, index) in identityIds: {
+    name: guid(configurationContainer.id, id, 'worker-configuration')
+    scope: configurationContainer
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+      principalId: identities[index].properties.principalId
+      principalType: 'ServicePrincipal'
+    }
+    dependsOn: [newIdentities]
+  }
+]
+resource diagnosticWriters 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (id, index) in identityIds: if (useAzureMonitor) {
+    name: guid(applicationInsights!.id, id, 'worker-diagnostics')
+    scope: applicationInsights!
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
+      principalId: identities[index].properties.principalId
+      principalType: 'ServicePrincipal'
+    }
+    dependsOn: [newIdentities]
+  }
+]
 module imagePullAssignments './registry-pull.bicep' = {
   name: 'registry-pull'
   scope: resourceGroup(split(registryId, '/')[2], split(registryId, '/')[4])
@@ -139,7 +191,7 @@ module imagePullAssignments './registry-pull.bicep' = {
   dependsOn: [newIdentities, newRegistry]
 }
 module workerApps './worker.bicep' = [
-  for worker in workers: if (deployWorkers) {
+  for worker in workers: if (deployWorkers && contains(workerServices, worker.service)) {
     name: 'worker-${worker.tenant}-${worker.service}'
     params: {
       appName: worker.selection.worker.appName
@@ -153,6 +205,8 @@ module workerApps './worker.bicep' = [
       tenantAlias: worker.tenant
       service: worker.service
       workerImage: workerImage
+      workerConfigBlobUrl: workerConfigBlobUrl
+      workerConfigSha256: workerConfigSha256
       projectConfig: projectConfig
       m365CertificatePem: (worker.selection.?access.?m365CertificateSource ?? 'key-vault') == 'container-app'
         ? (serviceCertificates[?worker.tenant][?worker.service] ?? '') : ''
@@ -160,7 +214,7 @@ module workerApps './worker.bicep' = [
       enableBetaServiceActivity: settings.enableBetaServiceActivity
       applicationInsightsConnectionString: useAzureMonitor ? applicationInsights!.properties.ConnectionString : ''
     }
-    dependsOn: [newEnvironment, newIdentities, reportAssignments, imagePullAssignments]
+    dependsOn: [newEnvironment, newIdentities, reportAssignments, imagePullAssignments, observationSenders, configurationReaders, diagnosticWriters]
   }
 ]
 

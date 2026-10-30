@@ -39,7 +39,8 @@ const healthModelSchema = z.object({
   subscriptionId: z.string().uuid(),
   resourceGroup: z.string().regex(/^[a-zA-Z0-9_().-]{1,90}$/).refine(value => !value.endsWith(".")),
   alertActionGroupIds: z.array(actionGroupResourceId).max(5).default([]),
-  reportTtlMinutes: z.number().int().min(1).max(10080),
+  signalWindowMinutes: z.number().int().min(1).max(10080),
+  minimumSamples: z.number().int().min(1).max(1000000).default(1),
   successDegradedPercent: z.number().min(0).max(100),
   successUnhealthyPercent: z.number().min(0).max(100),
   latencyDegradedMilliseconds: z.number().int().nonnegative(),
@@ -80,6 +81,19 @@ const tenantServicesSchema = z.object({
 export const projectDocumentSchema = z.object({
   schemaVersion: z.literal("2.0"),
   healthModel: healthModelSchema,
+  observations: z.object({
+    eventHubNamespace: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$/),
+    eventHubName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}[a-zA-Z0-9]$/),
+    archiveStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
+    functionStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
+    functionAppName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+    functionPlanName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+    ingestionIdentityName: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/),
+    dataCollectionEndpointName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+    dataCollectionRuleName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
+    captureEnabled: z.boolean().default(false),
+    archiveRetentionDays: z.number().int().min(1).max(3650).default(90),
+  }).strict(),
   deployment: deploymentSettingsSchema.optional(),
   otel: z.object({
     enabled: z.boolean().default(false),
@@ -253,8 +267,8 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     const longestInterval = Math.max(...lanes.map(lane => lane.intervalSeconds));
     const providerBudget = project.serviceHealth.enabled && (service.serviceHealth || service.serviceActivity.enabled)
       ? service.providerIntervalSeconds + (project.otel.enabled ? 72 : 60) : 0;
-    if (project.healthModel.reportTtlMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
-      throw new ConfigurationError(`Health report TTL must exceed the service cadence plus the bounded cycle/report budget (${cycleBudgetSeconds} seconds)`);
+    if (project.healthModel.signalWindowMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
+      throw new ConfigurationError(`Signal window must exceed the service cadence plus the bounded cycle/publication budget (${cycleBudgetSeconds} seconds)`);
     }
   }
   return parseServiceConfig({

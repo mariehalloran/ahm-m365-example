@@ -5,6 +5,7 @@ import type { LogRecordExporter } from "@opentelemetry/sdk-logs";
 import type { PushMetricExporter } from "@opentelemetry/sdk-metrics";
 import { ConfigurationError } from "./config.js";
 import type { Telemetry } from "./contracts.js";
+import { createServiceCredential } from "./auth.js";
 import { consoleExporters, createResultTelemetry, TelemetryExportError, type ResultTelemetry } from "./otel.js";
 
 export function validateConnectionString(env: NodeJS.ProcessEnv): string {
@@ -50,6 +51,7 @@ export async function createProbeTelemetry(
   if (destination === "console") return createResultTelemetry(consoleExporters(output), output);
   const options: AzureMonitorExporterOptions = {
     connectionString: validateConnectionString(env),
+    credential: createServiceCredential(env, "managed-identity"),
     disableOfflineStorage: true, retryOptions: { maxRetries: 0 },
     // Reject partial/throttled ingestion rather than letting the beta exporter acknowledge it as stored offline.
     additionalPolicies: [{

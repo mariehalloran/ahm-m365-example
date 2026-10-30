@@ -11,7 +11,7 @@ param reportingGroups array = []
 @description('A region supporting Microsoft.CloudHealth.')
 param location string = resourceGroup().location
 
-@description('Created only when OTEL exports to Azure Monitor.')
+@description('The shared observation workspace, created by the ingestion foundation.')
 param workspaceName string = 'law-${projectConfig.healthModel.name}'
 param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 
@@ -62,25 +62,24 @@ var adminSearches = [
     displayName: 'Success rate by group and journey'
     query: loadTextContent('../queries/admin/success-by-group.kql')
   }
+  {
+    name: 'latency-by-step'
+    displayName: 'Latency and failures by journey step'
+    query: loadTextContent('../queries/admin/latency-by-step.kql')
+  }
+  {
+    name: 'ingestion-volume'
+    displayName: 'Observation ingestion volume and duplicates'
+    query: loadTextContent('../queries/admin/ingestion-volume.kql')
+  }
 ]
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = if (useOtel) {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
   name: workspaceName
-  location: location
-  properties: {
-    sku: { name: 'PerGB2018' }
-    retentionInDays: 30
-    features: {
-      disableLocalAuth: true
-      enableLogAccessUsingOnlyResourcePermissions: false
-    }
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
-  }
 }
 
 resource savedSearches 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = [
-  for search in adminSearches: if (useOtel) {
+  for search in adminSearches: {
     parent: workspace
     name: search.name
     properties: {
@@ -92,19 +91,8 @@ resource savedSearches 'Microsoft.OperationalInsights/workspaces/savedSearches@2
   }
 ]
 
-resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = if (useOtel) {
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = {
   name: applicationInsightsName
-  location: location
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    WorkspaceResourceId: workspace!.id
-    IngestionMode: 'LogAnalytics'
-    SamplingPercentage: 100
-    DisableLocalAuth: false
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
-  }
 }
 
 resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
@@ -113,7 +101,7 @@ resource model 'Microsoft.CloudHealth/healthmodels@2026-05-01-preview' = {
   identity: { type: 'SystemAssigned' }
   tags: {
     purpose: 'Microsoft 365 synthetic monitoring proof of concept'
-    deploymentStage: 'federated-direct-reports-optional-otel'
+    deploymentStage: 'event-hub-observations-kql'
     intendedRunnerHost: 'Azure Container Apps'
   }
   properties: {}
@@ -135,9 +123,14 @@ module serviceModels './service.bicep' = [
         )),
         target => target.?restoreVersion ?? false
       ))
-      enableOtel: useOtel
       workspaceName: workspaceName
-      applicationInsightsResourceId: useOtel ? applicationInsights!.id : ''
+      tenantScopes: map(projectConfig.tenants, tenant => {
+        id: tenant.id
+        journeys: map(
+          filter(service.journeys, journey => runsJourney(tenant, service.service, journey.name)),
+          journey => journey.name
+        )
+      })
       reportingGroups: filter(
         reportingGroups,
         group => group.service == service.service
@@ -250,8 +243,8 @@ output relationshipCount int = length(enabledServices) + serviceHealthCount + jo
 output journeyCount int = length(journeys)
 output stepCount int = stepCount
 output telemetryEnabled bool = useOtel
-output workspaceId string = useOtel ? workspace!.id : ''
-output applicationInsightsId string = useOtel ? applicationInsights!.id : ''
+output workspaceId string = workspace.id
+output applicationInsightsId string = applicationInsights.id
 output rootEntityNames array = concat([modelName], map(enabledServices, service => '${service.service}-experience'))
 output rootRelationshipNames array = [for service in enabledServices: '${modelName}-to-${service.service}']
 output serviceModelInventories array = [
