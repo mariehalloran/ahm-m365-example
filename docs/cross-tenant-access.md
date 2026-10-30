@@ -13,8 +13,9 @@
    | Exchange | Mailbox-scoped `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` through [Exchange application RBAC](../MAILBOX-SYNTHETIC-ACCESS.md#4-illustrative-exchange-administrator-setup), **not tenant-wide Graph mail/calendar permissions**. This is the one-time approval; step 6 then keeps its scope current |
    | Teams | [Managed-identity bots](../synthetic-tests/teams/README.md#primary-setup-unattended-bot), installed Teams app and separate Entra readback registration with team-scoped RSC and worker-UAMI federation; meeting access requires separate application-permission approval |
    | OneDrive | [Bulk Selected-folder setup](./onedrive-setup.md) with a separate approved provisioning identity; writes real drive/folder IDs to `.env` and scoped worker write grants. Approve AppFolder separately; no broad runtime file-permission fallback |
-   | Provider context | Optional `ServiceHealth.Read.All` on the provider app (the tenant's `providerClientId`) and its federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
+   | Provider context | Optional `ServiceHealth.Read.All` and separately approved `ServiceMessage.Read.All` on the provider app (the tenant's `providerClientId`), with federation trust for each selected service UAMI; Exchange/Teams beta permissions need separate approval |
    | Health reports | The foundation grants each Azure identity ingest-only access on its own service model |
+   | Communications annotations | Separately approved read/add actions for the existing worker identity, scoped to its Service Health entity; no new identity |
 
 6. Follow [`docs/setup.md`](./setup.md) as an Exchange and Teams administrator
    ([what it covers](./deployment.md#set-up-microsoft-365)) to grant, and keep current by hand

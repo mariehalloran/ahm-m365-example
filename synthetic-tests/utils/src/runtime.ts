@@ -1,7 +1,7 @@
 import { ConfigurationError, type Config } from "./config.js";
 import { probeServices, type Telemetry } from "./contracts.js";
 import type { RunnerDependencies, TeamsBotPairClients } from "./runner.js";
-import { serviceProbes, type ServiceConfig } from "./service-config.js";
+import { hasProviderSources, serviceProbes, type ServiceConfig } from "./service-config.js";
 import { createFederatedGraphClient, createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "./auth.js";
 import { createTeamsCallingVerifier, type CallingIdentity } from "./teams-calling-auth.js";
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
@@ -43,7 +43,7 @@ export function validateProjectTenantBinding(tenant: Pick<ProjectConfig["tenant"
   if (service.graphAuthentication === "certificate" ? !matches("M365_TENANT_ID") : !matches("AZURE_TENANT_ID")) {
     throw new ConfigurationError("Selected tenant requires its own explicit Graph credential binding; direct managed identity/federation must use the actual Azure identity tenant");
   }
-  if (service.providerClientId && (service.serviceHealth || service.serviceActivity.enabled) && !matches("AZURE_TENANT_ID")) {
+  if (service.providerClientId && hasProviderSources(service) && !matches("AZURE_TENANT_ID")) {
     throw new ConfigurationError("The selected tenant's providerClientId must use its actual Azure identity tenant; certificate Graph access does not rebind federated provider credentials");
   }
   if (service.type === "teams" && (!matches("AZURE_TENANT_ID") || !matches("BOT_TENANT_ID") ||
@@ -62,7 +62,7 @@ export function validateRuntimeConsent(service: ServiceConfig, env: NodeJS.Proce
 }
 
 export function providerGraphClient(service: ServiceConfig, env: NodeJS.ProcessEnv): GraphClient | undefined {
-  if (!service.enabled || (!service.serviceHealth && !service.serviceActivity.enabled)) return undefined;
+  if (!service.enabled || !hasProviderSources(service)) return undefined;
   validateRuntimeConsent(service, env);
   if (service.mode === "simulation") return undefined;
   return service.providerClientId

@@ -2,7 +2,7 @@ import type { TokenCredential } from "@azure/identity";
 import { AuthenticationHandler, Client, ResponseType, type GraphRequest, type Middleware } from "@microsoft/microsoft-graph-client";
 import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js";
 import { z } from "zod";
-import { IntegrationError, requestWithRetry, withAbort, type HttpOptions } from "./http.js";
+import { IntegrationError, readResponseBody, requestWithRetry, withAbort, type HttpOptions } from "./http.js";
 import type { GraphRequestPermits } from "./graph-request-permits.js";
 
 const graphOrigin = "https://graph.microsoft.com";
@@ -30,33 +30,6 @@ function requestUrl(path: string, version: GraphApiVersion): URL {
   const url = new URL(`${graphOrigin}/${version}${path}`);
   if (url.pathname !== `/${version}${path.split("?")[0]}`) throw new IntegrationError("collector-failure");
   return url;
-}
-
-async function readBody(response: Response, maxBytes: number, signal: AbortSignal, category: "malformed-response" | "read-failure"): Promise<Buffer> {
-  if (!response.body) throw new IntegrationError(category);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  let finished = false;
-  const cancel = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", cancel, { once: true });
-  try {
-    signal.throwIfAborted();
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new IntegrationError(category);
-    while (true) {
-      const chunk = await reader.read();
-      signal.throwIfAborted();
-      if (chunk.done) { finished = true; break; }
-      size += chunk.value.byteLength;
-      if (size > maxBytes) throw new IntegrationError(category, undefined, "response-too-large");
-      chunks.push(chunk.value);
-    }
-    return Buffer.concat(chunks);
-  } finally {
-    signal.removeEventListener("abort", cancel);
-    if (!finished) cancel();
-    reader.releaseLock();
-  }
 }
 
 function send(request: GraphRequest, method: string, content: string | undefined): Promise<Response> {
@@ -185,7 +158,7 @@ export class GraphClient {
     const response = await this.execute(path, bounded, method, body, retrySafe, version, "error");
     let raw: unknown;
     try {
-      raw = JSON.parse((await readBody(response, maxResponseBytes ?? 2 * 1024 * 1024, bounded, "malformed-response")).toString("utf8"));
+      raw = JSON.parse((await readResponseBody(response, maxResponseBytes ?? 2 * 1024 * 1024, bounded, "malformed-response")).toString("utf8"));
     } catch (error) {
       bounded.throwIfAborted();
       throw error instanceof IntegrationError && error.detail ? error : new IntegrationError("malformed-response", undefined, "invalid-json");
@@ -218,6 +191,6 @@ export class GraphClient {
       await withAbort(bounded, async () => { await download.body?.cancel(); });
       throw new IntegrationError("read-failure");
     }
-    return readBody(download, 4096, bounded, "read-failure");
+    return readResponseBody(download, 4096, bounded, "read-failure");
   }
 }

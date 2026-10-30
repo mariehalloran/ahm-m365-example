@@ -40,7 +40,7 @@
     "id": "consto",
     "displayName": "Consto",
     "tenantId": "5e7897a0-4a38-43f3-914d-195d5355e969",
-    "$comment": "providerClientId: Entra application (client) ID for the shared read-only Microsoft 365 Service Health and optional service activity collector, not the bot identity.",
+    "$comment": "providerClientId: Entra application (client) ID for the shared read-only Microsoft 365 Service Health, Message Center and optional service activity collector, not the bot identity.",
     "providerClientId": "a0bc7fcd-820f-4873-83b5-c7dd77ddad92",
     "services": {
       "exchange": {
@@ -49,6 +49,7 @@
           "mode": "live", "intervalSeconds": 60, "timeoutSeconds": 30, "cohort": "exchange-global",
           "maxConcurrentRequests": 32, "maxConcurrentRequestsPerMailbox": 2,
           "serviceHealth": true,
+          "serviceMessages": true, "providerIntervalSeconds": 60,
           "serviceActivity": {
             "enabled": true,
             "functions": [
@@ -91,6 +92,7 @@
         "execution": {
           "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 45, "cohort": "teams-global",
           "serviceHealth": true,
+          "serviceMessages": true, "providerIntervalSeconds": 60,
           "serviceActivity": {
             "enabled": true,
             "functions": [
@@ -128,6 +130,7 @@
         "execution": {
           "mode": "live", "intervalSeconds": 300, "timeoutSeconds": 120, "cohort": "onedrive-global",
           "serviceHealth": true,
+          "serviceMessages": true, "providerIntervalSeconds": 60,
           "executionLanes": [
             { "name": "user-drive", "intervalSeconds": 300, "timeoutSeconds": 120, "journeys": ["user-drive-roundtrip"] },
             { "name": "app-folder", "intervalSeconds": 300, "timeoutSeconds": 120, "journeys": ["app-folder-lifecycle"] },

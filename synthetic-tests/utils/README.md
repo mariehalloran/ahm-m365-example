@@ -56,12 +56,13 @@ Each `tenants[].services.<service>.execution` block is then validated with `serv
 | `healthReportAuthentication` | Independent UAMI by default; explicit local certificate uses `AZURE_*` |
 | `teamsAuthentication` / `botAuthentication` | Only `bot` / `managed-identity`; obsolete user/certificate participant modes are rejected |
 | `teamsReadbackClientId` | Teams Graph readback application using worker-UAMI federation; requires managed-identity Graph |
-| `providerClientId` | Optional per-service override of the tenant's `providerClientId`, the independently federated provider application that every service with `serviceHealth` or `serviceActivity` inherits; not a synthetic identity override |
+| `providerClientId` | Optional per-service override of the tenant's `providerClientId`, inherited by enabled health/messages/activity sources; not a synthetic identity override |
 | `exchangeCleanupEnabled` | Default true; false retains mail artifacts for diagnostics; deliberate draft and private-series deletion remain mandatory |
 | `teamsCleanupEnabled` | Default true; false retains owned channel posts/replies, never calls |
 | `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`, written to `.env` by `npm run setup:ids`; default port 8080 |
 | `teamsCallingAnswerTimeoutSeconds` | Default 20, bounded 1–30; execution budget must allow this plus five seconds |
-| `serviceHealth` / `providerIntervalSeconds` | Optional stable collection, default off; independent provider lane, default 300 seconds |
+| `serviceHealth` / `providerIntervalSeconds` | Optional stable collection, default off; existing independent provider lane, default 60 seconds |
+| `serviceMessages` | Default-off Message Center collection through the same provider identity/lane; requires separately approved `ServiceMessage.Read.All` |
 | `serviceActivity` | Separately gated beta collection: all nine Exchange or five Teams methods by default, with optional function selection and explicit customer thresholds |
 
 `enabled`, `targets`, report settings and obsolete `telemetry` fields are
@@ -168,12 +169,17 @@ after their TTL; expiry is not guaranteed Unhealthy or an alert.
 ## Optional provider collectors
 
 Providers run independently of synthetic initialization in the same service
-containers. Root `serviceHealth.enabled` must be true before either stable or beta
+containers. Root `serviceHealth.enabled` must be true before health, messages or beta
 source switches take effect. Stable observations for all three services and approved
 Exchange/Teams beta observations report directly to each product's single impact-suppressed
 Service Health entity. OneDrive has no beta collector. Provider failures,
 counts and thresholds cannot change synthetic success or Experience rollup.
 One rejected source cannot erase sibling observations.
+The same reporting stage publishes minute-by-minute Data annotations on the
+existing Service Health entity: bounded recent source changes, explicit quiet
+snapshots or source unavailability. Full active counts are independent of the
+90-second update window. Annotation history provides bounded duplicate
+suppression, not a durable cursor or exactly-once guarantee.
 Every enabled selected beta source creates `microsoft-activity-<function>` external signals on that
 existing entity through ingestion; Bicep does not predeclare them or add activity
 nodes. Without explicit thresholds, numeric activity measurements have `Unknown`

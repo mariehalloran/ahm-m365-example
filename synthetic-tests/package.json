@@ -28,10 +28,12 @@
     "@azure/monitor-ingestion": "^1.2.0",
     "@azure/storage-blob": "^12.34.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
+    "html-to-text": "^10.0.1",
     "jose": "^6.1.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
     "@types/node": "^22.15.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"

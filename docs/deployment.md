@@ -56,8 +56,8 @@ command's own client IDs ([OneDrive setup](./onedrive-setup.md#plan-apply-and-re
 - Teams targets and call targets default `tenantId` to the tenant's. Channel targets
   default `serviceUrl` to `https://smba.trafficmanager.net/teams/`. Every configured
   pair exercises every selected target; participant client IDs come from that pair.
-- A tenant's `providerClientId` is inherited by each service that has `serviceHealth` or
-  `serviceActivity` enabled and no `execution.providerClientId` of its own; set the
+- A tenant's `providerClientId` is inherited by each service that has `serviceHealth`,
+  `serviceMessages` or `serviceActivity` enabled and no `execution.providerClientId` of its own; set the
   per-service value only to override it.
 
 **Looked up by `npm run setup:ids`**, never in the config: each OneDrive account's user ID,

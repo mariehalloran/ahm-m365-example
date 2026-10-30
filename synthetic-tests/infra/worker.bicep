@@ -32,7 +32,7 @@ var botIdentityIds = useBotIdentity ? flatten(map(selection.botPairs, pair => [
   pair.identityResourceId
   pair.botPeerManagedIdentityResourceId
 ])) : []
-var useProviderContext = (projectConfig.?serviceHealth.?enabled ?? false) && ((execution.?serviceHealth ?? false) || (execution.?serviceActivity.?enabled ?? false))
+var useProviderContext = (projectConfig.?serviceHealth.?enabled ?? false) && ((execution.?serviceHealth ?? false) || (execution.?serviceMessages ?? false) || (execution.?serviceActivity.?enabled ?? false))
 var needsApplicationGraph = service != 'teams' || useTeamsBot || useProviderContext
 var useM365Certificate = execution.mode == 'live' && needsApplicationGraph && execution.graphAuthentication == 'certificate'
 var credentialSecrets = useM365Certificate ? [

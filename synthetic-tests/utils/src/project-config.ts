@@ -6,7 +6,7 @@ import { executionLanes } from "./execution-lanes.js";
 import { resolveGroups, tenantGroups, userGroupTargets, type TenantGroup } from "./groups.js";
 import { expandReferences } from "./references.js";
 import {
-  parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema, validateTeamsBotPairs,
+  hasProviderSources, parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema, validateTeamsBotPairs,
   type ServiceConfig, type ServiceExecution,
 } from "./service-config.js";
 import { applicationAccessSchema, deploymentSettingsSchema, teamsBotPairSchema, workerSettingsSchema } from "./deployment-config.js";
@@ -270,7 +270,7 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
       }
     }
     const longestInterval = Math.max(...lanes.map(lane => lane.intervalSeconds));
-    const providerBudget = project.serviceHealth.enabled && (service.serviceHealth || service.serviceActivity.enabled)
+    const providerBudget = project.serviceHealth.enabled && hasProviderSources(service)
       ? service.providerIntervalSeconds + 60 : 0;
     if (project.healthModel.signalWindowMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
       throw new ConfigurationError(`Signal window must exceed the service cadence plus the bounded cycle/publication budget (${cycleBudgetSeconds} seconds)`);
@@ -279,6 +279,7 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
   return parseServiceConfig({
     ...service, enabled, targets: selected.targets,
     serviceHealth: project.serviceHealth.enabled && service.serviceHealth,
+    serviceMessages: project.serviceHealth.enabled && service.serviceMessages,
     serviceActivity: { ...service.serviceActivity, enabled: project.serviceHealth.enabled && service.serviceActivity.enabled },
     ...(service.type === "teams" ? {
       botPairs: project.services.teams.botPairs, callTargets: project.services.teams.callTargets,

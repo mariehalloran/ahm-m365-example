@@ -44,7 +44,8 @@ const serviceFields = {
   }).strict()).min(1).max(12).optional(),
   healthReportAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
   serviceHealth: z.boolean().default(false),
-  providerIntervalSeconds: z.number().int().min(1).max(86400).default(300),
+  serviceMessages: z.boolean().default(false),
+  providerIntervalSeconds: z.number().int().min(1).max(86400).default(60),
   serviceActivity: serviceActivitySchema.default({}),
 };
 export const serviceExecutionSchema = z.object(serviceFields).strict();
@@ -97,6 +98,10 @@ const serviceSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
+
+export function hasProviderSources(service: Pick<ServiceConfig, "serviceHealth" | "serviceMessages" | "serviceActivity">): boolean {
+  return service.serviceHealth || service.serviceMessages || service.serviceActivity.enabled;
+}
 
 export function validateTeamsBotPairs(service: Pick<Extract<ServiceConfig, { type: "teams" }>,
   "enabled" | "botPairs" | "targets" | "callTargets">): void {

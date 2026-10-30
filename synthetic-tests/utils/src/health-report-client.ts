@@ -30,6 +30,25 @@ export interface HealthReportCycle { cycleId: string; signal?: AbortSignal }
 export type HealthReportClientOptions = HttpOptions & { credential?: TokenCredential };
 export type HealthReportPublisher = (reports: readonly HealthReport[], cycle: HealthReportCycle) => Promise<void>;
 
+export function healthModelBaseUrl(project: ProjectConfig, service: ServiceConfig["type"]): string {
+  const policy = project.healthModel;
+  return `https://management.azure.com/subscriptions/${encodeURIComponent(policy.subscriptionId)}`
+    + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(serviceModelName(project, service))}`;
+}
+
+export function createHealthModelHttp(
+  service: ServiceConfig, env: NodeJS.ProcessEnv, options: HealthReportClientOptions = {},
+): AuthenticatedHttp | undefined {
+  if (!service.enabled || service.mode !== "live") return undefined;
+  if (service.healthReportAuthentication !== "managed-identity") {
+    throw new ConfigurationError("Health model publication requires an explicitly selected managed identity");
+  }
+  return new AuthenticatedHttp(
+    options.credential ?? createHealthReportCredential(env, "managed-identity"),
+    "https://management.azure.com/.default", { ...options, attempts: 2, timeoutMs: REPORT_TIMEOUT_MS },
+  );
+}
+
 export function evaluateHealthState(value: number, rules: EvaluationRules): HealthState {
   const breaches = (rule: EvaluationRules["unhealthyRule"]) =>
     rule.operator === "LessThan" ? value < rule.threshold : value > rule.threshold;
@@ -43,17 +62,9 @@ export function createHealthReportPublisher(
   options: HealthReportClientOptions = {},
 ): HealthReportPublisher {
   if (!service.enabled) return async () => undefined;
-  if (service.mode === "live" && service.healthReportAuthentication !== "managed-identity") {
-    throw new ConfigurationError("Health report publication requires an explicitly selected managed identity");
-  }
-  const http = service.mode === "live" ? new AuthenticatedHttp(
-    options.credential ?? createHealthReportCredential(env, "managed-identity"),
-    "https://management.azure.com/.default", { ...options, attempts: 2, timeoutMs: REPORT_TIMEOUT_MS },
-  ) : undefined;
-  const policy = project.healthModel;
+  const http = createHealthModelHttp(service, env, options);
   const modelName = serviceModelName(project, service.type);
-  const modelPath = `https://management.azure.com/subscriptions/${encodeURIComponent(policy.subscriptionId)}`
-    + `/resourceGroups/${encodeURIComponent(policy.resourceGroup)}/providers/Microsoft.CloudHealth/healthmodels/${encodeURIComponent(modelName)}`;
+  const modelPath = healthModelBaseUrl(project, service.type);
   return async (reports, cycle) => {
     if (!http) {
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });

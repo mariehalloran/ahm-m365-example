@@ -6,7 +6,8 @@ import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { baseResult, type ProbeHandler } from "./probes.js";
 import { runCycle, type RunnerDependencies } from "./runner.js";
 import { providerGraphClient, serviceRuntime, validateProjectTenantBinding, validateRuntimeConsent } from "./runtime.js";
-import { parseServiceConfig, serviceProbes, serviceSettings, type ServiceConfig } from "./service-config.js";
+import { hasProviderSources, parseServiceConfig, serviceProbes, serviceSettings, type ServiceConfig } from "./service-config.js";
+import { activityFunctions } from "./provider-catalog.js";
 import type { ProviderCollectionSummary, ProviderCollector } from "./provider-collection.js";
 import { applyProjectConfig, type ProjectConfig } from "./project-config.js";
 import { createProviderReporter, type ProviderReporter } from "./provider-health-reports.js";
@@ -61,7 +62,7 @@ async function initializeService(
   suppliedResults: ResultOutput,
 ): Promise<InitializedService> {
   const config = serviceSettings(service, env, options.project?.services[service.type].scenarios);
-  if ((service.serviceHealth || service.serviceActivity.enabled) && !options.providers) {
+  if (hasProviderSources(service) && !options.providers) {
     throw new ConfigurationError("Configured provider sources require the service-owned collector");
   }
   const runtime = await (options.createDependencies
@@ -134,7 +135,7 @@ function throwFailures(errors: unknown[]): void {
 
 async function collectServiceProviders(
   service: ServiceConfig, options: WorkerOptions, results: ResultOutput, signal: AbortSignal,
-  telemetry: Telemetry, env: NodeJS.ProcessEnv,
+  telemetry: Telemetry, env: NodeJS.ProcessEnv, collectedAt: number,
 ): Promise<ProviderCollectionSummary | undefined> {
   if (!options.providers) return undefined;
   let graph: ReturnType<typeof providerGraphClient>;
@@ -144,7 +145,7 @@ async function collectServiceProviders(
   // A failed Graph setup still produces the collector's sanitized per-source failure records.
   let providers: ProviderCollectionSummary | undefined;
   try {
-    providers = await options.providers({ service, results, signal, ...(graph ? { graph } : {}) });
+    providers = await options.providers({ service, results, signal, now: () => collectedAt, ...(graph ? { graph } : {}) });
     telemetry.emit("service-provider-summary", { providers });
   } catch (error) { errors.push(error); }
   throwFailures(errors);
@@ -157,6 +158,10 @@ export async function collectAndReportServiceProviders(
   env: NodeJS.ProcessEnv, results: ResultOutput, reportHealth: ProviderReporter | undefined,
 ): Promise<ProviderCollectionSummary | undefined> {
   const cycleId = randomUUID();
+  const collectedAt = Date.now();
+  signal = AbortSignal.any([
+    signal, AbortSignal.timeout(Math.max(1000, Math.min(59000, service.providerIntervalSeconds * 1000 - 1000))),
+  ]);
   const providerDiagnostics: ProviderDiagnostic[] = [];
   const providerOutput: ResultOutput = {
     record: results.record.bind(results),
@@ -170,18 +175,22 @@ export async function collectAndReportServiceProviders(
   let summary: ProviderCollectionSummary | undefined;
   try {
     if (!options.providers) throw new ConfigurationError("Configured provider sources require the service-owned collector");
-    summary = await collectServiceProviders(service, options, providerOutput, signal, telemetry, env);
+    summary = await collectServiceProviders(service, options, providerOutput, signal, telemetry, env, collectedAt);
   } catch (error) {
     errors.push(error);
     try {
-      providerOutput.recordDiagnostic({
-        kind: "failure", service: service.type, source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
-        collectedAt: new Date().toISOString(), category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
-        ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
-      });
+      const source = service.serviceHealth ? "serviceAnnouncement.healthOverviews" : service.serviceMessages
+        ? "serviceAnnouncement.messages" : (service.serviceActivity.functions ?? activityFunctions[service.type])[0];
+      if (source && !providerDiagnostics.some(record => record.kind === "failure" && record.source === source)) {
+        providerOutput.recordDiagnostic({
+          kind: "failure", service: service.type, source, apiVersion: source.startsWith("serviceAnnouncement.") ? "v1.0" : "beta",
+          collectedAt: new Date(collectedAt).toISOString(), category: error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error),
+          ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
+        });
+      }
     } catch (outputError) { errors.push(outputError); }
   }
-  try { await reportHealth?.({ cycleId, providerDiagnostics, signal }); }
+  try { await reportHealth?.({ cycleId, collectedAt: new Date(collectedAt).toISOString(), providerDiagnostics, signal }); }
   catch (error) { errors.push(error); }
   throwFailures(errors);
   return summary;
@@ -230,7 +239,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const signal = options.signal ?? new AbortController().signal;
   if (signal.aborted) return;
   validateRuntimeConsent(service, env);
-  const reportHealth = options.project && (service.serviceHealth || service.serviceActivity.enabled)
+  const reportHealth = options.project && hasProviderSources(service)
     ? createProviderReporter(options.project, service, telemetry, env) : undefined;
   const observationSink = options.project?.logAnalytics.enabled
     ? createObservationPublisher(options.project, service, telemetry, env) : undefined;
@@ -242,7 +251,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const workerErrors: unknown[] = [];
   try {
-    if ((!publishResults || service.mode !== "live") && !service.serviceHealth && !service.serviceActivity.enabled) {
+    if ((!publishResults || service.mode !== "live") && !hasProviderSources(service)) {
       initialized = await initializeService(service, options, telemetry, env, publishResults, results);
     }
     telemetry.emit("service-worker-started", {
@@ -256,7 +265,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     const providerLane = {
       name: "provider-context", intervalSeconds: service.providerIntervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys: [],
     };
-    if (service.serviceHealth || service.serviceActivity.enabled) lanes.push(providerLane);
+    if (hasProviderSources(service)) lanes.push(providerLane);
     await runExecutionLanes(lanes, async lane => {
       try {
         if (lane === providerLane) {

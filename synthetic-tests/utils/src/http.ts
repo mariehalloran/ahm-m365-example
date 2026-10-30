@@ -84,6 +84,35 @@ export async function requestWithRetry(
   throw new IntegrationError("collector-failure");
 }
 
+export async function readResponseBody(
+  response: Response, maxBytes: number, signal: AbortSignal, category: "malformed-response" | "read-failure",
+): Promise<Buffer> {
+  if (!response.body) throw new IntegrationError(category);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let finished = false;
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new IntegrationError(category);
+    while (true) {
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) { finished = true; break; }
+      size += chunk.value.byteLength;
+      if (size > maxBytes) throw new IntegrationError(category, undefined, "response-too-large");
+      chunks.push(chunk.value);
+    }
+    return Buffer.concat(chunks);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    if (!finished) cancel();
+    reader.releaseLock();
+  }
+}
+
 export class AuthenticatedHttp {
   constructor(private readonly credential: TokenCredential, private readonly scope: string, private readonly options: HttpOptions = {}) {}
 

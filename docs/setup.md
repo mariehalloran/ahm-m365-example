@@ -236,8 +236,16 @@ principal (`az ad sp show --id <principalId>` or `az identity show ... --query p
 | Teams worker, Teams peer | `Calls.JoinGroupCall.All` | `scheduled-meeting` selected |
 | OneDrive worker | `Files.SelectedOperations.Selected` | OneDrive enabled |
 | OneDrive worker | `Files.ReadWrite.AppFolder` | `app-folder-lifecycle` selected |
-| `tenants[].providerClientId` app | `ServiceHealth.Read.All` | `serviceHealth.enabled` |
+| `tenants[].providerClientId` app | `ServiceHealth.Read.All` | root `serviceHealth.enabled` and service `execution.serviceHealth` |
+| `tenants[].providerClientId` app | `ServiceMessage.Read.All` | root `serviceHealth.enabled` and service `execution.serviceMessages` |
 | `tenants[].providerClientId` app | `ServiceActivity-Exchange.Read.All` / `-Teams.Read.All` | that service's `serviceActivity.enabled` and `deployment.enableBetaServiceActivity` |
+
+These provider application grants are tenant-wide, not scoped by runtime service
+filters. Message Center defaults off and requires separate approval. Readable
+communications use Data annotations on each existing Service Health entity; an
+approved deployment assigns the existing worker identity a separate entity-scoped
+annotation read/add role. It does not broaden its ingest-only report role or its
+Microsoft 365 synthetic permissions. See [annotation access and limits](./provider-monitoring.md#minute-by-minute-data-annotations).
 
 ```sh
 GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)

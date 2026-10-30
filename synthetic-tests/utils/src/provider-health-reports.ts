@@ -8,9 +8,15 @@ import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "./provider-diagnostics.js";
 import { activityFunctions, isPercentageActivity } from "./provider-catalog.js";
+import { categoryOf, IntegrationError } from "./http.js";
+import { ProviderCollectionError } from "./provider-collection.js";
+import {
+  createServiceAnnotationPublisher, type AnnotationPublication,
+  type CommunicationFeed, type CommunicationRecord, type CommunicationsSnapshot,
+} from "./service-annotations.js";
 
 export type { HealthReport } from "./health-report-client.js";
-export interface ProviderCycle { cycleId: string; providerDiagnostics: ProviderDiagnostic[]; signal?: AbortSignal }
+export interface ProviderCycle { cycleId: string; collectedAt: string; providerDiagnostics: ProviderDiagnostic[]; signal?: AbortSignal }
 export type ProviderReporter = (cycle: ProviderCycle) => Promise<void>;
 
 const serviceStatusScores: Readonly<Record<string, number>> = {
@@ -111,33 +117,89 @@ export function serviceHealthReport(
   };
 }
 
-export function serviceHealthIssuesReport(
-  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number, now = Date.now(), maxAgeMinutes = 60,
-): HealthReport {
+function communicationFeed<T extends CommunicationRecord>(
+  summaries: T[], failures: Extract<ProviderDiagnostic, { kind: "failure" | "skipped" }>[],
+  invalid: boolean, collectedAt: string, now: number, maxAgeMinutes: number,
+): CommunicationFeed<T> {
+  const summary = summaries[0];
+  const categories: string[] = failures.map(record => record.kind === "failure" ? record.category : "source-skipped");
+  if (invalid || summaries.length > 1 || (summary && summary.collectedAt !== collectedAt)) categories.push("malformed-response");
+  if (!summary) categories.push("no-data");
+  if (summary && (Date.parse(summary.collectedAt) > now ||
+      now - Date.parse(summary.collectedAt) > maxAgeMinutes * 60000)) categories.push("stale-data");
+  if (categories.length || !summary) {
+    return {
+      state: "unavailable", diagnosticCategories: [...new Set(categories)].slice(0, 8),
+      httpStatuses: [...new Set(failures.flatMap(record =>
+        record.kind === "failure" && record.httpStatus !== undefined ? [record.httpStatus] : []))].slice(0, 8),
+    };
+  }
+  return { state: "complete", summary };
+}
+
+export function serviceCommunicationsSnapshot(
+  service: ServiceConfig["type"], cycle: ProviderCycle, now = Date.now(), maxAgeMinutes = 60,
+): CommunicationsSnapshot {
   const parsed = cycle.providerDiagnostics.map(record => providerDiagnosticSchema.safeParse(record));
   const records = parsed.flatMap(record => record.success && record.data.service === service ? [record.data] : []);
-  const summaries = records.filter(record => record.kind === "issue-summary");
-  const summary = summaries[0];
-  const failed = records.some(record =>
-    (record.kind === "failure" || record.kind === "skipped") && record.source === "serviceAnnouncement.issues");
-  const invalid = parsed.some((record, index) => !record.success &&
-    cycle.providerDiagnostics[index]?.service === service && cycle.providerDiagnostics[index]?.kind === "issue-summary");
-  const stale = summary && (Date.parse(summary.collectedAt) > now ||
-    now - Date.parse(summary.collectedAt) > maxAgeMinutes * 60000);
-  const value = summaries.length !== 1 || failed || invalid || stale ? undefined : summary?.count;
+  const failures = (source: "serviceAnnouncement.issues" | "serviceAnnouncement.messages") =>
+    records.filter((record): record is Extract<ProviderDiagnostic, { kind: "failure" | "skipped" }> =>
+      (record.kind === "failure" || record.kind === "skipped") && record.source === source);
+  const invalid = (kind: "issue-summary" | "message-summary", source: "serviceAnnouncement.issues" | "serviceAnnouncement.messages") =>
+    parsed.some((record, index) => {
+      const raw = cycle.providerDiagnostics[index];
+      return !record.success && raw?.service === service && (raw.kind === kind || ("source" in raw && raw.source === source));
+    });
+  return {
+    collectedAt: cycle.collectedAt,
+    issues: communicationFeed(
+      records.filter(record => record.kind === "issue-summary"), failures("serviceAnnouncement.issues"),
+      invalid("issue-summary", "serviceAnnouncement.issues"), cycle.collectedAt, now, maxAgeMinutes,
+    ),
+    messages: communicationFeed(
+      records.filter(record => record.kind === "message-summary"), failures("serviceAnnouncement.messages"),
+      invalid("message-summary", "serviceAnnouncement.messages"), cycle.collectedAt, now, maxAgeMinutes,
+    ),
+  };
+}
+
+function communicationsCountReport(
+  service: ServiceConfig["type"], source: "issues" | "messages", feed: CommunicationFeed,
+  cycle: ProviderCycle, ttlMinutes: number, annotation?: AnnotationPublication,
+): HealthReport {
+  const value = feed.state === "complete" ? feed.summary.count : undefined;
   return {
     entityName: `${service}-service-health`,
     body: {
-      signalName: "microsoft-reported-issue-count", healthState: "Unknown", expiresInMinutes: ttlMinutes,
+      signalName: source === "issues" ? "microsoft-reported-issue-count" : "microsoft-message-center-count",
+      healthState: "Unknown", expiresInMinutes: ttlMinutes,
       ...(value === undefined ? {} : { value }),
       additionalContext: JSON.stringify({
-        cycleId: cycle.cycleId, source: "serviceAnnouncement.issues", apiVersion: "v1.0", unit: "Count",
+        cycleId: cycle.cycleId, source: `serviceAnnouncement.${source}`, apiVersion: "v1.0", unit: "Count",
         interpretation: "diagnostic-only-no-threshold", evaluated: false,
-        diagnosticCategories: failed ? ["collection-failure"] : stale ? ["stale-data"]
-          : invalid || summaries.length > 1 ? ["malformed-response"] : !summary ? ["no-data"] : [],
+        countScope: source === "issues" ? "distinct-unresolved-issues" : "distinct-not-ended-announcements",
+        presentation: "entity-data-annotations",
+        ...(feed.state === "complete" ? {
+          collectedAt: feed.summary.collectedAt, recentUpdateCount: feed.summary.recentCount, annotationWindow: feed.summary.window,
+        } : {}),
+        ...(annotation ? { annotation } : {}),
+        diagnosticCategories: feed.state === "unavailable" ? feed.diagnosticCategories : feed.state === "disabled" ? ["source-disabled"] : [],
+        httpStatuses: feed.state === "unavailable" ? feed.httpStatuses : [],
       }),
     },
   };
+}
+
+export function serviceHealthIssuesReport(
+  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number, now = Date.now(), maxAgeMinutes = 60,
+): HealthReport {
+  return communicationsCountReport(service, "issues", serviceCommunicationsSnapshot(service, cycle, now, maxAgeMinutes).issues, cycle, ttlMinutes);
+}
+
+export function serviceMessagesReport(
+  service: ServiceConfig["type"], cycle: ProviderCycle, ttlMinutes: number, now = Date.now(), maxAgeMinutes = 60,
+): HealthReport {
+  return communicationsCountReport(service, "messages", serviceCommunicationsSnapshot(service, cycle, now, maxAgeMinutes).messages, cycle, ttlMinutes);
 }
 
 export function createProviderReporter(
@@ -146,19 +208,44 @@ export function createProviderReporter(
 ): ProviderReporter {
   const policy = project.healthModel;
   const publish = createHealthReportPublisher(project, service, telemetry, env, options);
+  const publishAnnotation = createServiceAnnotationPublisher(project, service, telemetry, env, options);
   // The one place overall signals gain their tenant; group signals are already qualified by group and tenant.
   const qualified = (report: HealthReport): HealthReport => project.multiTenant
     ? { ...report, body: { ...report.body, signalName: tenantSignalName(project.tenant.id, report.body.signalName) } }
     : report;
   return async cycle => {
-    const overall = project.serviceHealth.enabled && service.mode === "live" ? [
-        ...(service.serviceHealth ? [
-          serviceHealthReport(service.type, cycle, policy.signalWindowMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
-          serviceHealthIssuesReport(service.type, cycle, policy.signalWindowMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
-        ] : []),
-        ...serviceActivityReports(service, cycle, policy.signalWindowMinutes),
-      ] : [];
+    if (!project.serviceHealth.enabled || !service.enabled || service.mode !== "live") return;
+    const snapshot = serviceCommunicationsSnapshot(service.type, cycle, Date.now(), service.serviceActivity.maxAgeMinutes);
+    if (!service.serviceHealth) snapshot.issues = { state: "disabled" };
+    if (!service.serviceMessages) snapshot.messages = { state: "disabled" };
+    const errors: unknown[] = [];
+    let annotation: AnnotationPublication;
+    try { annotation = await publishAnnotation(snapshot, cycle); }
+    catch (error) {
+      errors.push(error);
+      annotation = {
+        state: "failed", category: error instanceof ProviderCollectionError ? error.category : categoryOf(error),
+        ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
+      };
+      telemetry.emit("service-communications-snapshot-failed", {
+        cycleId: cycle.cycleId, entityName: `${service.type}-service-health`, ...annotation,
+        ...(error instanceof IntegrationError && error.detail ? { detail: error.detail } : {}),
+      });
+    }
+    const overall = [
+      ...(service.serviceHealth ? [
+        serviceHealthReport(service.type, cycle, policy.signalWindowMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
+        communicationsCountReport(service.type, "issues", snapshot.issues, cycle, policy.signalWindowMinutes, annotation),
+      ] : []),
+      ...(service.serviceMessages ? [
+        communicationsCountReport(service.type, "messages", snapshot.messages, cycle, policy.signalWindowMinutes, annotation),
+      ] : []),
+      ...serviceActivityReports(service, cycle, policy.signalWindowMinutes),
+    ];
     const reports = overall.map(qualified);
-    await publish(reports, cycle);
+    try { await publish(reports, cycle); }
+    catch (error) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Multiple provider publications failed");
   };
 }

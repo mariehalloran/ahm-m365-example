@@ -50,6 +50,11 @@ var reportGrants = union(
   map(workers, worker => { service: worker.service, identityId: worker.identityId }),
   []
 )
+var annotationWorkers = (projectConfig.?serviceHealth.?enabled ?? false)
+  ? filter(workers, worker => worker.selection.execution.mode == 'live' && ((worker.selection.execution.?serviceHealth ?? false) || (worker.selection.execution.?serviceMessages ?? false)))
+  : []
+var annotationGrants = union(map(annotationWorkers, worker => { service: worker.service, identityId: worker.identityId }), [])
+var annotationServices = union(map(annotationGrants, grant => grant.service), [])
 var modelServices = union(map(workers, worker => worker.service), [])
 var logAnalyticsEnabled = projectConfig.logAnalytics.enabled
 resource newRegistry 'Microsoft.ContainerRegistry/registries@2025-11-01' = if (createFoundation) {
@@ -118,6 +123,42 @@ resource reportAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     scope: models[indexOf(modelServices, grant.service)]
     properties: {
       roleDefinitionId: reportWriter.id
+      principalId: identities[indexOf(identityIds, grant.identityId)].properties.principalId
+      principalType: 'ServicePrincipal'
+    }
+    dependsOn: [newIdentities]
+  }
+]
+resource annotationWriter 'Microsoft.Authorization/roleDefinitions@2022-04-01' = if (!empty(annotationGrants)) {
+  name: guid(resourceGroup().id, modelName, 'service-communications-annotator')
+  properties: {
+    roleName: '${modelName} service communications annotator'
+    description: 'Read and append service communications data annotations only; no model administration or Microsoft 365 access.'
+    type: 'CustomRole'
+    assignableScopes: [resourceGroup().id]
+    permissions: [{
+      actions: [
+        'Microsoft.CloudHealth/healthmodels/entities/addDataAnnotation/action'
+        'Microsoft.CloudHealth/healthmodels/entities/getDataAnnotations/action'
+      ]
+      notActions: []
+      dataActions: []
+      notDataActions: []
+    }]
+  }
+}
+resource serviceHealthEntities 'Microsoft.CloudHealth/healthmodels/entities@2026-05-01-preview' existing = [
+  for service in annotationServices: {
+    parent: models[indexOf(modelServices, service)]
+    name: '${service}-service-health'
+  }
+]
+resource annotationAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for grant in annotationGrants: {
+    name: guid(serviceHealthEntities[indexOf(annotationServices, grant.service)].id, grant.identityId, annotationWriter!.id)
+    scope: serviceHealthEntities[indexOf(annotationServices, grant.service)]
+    properties: {
+      roleDefinitionId: annotationWriter!.id
       principalId: identities[indexOf(identityIds, grant.identityId)].properties.principalId
       principalType: 'ServicePrincipal'
     }

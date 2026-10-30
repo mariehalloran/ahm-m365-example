@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { GraphClient, graphNextPagePath, type GraphApiVersion } from "./graph.js";
 import { categoryOf, IntegrationError } from "./http.js";
-import type { ProviderCategory, ProviderDiagnostic, ProviderSource } from "./provider-diagnostics.js";
+import { providerDiagnosticSchema, type ProviderCategory, type ProviderDiagnostic, type ProviderSource } from "./provider-diagnostics.js";
 import type { ResultOutput } from "./results.js";
 import type { ServiceConfig } from "./service-config.js";
 
@@ -14,12 +14,13 @@ export const PROVIDER_PAGE_BYTE_LIMIT = 2_000_000;
 
 export async function readProviderCollection<T>(
   graph: GraphClient, path: string, item: z.ZodType<T>, signal: AbortSignal, version: GraphApiVersion,
-  initialQuery = "?$top=100", maxItemsPerPage = 100,
+  initialQuery = "", maxItemsPerPage = 100,
 ): Promise<T[]> {
   const schema = z.object({
     value: z.array(item).max(maxItemsPerPage), "@odata.nextLink": z.string().min(1).optional(),
   });
   const results: T[] = [];
+  const filter = new URLSearchParams(initialQuery).get("$filter");
   let next = `${path}${initialQuery}`;
   const visited = new Set<string>();
   for (let page = 0; page < PROVIDER_PAGE_LIMIT; page++) {
@@ -31,6 +32,9 @@ export async function readProviderCollection<T>(
     const continuation = response["@odata.nextLink"];
     if (continuation === undefined) return results;
     next = graphNextPagePath(continuation, path, version);
+    if (filter !== null && new URL(continuation).searchParams.get("$filter") !== filter) {
+      throw new ProviderCollectionError("malformed-response");
+    }
   }
   // Never publish a partial collection as a complete snapshot.
   throw new ProviderCollectionError("pagination-budget");
@@ -63,10 +67,11 @@ export async function collectProviderSources(
   const summary: ProviderCollectionSummary = { configured: sources.length, succeeded: 0, failed: 0, skipped: 0, records: 0 };
   const service = context.service.type;
   const now = context.now ?? Date.now;
+  const collectedAt = new Date(now()).toISOString();
   await Promise.all(sources.map(async definition => {
     const base = { service, source: definition.source, apiVersion: definition.apiVersion };
     if (context.service.mode === "simulation") {
-      context.results.recordDiagnostic({ ...base, kind: "skipped", reason: "simulation", collectedAt: new Date(now()).toISOString() });
+      context.results.recordDiagnostic({ ...base, kind: "skipped", reason: "simulation", collectedAt });
       summary.skipped++;
       return;
     }
@@ -86,14 +91,17 @@ export async function collectProviderSources(
         timer = setTimeout(() => controller.abort(), PROVIDER_SOURCE_TIMEOUT_MS);
       });
       records = await Promise.race([
-        definition.collect(context.graph, signal, new Date(now()).toISOString()),
+        definition.collect(context.graph, signal, collectedAt),
         deadline,
       ]);
       signal.throwIfAborted();
+      const parsed = z.array(providerDiagnosticSchema).safeParse(records);
+      if (!parsed.success) throw new ProviderCollectionError("malformed-response");
+      records = parsed.data;
     } catch (error) {
       summary.failed++;
       context.results.recordDiagnostic({
-        ...base, kind: "failure", collectedAt: new Date(now()).toISOString(),
+        ...base, kind: "failure", collectedAt,
         category: error instanceof ProviderCollectionError ? error.category : categoryOf(error),
         ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
       });

@@ -217,10 +217,19 @@ All provider reports for a product target **`${service}-service-health` itself**
 | --- | --- |
 | Stable `serviceAnnouncement.healthOverviews` | `microsoft-reported-service-status` |
 | Stable `serviceAnnouncement.issues` | `microsoft-reported-issue-count` |
+| Stable `serviceAnnouncement.messages` | `microsoft-message-center-count` |
 | Each approved beta activity function | `microsoft-activity-<activity-function>` |
 
 With several tenants each name is published as `tenant-<tenant id>--<name>`, so the
 single `${service}-service-health` entity carries one set per tenant.
+
+Issue count means distinct unresolved issues, not historical returned issues.
+Message count means distinct not-ended notices, including notices without a
+specified end date. Neither count is limited to the recent-update window or
+evaluated as an outage. Readable changes are **Data annotations** on the same
+entity: one snapshot per minute, including explicit quiet/unavailable snapshots,
+with recent source updates in an overlapping 90-second window. See
+[configuration, annotation access and display bounds](../docs/provider-monitoring.md#minute-by-minute-data-annotations).
 
 The stable list collector selects exact product service names: `Exchange Online`,
 `Microsoft Teams`, and `Microsoft OneDrive`. OneDrive additionally requires
@@ -361,12 +370,14 @@ attachment journey's old reply/confirm children and their relationships. See the
    combined signals; do **not** delete old children yet.
 2. Deploy one immutable image containing the matching reporters and collectors
    to all selected workers, together with the matching root config.
-   Retain independently scheduled 300-second provider lanes and explicit live/
+   Retain independently scheduled provider lanes (now defaulting to 60 seconds) and explicit live/
    beta approvals. For OneDrive, enable stable `serviceHealth`; it inherits the
    tenant's existing federated read-only `providerClientId`. Verify that the explicitly
    selected OneDrive worker managed identity has its own federation trust.
-   Existing `ServiceHealth.Read.All` is sufficient; no additional Graph
-   permissions or OneDrive beta grant is needed.
+   Existing `ServiceHealth.Read.All` is sufficient for stable health; optional
+   Message Center requires separately approved `ServiceMessage.Read.All`.
+   Annotation read/add access is separately scoped to the existing Service Health
+   entity. No OneDrive beta grant is needed.
 3. Deactivate every old worker revision/job using the old reporter or template.
    Verify active image digests and actual ingestion to the three parent
    destinations before pruning. Otherwise old images can keep writing retired

@@ -59,10 +59,10 @@ function defaultAzureTenantId(deployment: Record<string, unknown>, tenants: unkn
   defaultString(deployment, "azureTenantId", at(tenants[0], "tenantId"));
 }
 
-// The tenant's provider app serves every service of the tenant that collects Service Health or service activity.
+// The tenant's provider app serves every service that collects provider context.
 function inheritProviderClientId(execution: unknown, providerClientId: unknown): void {
   if (!isRecord(execution) || providerClientId === undefined || execution.providerClientId !== undefined) return;
-  if (execution.serviceHealth === true || at(execution, "serviceActivity", "enabled") === true) {
+  if (execution.serviceHealth === true || execution.serviceMessages === true || at(execution, "serviceActivity", "enabled") === true) {
     execution.providerClientId = providerClientId;
   }
 }

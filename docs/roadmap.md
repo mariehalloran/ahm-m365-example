@@ -8,15 +8,19 @@ checkpoints, without mixing the new feature with the subsequent refactor.
 1. Implement service communications first: active incidents/advisories **and**
    Message Center announcements on the existing Service Health supporting entities.
 2. Checkpoint the working feature before making general structural changes.
-3. Refactor incrementally for human readability and testability, preserving behavior.
+3. Validate the communications feature before starting the coding refactor.
+   Then refactor incrementally for human readability and testability.
 4. Finish with integration evidence and an explicit account of anything unverified.
 
 Baseline: `f0a85cc` on `main`. Delivery branch:
 `service-communications-refactor`. The worktree was clean at branch creation.
 
-Read-only Graph/Azure discovery using existing permissions and validated **local
-checkpoint commits** are approved. Permission grants, deployment, live synthetic
-mutations, pushing and history rewriting are not approved.
+Read-only Graph/Azure discovery and validated **local checkpoint commits** are
+approved. The user separately approved the `ServiceMessage.Read.All` grant to the
+existing provider application, one value-less context-ingestion preflight report,
+and one clearly labelled Exchange data-annotation preflight. Those specific
+changes have been applied. Additional grants/publications, deployment, live
+synthetic mutations, pushing and history rewriting are not approved.
 
 The handoff is the supplied `README-m365-service-communications.md`. It is a
 design input, not evidence that the feature or its permissions already work.
@@ -30,17 +34,17 @@ files.
 
 | ID | Milestone | Depends on | Acceptance gate | Status |
 | --- | --- | --- | --- | --- |
-| C0 | Establish roadmap and rollback baseline | None | Scope, approvals, checkpoints and blockers recorded | In progress |
-| C1 | Verify communications contracts | None | v1.0 filters/continuations, actual product labels, relevance semantics, report size and useful portal presentation established or explicitly blocked | In progress |
-| C2 | Add service-scoped collectors and models | C1 contract decisions | Complete bounded snapshots, distinct IDs, isolated source failures, explicit Unknown; no unrelated service feed | Planned |
-| C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded summaries and informational counts; default-off per-service Message Center opt-in; disabled and messages-only gates work | Planned |
-| C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Planned |
-| R1 | Strengthen resolved execution models | C4 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Planned |
+| C0 | Establish roadmap and rollback baseline | None | Scope, approvals, checkpoints and blockers recorded | Done: `61d673a` |
+| C1 | Verify communications contracts | None | v1.0 filters/continuations, actual product labels, relevance semantics, report size and useful portal presentation established or explicitly blocked | Verified, including readable annotation preflight and issue timestamp filters |
+| C2 | Add service-scoped collectors and models | C1 contract decisions | Complete bounded snapshots, distinct IDs, isolated source failures, explicit Unknown; no unrelated service feed | Implemented and locally verified |
+| C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded data annotations and informational count/status signals; default-off per-service Message Center opt-in; disabled and messages-only gates work | Implemented and locally verified; not deployed |
+| C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Local validation passed; this feature checkpoint |
+| V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Approval gated |
+| R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Paused until feature validation |
 | R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Planned |
 | R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Planned |
 | R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Planned |
 | V1 | Complete local integration verification | R4 | Final checks, focused behavior comparisons, reviewed diff and local checkpoint history | Planned |
-| V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Approval gated |
 
 ### Communications first
 
@@ -56,9 +60,24 @@ files.
   action deadlines, major changes and recent updates.
 - Count distinct IDs, not posts or polls. Document the intentional change from
   historical issue count to active-issue count.
-- Attach plain-text, bounded summaries with source IDs/links, relevant dates,
+- Put plain-text, bounded summaries in **Data annotations on the existing Service
+  Health entities**, as selected by the user. Keep counts/status as signals and
+  signal `additionalContext` for diagnostic metadata, not the primary readable
+  announcement presentation. Include source IDs/links, relevant dates,
   statuses/categories and latest-update excerpts. Sort posts by timestamp.
   Distinguish total matching items, displayed items and omitted/truncated content.
+- The annotation API adds records rather than updating a named current record.
+  The user selected one snapshot per minute, including explicit quiet snapshots.
+  Summaries contain new/updated source notices in an overlapping 90-second window;
+  active counts/status retain full current state. Suppress same-minute retries and
+  already-recorded notice versions in overlapping windows; do not add a durable
+  cursor/outbox. Retention and deletion have not been established.
+- Reuse the existing worker, Container App and provider lane. Change the configured
+  provider cadence from 300 to 60 seconds; synthetic schedules are unchanged.
+  Approved beta sources share that lane and are consequently polled more often.
+  Quiet means complete collection returned no new changes, never failed collection.
+  Worker downtime leaves gaps; there is no retrospective backfill or exactly-once
+  guarantee across concurrently running revisions.
 - Preserve existing status and beta signals. Reuse
   `microsoft-reported-issue-count`; add one informational Message Center count.
   Counts remain Unknown health without outage thresholds.
@@ -71,7 +90,7 @@ files.
 - Do not add message entities, permanent per-message signals, workers, models,
   aggregation groups, durable cursors, an archive or outbound notification machinery.
 
-### Refactor after the feature checkpoint
+### Refactor after live feature acceptance
 
 - Extend the existing strict TypeScript/Zod approach rather than adding a framework.
   Derive types from schemas; keep authored, provisioned and live-execution stages
@@ -105,10 +124,11 @@ stateless workers, skipped-action semantics, existing signal IDs and both loggin
 modes. Provider context remains suppressed and cannot affect synthetic scores or
 Experience rollup.
 
-Live acceptance needs separate approvals where it requires a new
-`ServiceMessage.Read.All` application grant, a deployment or live synthetic
-mutations. Filtering is not permission scoping: the provider grants are
-tenant-wide. Do not broaden synthetic identities.
+The specific `ServiceMessage.Read.All` application grant is approved and applied.
+Live acceptance still needs separate approval for deployment, additional
+publications, any additional grants, or live synthetic mutations. Filtering is
+not permission scoping: provider Graph grants are tenant-wide. Do not broaden
+synthetic identities.
 
 Check disabled/root-off/messages-only cases, multi-service membership, old active
 incidents, duplicate IDs, pagination exhaustion, stale data and denied access.
@@ -147,11 +167,59 @@ does not meet the acceptance gate.
 
 ## Current evidence and blockers
 
-- Baseline and clean delivery branch established.
-- Existing Azure CLI session is available for approved read-only discovery.
-- Microsoft Graph v1.0 documentation confirms both list endpoints and their
-  separate permissions, but not the proposed property-specific filter contracts.
-- Additional-context SDK documentation confirms a string field, not a guaranteed
-  rich portal list or a verified size budget. Presentation and limits remain open.
-- New permission grants, deployment and live synthetic execution remain approval
-  gates, not implementation authorization.
+- Roadmap checkpoint: `61d673a`; baseline `f0a85cc`. Existing `typecheck`, `build`
+  and `deploy -- --plan` passed before implementation; the plan reported no cloud
+  changes. This checkpoint implements communications only; no coding refactor
+  has begun.
+- Final feature sources pass `typecheck`, `build` and `deploy -- --plan`
+  (`cloudChanges: false`, three existing workers and four existing models).
+  The affected worker Bicep compiles and lints successfully.
+- Eight temporary no-cloud behavior groups passed: scoped complete collection and
+  distinct active counts; exact OneDrive aliases and text conversion; invalid
+  continuation/budget failures; minute snapshots and version suppression; Unicode
+  size/omission disclosure and stale values; source permission isolation; annotation
+  failure/no ambiguous write retry; and messages-only/root-off routing.
+- Live reads through the existing federated provider application verified issue
+  `service`/`isResolved` filters, message `services/any` filters, negative controls
+  and default pagination. Exchange had 41 historical issues versus one active
+  issue; Teams returned 129 distinct messages across two pages.
+- Actual OneDrive issue/message membership is `Microsoft OneDrive` in this
+  tenant. The message filter also accepts the documented exact alias
+  `OneDrive for Business`; SharePoint membership alone is not sufficient.
+- Fresh hosted Message Center reads returned 51 Exchange, 129 Teams and 18
+  OneDrive records. All supplied the required identity, membership, title, body,
+  category, severity, major-change and last-modified fields; body formats and
+  timestamps were valid. These are returned-record totals, not active counts.
+- `$top=2` silently capped Exchange issues without a continuation despite more
+  matching records. Collection must omit `$top`, follow validated continuations,
+  retain the service filter and fail explicitly on any collection budget limit.
+- The approved Message Center permission grant was applied only to the existing
+  read-only provider application. Federated message reads then succeeded; no
+  synthetic identity or other Graph grant was changed.
+- A value-less Unknown report on `microsoft-message-center-count` accepted and
+  returned 4096 ASCII characters of labelled preflight context. It did not contain
+  real announcements, alter issue count, or establish useful portal presentation.
+- The user selected entity Data annotations instead of signal context for readable
+  communications. The canonical CloudHealth API defines `addDataAnnotation` and
+  `getDataAnnotations`, at most 10 detail fields with 256-character values, and an
+  optional 4096-character description. It also bounds report `additionalContext`
+  at 4096 characters; these limits do not imply rich HTML or clickable rendering.
+- The separately approved Exchange annotation preflight was created at
+  `2026-10-30T14:10:46Z`, ID `234aa5a5-d738-4e7d-abad-a3321ed79343`, with title
+  `PREFLIGHT: Service communications display check`. It is explicitly not a real
+  service notice. Query readback succeeded and the user confirmed it is readable.
+- Existing-provider live controls verified the combined issue predicate
+  `service eq 'Exchange Online' and (isResolved eq false or lastModifiedDateTime ge ...)`:
+  the historical positive cutoff returned 41 records, a future cutoff returned the
+  one unresolved issue, and all results were complete and service-scoped.
+- Azure's operations inventory confirms annotation permissions are
+  `Microsoft.CloudHealth/healthmodels/entities/addDataAnnotation/action` and
+  `Microsoft.CloudHealth/healthmodels/entities/getDataAnnotations/action`.
+  The local template adds a separate narrow role scoped to each existing Service
+  Health entity. Applying those assignments and deploying workers remain unapproved.
+- Collection, annotation publishing and existing-worker integration are locally
+  implemented and verified, not deployed. The standard deployment also redeploys
+  configured reporting resources and resumes the existing live synthetic journeys;
+  it is not a provider-only preflight. New annotation grants and this rollout need
+  separate approval. Validate real persisted minute snapshots and current counts,
+  then confirm their portal usefulness before starting the coding refactor.

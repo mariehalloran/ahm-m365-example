@@ -1,10 +1,14 @@
 import { z } from "zod";
 import { categories } from "./contracts.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
+import {
+  communicationWindowSchema, issueCommunicationSchema, messageCommunicationSchema,
+  MAX_COMMUNICATION_CANDIDATES, MAX_COMMUNICATION_SUMMARIES, recentlyUpdated, serviceHealthNames, serviceMessageNames,
+} from "./service-communications.js";
 
 export const providerServices = ["exchange", "teams", "onedrive"] as const;
 export const providerSources = [
-  "serviceAnnouncement.healthOverviews", "serviceAnnouncement.issues",
+  "serviceAnnouncement.healthOverviews", "serviceAnnouncement.issues", "serviceAnnouncement.messages",
   ...activityFunctionNames,
 ] as const;
 const service = z.enum(providerServices);
@@ -15,7 +19,17 @@ const base = { service, collectedAt };
 export const providerDiagnosticSchema = z.discriminatedUnion("kind", [
   z.object({
     ...base, kind: z.literal("issue-summary"),
-    count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    count: z.number().int().nonnegative().max(MAX_COMMUNICATION_CANDIDATES),
+    recentCount: z.number().int().nonnegative().max(MAX_COMMUNICATION_CANDIDATES),
+    window: communicationWindowSchema,
+    summaries: z.array(issueCommunicationSchema).max(MAX_COMMUNICATION_CANDIDATES),
+  }).strict(),
+  z.object({
+    ...base, kind: z.literal("message-summary"),
+    count: z.number().int().nonnegative().max(MAX_COMMUNICATION_CANDIDATES),
+    recentCount: z.number().int().nonnegative().max(MAX_COMMUNICATION_CANDIDATES),
+    window: communicationWindowSchema,
+    summaries: z.array(messageCommunicationSchema).max(MAX_COMMUNICATION_CANDIDATES),
   }).strict(),
   z.object({
     ...base, kind: z.literal("overview"), serviceId: z.string().min(1).max(256),
@@ -42,7 +56,17 @@ export const providerDiagnosticSchema = z.discriminatedUnion("kind", [
     ...base, kind: z.literal("skipped"), source, apiVersion: z.enum(["v1.0", "beta"]),
     reason: z.literal("simulation"),
   }).strict(),
-]);
+]).superRefine((record, context) => {
+  if (record.kind !== "issue-summary" && record.kind !== "message-summary") return;
+  const ids = record.summaries.map(summary => summary.id);
+  const allowedServices: readonly string[] = record.kind === "issue-summary"
+    ? [serviceHealthNames[record.service]] : serviceMessageNames[record.service];
+  if (record.recentCount !== ids.length || new Set(ids).size !== ids.length || record.window.endAt !== record.collectedAt ||
+      record.summaries.some(summary =>
+        !allowedServices.includes(summary.sourceService) || !recentlyUpdated(summary.lastUpdatedAt, record.window))) {
+    context.addIssue({ code: "custom", message: "Incomplete or inconsistent communications summary" });
+  }
+});
 export type ProviderDiagnostic = z.infer<typeof providerDiagnosticSchema>;
 export type ProviderSource = (typeof providerSources)[number];
 export type ProviderCategory = (typeof providerCategories)[number];
@@ -57,10 +81,16 @@ export function providerLog(raw: ProviderDiagnostic): { body: string; timestamp:
   let body: string;
   switch (record.kind) {
     case "issue-summary":
-      body = "m365-service-health-issue-summary";
+    case "message-summary":
+      body = record.kind === "issue-summary" ? "m365-service-health-issue-summary" : "m365-message-center-summary";
       Object.assign(attributes, {
-        "provider.source": "serviceAnnouncement.issues", "provider.api_version": "v1.0",
+        "provider.source": record.kind === "issue-summary" ? "serviceAnnouncement.issues" : "serviceAnnouncement.messages",
+        "provider.api_version": "v1.0",
         "provider.value": record.count, "provider.unit": "Count",
+        "provider.recent_value": record.recentCount,
+        "provider.window_start": record.window.startAt, "provider.window_end": record.window.endAt,
+        "provider.summaries": JSON.stringify(record.summaries.slice(0, MAX_COMMUNICATION_SUMMARIES)),
+        "provider.omitted": record.recentCount - Math.min(MAX_COMMUNICATION_SUMMARIES, record.summaries.length),
       });
       break;
     case "overview":
