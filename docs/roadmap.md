@@ -15,6 +15,10 @@ checkpoints, without mixing the new feature with the subsequent refactor.
 Baseline: `f0a85cc` on `main`. Delivery branch:
 `service-communications-refactor`. The worktree was clean at branch creation.
 
+Delivery status: communications revision `5214c49` was deployed and live-accepted
+with the presentation limitation below. All four refactor milestones are complete
+locally. No refactor rollout or push has been performed.
+
 Read-only Graph/Azure discovery and validated **local checkpoint commits** are
 approved. The user separately approved the `ServiceMessage.Read.All` grant to the
 existing provider application, one value-less context-ingestion preflight report,
@@ -48,8 +52,8 @@ files.
 | R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Complete: `588dca7`, validated live inputs, typed handlers and structural client ports |
 | R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Complete: `fd4cf48`, pure measurement mapping and injected ingestion sinks |
 | R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Complete: `0fd1ffd`, scoped lane execution, injectable deadlines and owned-resource models |
-| R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Complete: six focused folders, imports and deployment entry updated |
-| V1 | Complete local integration verification | R4 | Final checks, focused behavior comparisons, reviewed diff and local checkpoint history | Planned |
+| R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Complete: `95b3f78`, six focused folders, imports and deployment entry updated |
+| V1 | Complete local integration verification | R4 | Final checks, focused behavior comparisons, reviewed diff and local checkpoint history | Complete: integrated local evidence and reversible checkpoint history; no new rollout |
 
 ### Communications first
 
@@ -339,3 +343,22 @@ does not meet the acceptance gate.
   All R1/R2 baseline comparisons, eight lifecycle groups and nine communications
   groups still pass. No dependencies, permissions, synthetic schedules, root
   configuration or health-model topology changed during the refactor.
+
+## Final handoff
+
+The local refactor checkpoints are `588dca7` (execution models), `fd4cf48`
+(measurements/ingestion), `0fd1ffd` (lifecycles/clocks) and `95b3f78`
+(organization). Session-only validation artifacts retain the frozen feature
+baseline and focused comparisons; no test suite, fixtures or new tooling were
+added to the repository.
+
+Reversing R4 through R1 in a private Git index reproduced the `5214c49` tree
+exactly, without modifying the worktree, creating commits or touching Azure.
+
+The last authorized rollout is notice-only revision `5214c49`, not the refactor.
+No new format preview, Graph grant, Azure permission change, push or refactor
+deployment was performed. A genuine updated notice was not available for live
+rendering acceptance; the user accepted local formatting evidence plus live
+quiet/count/topology checks. Historical quiet/preflight annotations remain.
+Further deployment or pushing still requires separate approval; local rollback
+does not undo a cloud rollout or revoke permissions.
