@@ -17,7 +17,6 @@ import {
 import { teamsCallingCallbackUrlSchema } from "../../utils/src/configuration/config.js";
 import type { GraphOperations } from "../../utils/src/integrations/graph.js";
 import type { SyntheticResult } from "../../utils/src/contracts.js";
-import { systemClock } from "../../utils/src/execution/clock.js";
 import { z } from "zod";
 
 interface AuthenticatedCallLeg {
@@ -51,12 +50,11 @@ export const createTeamsCallProbe =
   (onConnected?: TeamsCallConnectedHook): ProbeHandler<"teams-call"> =>
   async (probe, context) => {
     const { config, signal, telemetry, now = Date.now } = context;
-    const clock = context.clock ?? systemClock;
     const startedAt = now();
     const deadline = startedAt + config.PROBE_TIMEOUT_MS;
     const executionSignal = AbortSignal.any([
       signal,
-      clock.timeout(config.PROBE_TIMEOUT_MS),
+      AbortSignal.timeout(config.PROBE_TIMEOUT_MS),
     ]);
     const result = baseResult(probe, startedAt);
     const call: NonNullable<SyntheticResult["call"]> = { resultCodes: [] };
@@ -252,7 +250,6 @@ export const createTeamsCallProbe =
                 now,
                 context.sleep,
                 onState(leg),
-                clock,
               ),
             ),
           );
@@ -304,7 +301,6 @@ export const createTeamsCallProbe =
                 interval,
                 now,
                 context.sleep,
-                clock,
               );
               await waitForAnswer(
                 leg.graph,
@@ -315,7 +311,6 @@ export const createTeamsCallProbe =
                 now,
                 context.sleep,
                 onState(leg),
-                clock,
               );
             }),
           );
@@ -371,7 +366,7 @@ export const createTeamsCallProbe =
               await leaveCall(
                 leg.graph,
                 leg.id,
-                clock.timeout(budgetMs),
+                AbortSignal.timeout(budgetMs),
                 now() + budgetMs - 100,
                 interval,
                 now,
@@ -416,7 +411,6 @@ export const createTeamsCallProbe =
         telemetry,
         now,
         true,
-        clock,
       );
     }
     if (result.success) result.diagnosticContext.testStage = "complete";

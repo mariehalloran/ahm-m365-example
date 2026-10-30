@@ -362,3 +362,57 @@ rendering acceptance; the user accepted local formatting evidence plus live
 quiet/count/topology checks. Historical quiet/preflight annotations remain.
 Further deployment or pushing still requires separate approval; local rollback
 does not undo a cloud rollout or revoke permissions.
+
+## Round 2 refactoring plan: Idiomatic Node.js, function comments, readability, and README alignment
+
+This next refactoring round addresses four goals across the repository without
+adding test frameworks or changing runtime behavior, signal contracts, or cloud
+topology:
+
+| ID | Milestone | Scope | Acceptance gate | Status |
+| --- | --- | --- | --- | --- |
+| R5 | Replace bespoke helpers with Node.js 22 built-ins | `utils/src/execution`, `utils/src/integrations`, `utils/src/deployment`, `onedrive/src`, `teams/src`, `exchange/src` | `clock.ts` (`ExecutionClock`) and empty `utils/src/graph/` removed; `Date.now()`, `performance.now()`, `node:timers/promises` `setTimeout`, `AbortSignal.timeout()`, and `node:util` `parseArgs` used directly | Planned |
+| R6 | Add clear comments above every function | All `.ts` files in `synthetic-tests/{utils,exchange,teams,onedrive,ingestion}/src` | Every exported and internal function/method has a concise, accurate comment immediately above it | Planned |
+| R7 | Make control flow and data construction human-readable | `utils/src/*`, `exchange/src/*`, `teams/src/*`, `onedrive/src/*`, `ingestion/src/*` | Nested ternaries, compressed one-line `try/catch/finally` blocks, `Object.assign` mutations, and dense conditional spreads replaced with readable step-by-step code | Planned |
+| R8 | Align all READMEs and guides with current implementation | `README.md`, `health-model/README.md`, `synthetic-tests/**/README.md`, `docs/*.md` | `providerIntervalSeconds` (60s), `serviceMessages` data annotations, module layout, and auth guidance are consistent and clear across all READMEs and docs | Planned |
+
+### 1. Remove overly custom and bespoke abstractions (R5)
+
+- **Remove `ExecutionClock` (`synthetic-tests/utils/src/execution/clock.ts`) and injected clock/time wrappers**:
+  - Delete `clock.ts` and remove `clock`, `now`, and `sleep` injection fields from `execution/worker.ts`, `execution/runner.ts`, `execution/steps.ts`, `execution/probes.ts`, `teams/src/call.ts`, `teams/src/call-steps.ts`, `integrations/teams-calling-auth.ts`, `integrations/teams-call-operations.ts`, and `onedrive/src/journey.ts`.
+  - Use Node.js built-ins directly: `Date.now()` for wall-clock timestamps, `performance.now()` for elapsed durations, `setTimeout(delayMs, undefined, { signal })` from `node:timers/promises` for abortable delays, and `AbortSignal.timeout(delayMs)` / `AbortSignal.any([...])` for deadlines.
+- **Standardize CLI argument parsing on `node:util` `parseArgs`**:
+  - Replace custom loop parsers `parseWorkerArguments` (`utils/src/execution/worker.ts`), `parseSetupArguments` (`onedrive/src/setup-command.ts`), and `parseDeployArguments` (`utils/src/deployment/deploy.ts`) with `parseArgs` from `node:util` (matching `exchange/src/mail-test-command.ts`).
+- **Simplify bespoke utilities and remove dead directories**:
+  - Remove the empty `synthetic-tests/utils/src/graph/` directory left behind by R4.
+  - Consolidate duplicate SHA-256 helpers in `exchange/src/extended-journeys.ts` and `onedrive/src/steps.ts`.
+  - Simplify `filterRuntimeProbes` in `utils/src/configuration/config.ts` and streamline response-reading helpers in `utils/src/integrations/`.
+
+### 2. Add comments above every function (R6)
+
+- Add a clear, concise comment immediately above every function and class method across all 74 TypeScript files (after removing `clock.ts`):
+  - `synthetic-tests/utils/src/execution/` (`command.ts`, `execution-lanes.ts`, `graph-request-permits.ts`, `probes.ts`, `runner.ts`, `runtime.ts`, `steps.ts`, `worker.ts`)
+  - `synthetic-tests/utils/src/configuration/` (`account-identity.ts`, `bindings.ts`, `config.ts`, `deployment-config.ts`, `groups.ts`, `project-config.ts`, `raw-config.ts`, `references.ts`, `resolved-probes.ts`, `service-config.ts`)
+  - `synthetic-tests/utils/src/integrations/` (`auth.ts`, `graph.ts`, `http.ts`, `teams.ts`, `teams-call-operations.ts`, `teams-calling-auth.ts`, `teams-calling-callback.ts`)
+  - `synthetic-tests/utils/src/providers/` (`provider-catalog.ts`, `provider-collection.ts`, `provider-diagnostics.ts`, `provider-health-reports.ts`, `service-activity.ts`, `service-annotations.ts`, `service-communications.ts`, `service-health.ts`, `service-messages.ts`)
+  - `synthetic-tests/utils/src/reporting/` (`health-report-client.ts`, `health-reports.ts`, `measurements.ts`, `observation-publisher.ts`, `observations.ts`, `results.ts`)
+  - `synthetic-tests/utils/src/deployment/` (`deploy.ts`, `deploy-phases.ts`, `prepare-deployment.ts`, `reporting-deployment.ts`, `retire-log-pipeline.ts`) and root `utils/src/` (`catalog.ts`, `catalog-projection.ts`, `contracts.ts`, `paths.ts`)
+  - `synthetic-tests/exchange/src/`, `synthetic-tests/teams/src/`, `synthetic-tests/onedrive/src/`, and `synthetic-tests/ingestion/src/`
+
+### 3. Improve human readability (R7)
+
+- Expand nested ternaries into explicit helper functions or `if`/`else` blocks (e.g., error classification in `exchange/src/journey.ts`, `teams/src/conversation.ts`, `teams/src/call.ts`, `onedrive/src/setup.ts`; health state and activity evaluation in `providers/provider-health-reports.ts`; resource ID formatting in `configuration/references.ts`).
+- Expand compressed single-line `try { ... } catch { ... } finally { ... }` blocks and dense object spreads in `execution/worker.ts`, `execution/runner.ts`, `execution/steps.ts`, `execution/graph-request-permits.ts`, `providers/service-annotations.ts`, `providers/service-health.ts`, and `deployment/deploy.ts`.
+- Replace `Object.assign` state mutation one-liners in `onedrive/src/journey.ts`, `onedrive/src/steps.ts`, and `providers/provider-diagnostics.ts` with explicit typed object construction.
+- Break up long validation and orchestration functions in `configuration/project-config.ts`, `configuration/service-config.ts`, `integrations/graph.ts`, `integrations/teams-calling-callback.ts`, `deployment/deploy-phases.ts`, and `deployment/reporting-deployment.ts` into well-named steps.
+
+### 4. Make all READMEs and documentation consistent (R8)
+
+- **`synthetic-tests/README.md`, `synthetic-tests/exchange/README.md`, `synthetic-tests/teams/README.md`, `synthetic-tests/onedrive/README.md`, `synthetic-tests/infra/README.md`**:
+  - Update `providerIntervalSeconds` default from `300` seconds to `60` seconds and document optional `serviceMessages` (Message Center) collection and entity Data annotations consistently.
+- **`synthetic-tests/utils/README.md`**:
+  - Remove `clock.ts` / `ExecutionClock` references and describe direct use of Node.js built-ins.
+- **`health-model/README.md` and `docs/*.md`**:
+  - Fix `health-model/README.md` so Data annotations describe per-notice publication (no quiet minute snapshots).
+  - Remove or mark unsupported the legacy certificate/PEM cross-tenant instructions in `docs/cross-tenant-access.md` and `docs/operations.md` to match the managed-identity-only policy.
+  - Clarify archive vs. current topology in `docs/deployment.md` and replica wording in `docs/pricing.md`.

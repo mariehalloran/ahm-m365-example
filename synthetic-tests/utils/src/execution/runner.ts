@@ -6,7 +6,6 @@ import { categoryOf, IntegrationError, withAbort } from "../integrations/http.js
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
 import type { CyclePublisher, CycleResults, ResultOutput } from "../reporting/results.js";
-import { systemClock, type ExecutionClock } from "./clock.js";
 
 const CLEANUP_GRACE_MS = 12_000;
 
@@ -23,7 +22,6 @@ export interface RunnerDependencies {
   handler?: ProbeHandler;
   now?: () => number;
   sleep?: ProbeContext["sleep"];
-  clock?: ExecutionClock;
   publishResults?: CyclePublisher;
   exchangeRequests?: GraphRequestPermits;
   capacityGroups?: { id: string; displayName: string; targetIds: string[] }[];
@@ -37,9 +35,13 @@ interface CycleContext {
   startedAttempts: Set<string>;
 }
 
+function schedule(milliseconds: number, action: () => void): () => void {
+  const timer = setTimeout(action, milliseconds);
+  return () => clearTimeout(timer);
+}
+
 function createCompletionDeadline(
   signal: AbortSignal, config: Pick<Config, "PROBE_TIMEOUT_MS" | "CYCLE_TIMEOUT_MS">, cycleStartedAt: number,
-  clock: ExecutionClock,
 ) {
   let cancelExecution: (() => void) | undefined;
   let cancelCleanup: (() => void) | undefined;
@@ -47,13 +49,13 @@ function createCompletionDeadline(
   const promise = new Promise<never>((_, reject) => {
     const probeBudgetMs = config.PROBE_TIMEOUT_MS + CLEANUP_GRACE_MS;
     const remainingCycleMs = config.CYCLE_TIMEOUT_MS + CLEANUP_GRACE_MS
-      - (clock.monotonicNow() - cycleStartedAt);
+      - (performance.now() - cycleStartedAt);
     const completionBudgetMs = Math.max(0, Math.min(probeBudgetMs, remainingCycleMs));
-    cancelExecution = clock.schedule(completionBudgetMs, () => reject(new IntegrationError("cancelled")));
+    cancelExecution = schedule(completionBudgetMs, () => reject(new IntegrationError("cancelled")));
 
     // Cancellation stops the operation but still gives its cleanup time to finish.
     onCancellation = () => {
-      cancelCleanup = clock.schedule(CLEANUP_GRACE_MS, () => reject(new IntegrationError("cancelled")));
+      cancelCleanup = schedule(CLEANUP_GRACE_MS, () => reject(new IntegrationError("cancelled")));
     };
     signal.addEventListener("abort", onCancellation, { once: true });
     if (signal.aborted) onCancellation();
@@ -79,10 +81,10 @@ async function runSingleProbe<P extends Probe>(
   if (liveExchange) {
     config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, exchangeJourneyMilliseconds(probe.type)) };
   }
-  const { telemetry, clock = systemClock } = dependencies;
-  const now = dependencies.now ?? (() => clock.wallNow());
+  const { telemetry } = dependencies;
+  const now = dependencies.now ?? Date.now;
   const execution = new AbortController();
-  const cancelExecution = clock.schedule(config.PROBE_TIMEOUT_MS, () => execution.abort());
+  const cancelExecution = schedule(config.PROBE_TIMEOUT_MS, () => execution.abort());
   const probeSignal = AbortSignal.any([
     cycle.signal,
     execution.signal,
@@ -97,7 +99,7 @@ async function runSingleProbe<P extends Probe>(
     if (!handler) throw new IntegrationError("collector-failure");
     probeSignal.throwIfAborted();
     cycle.startedAttempts.add(`${probe.type}:${probe.id}`);
-    deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt, clock);
+    deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt);
     const graph = liveExchange && probe.mailbox && dependencies.exchangeRequests && dependencies.graph?.forMailbox
       ? dependencies.graph.forMailbox(probe.mailbox, dependencies.exchangeRequests) : dependencies.graph;
     const pair = probe.botPairId ? dependencies.teamsBotPairs?.get(probe.botPairId) : undefined;
@@ -111,7 +113,6 @@ async function runSingleProbe<P extends Probe>(
         signal: probeSignal,
         telemetry,
         now,
-        clock,
         ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
         executionComplete: () => {
           cancelledDuringExecution ||= probeSignal.aborted;
@@ -224,7 +225,7 @@ async function publishCycleResults(
   }
   if (cycle.results.length) {
     const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
-    const deadline = (dependencies.clock ?? systemClock).timeout(exchange ? 12000 : 30000);
+    const deadline = AbortSignal.timeout(exchange ? 12000 : 30000);
     const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
     await withAbort(signal, async () => dependencies.publishResults?.({ ...cycle, signal }));
   }
@@ -277,12 +278,12 @@ export async function runCycle(
     ),
   };
   const permitStart = dependencies.exchangeRequests?.snapshot();
-  const { telemetry, clock = systemClock } = dependencies;
+  const { telemetry } = dependencies;
   const cycleId = randomUUID();
-  const cycleStartedAt = clock.monotonicNow();
+  const cycleStartedAt = performance.now();
   const stopOtherProbes = new AbortController();
   const deadline = new AbortController();
-  const cancelCycle = clock.schedule(config.CYCLE_TIMEOUT_MS, () => deadline.abort());
+  const cancelCycle = schedule(config.CYCLE_TIMEOUT_MS, () => deadline.abort());
   const cancellationSignals = [
     stopOtherProbes.signal,
     deadline.signal,

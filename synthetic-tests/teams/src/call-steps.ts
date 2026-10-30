@@ -2,7 +2,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { GraphOperations } from "../../utils/src/integrations/graph.js";
 import { IntegrationError } from "../../utils/src/integrations/http.js";
-import { systemClock, type ExecutionClock } from "../../utils/src/execution/clock.js";
 
 export const callIdSchema = z.string().min(1).max(2048).refine(id =>
   id.trim() === id && id !== "." && id !== ".." && !/[\u0000-\u001f\u007f]/.test(id));
@@ -46,9 +45,8 @@ export async function verifyCallEstablished(
 export async function waitForAnswer(
   graph: GraphOperations, id: string, signal: AbortSignal, deadline: number,
   pollIntervalMs: number, now: () => number = Date.now, sleep = pause, onState?: StateObserver,
-  clock: ExecutionClock = systemClock,
 ): Promise<void> {
-  const bounded = clock.timeout(Math.max(1, deadline - now()));
+  const bounded = AbortSignal.timeout(Math.max(1, deadline - now()));
   signal = AbortSignal.any([signal, bounded]);
   while (now() < deadline) {
     signal.throwIfAborted();
@@ -79,9 +77,8 @@ const rosterSchema = z.object({
 export async function verifyParticipants(
   graph: GraphOperations, id: string, expected: readonly [string, string], signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now, sleep = pause,
-  clock: ExecutionClock = systemClock,
 ): Promise<void> {
-  signal = AbortSignal.any([signal, clock.timeout(Math.max(1, deadline - now()))]);
+  signal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - now()))]);
   while (now() < deadline) {
     signal.throwIfAborted();
     const roster = await graph.json(`${callPath(id)}/participants`, rosterSchema, signal, "GET",

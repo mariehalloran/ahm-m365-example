@@ -17,7 +17,6 @@ import { createResultOutput, type CyclePublisher, type ResultOutput } from "../r
 import { providerDiagnosticSchema, type ProviderDiagnostic } from "../providers/provider-diagnostics.js";
 import { executionLanes, runExecutionLanes, type ExecutionLane } from "./execution-lanes.js";
 import { canonicalProjectFile } from "../paths.js";
-import { systemClock, type ExecutionClock } from "./clock.js";
 
 const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
 const EXCHANGE_COMPLETION_BUDGET_MS = 24000;
@@ -47,7 +46,6 @@ export interface WorkerOptions {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
-  clock?: ExecutionClock;
   createDependencies?: (service: ServiceConfig, config: Config, telemetry: Telemetry) => RunnerDependencies | Promise<RunnerDependencies>;
   execute?: typeof runCycle;
   project?: ProjectConfig;
@@ -74,7 +72,7 @@ async function initializeService(
     config,
     dependencies: {
       ...runtime, ...(options.handler ? { handler: options.handler } : {}), ...(publishResults ? { publishResults } : {}),
-      ...(options.clock ? { clock: options.clock } : {}), ...(options.sleep ? { sleep: options.sleep } : {}),
+      ...(options.sleep ? { sleep: options.sleep } : {}),
       ...(service.type === "exchange" && options.project ? {
         capacityGroups: options.project.groups.filter(group => group.service === "exchange").map(group => ({
           id: group.id, displayName: group.displayName, targetIds: group.targetIds,
@@ -87,9 +85,8 @@ async function initializeService(
 async function reportInitializationFailure(
   service: ServiceConfig, probes: Probe[], publishResults: CyclePublisher | undefined, telemetry: Telemetry, error: unknown, startedAt: number,
   output: ResultOutput, signal: AbortSignal, capacityGroups?: RunnerDependencies["capacityGroups"],
-  clock: ExecutionClock = systemClock,
 ): Promise<void> {
-  const observedAt = clock.wallNow();
+  const observedAt = Date.now();
   const category = error instanceof ConfigurationError ? "configuration-failure" : categoryOf(error);
   const cycleId = randomUUID();
   telemetry.emit("service-initialization-failed", {
@@ -125,7 +122,7 @@ async function reportInitializationFailure(
       telemetry.emit("result-output-failed", { cycleId, category: categoryOf(outputError) });
     }
   }
-  const publicationSignal = AbortSignal.any([signal, clock.timeout(service.type === "exchange" ? 12000 : 30000)]);
+  const publicationSignal = AbortSignal.any([signal, AbortSignal.timeout(service.type === "exchange" ? 12000 : 30000)]);
   try { await withAbort(publicationSignal, async () => publishResults?.({ cycleId, results, signal: publicationSignal })); }
   catch (error) { outputErrors.push(error); }
   throwFailures(outputErrors);
@@ -162,10 +159,9 @@ export async function collectAndReportServiceProviders(
   env: NodeJS.ProcessEnv, results: ResultOutput, reportHealth: ProviderReporter | undefined,
 ): Promise<ProviderCollectionSummary | undefined> {
   const cycleId = randomUUID();
-  const clock = options.clock ?? systemClock;
-  const collectedAt = clock.wallNow();
+  const collectedAt = Date.now();
   signal = AbortSignal.any([
-    signal, clock.timeout(Math.max(1000, Math.min(59000, service.providerIntervalSeconds * 1000 - 1000))),
+    signal, AbortSignal.timeout(Math.max(1000, Math.min(59000, service.providerIntervalSeconds * 1000 - 1000))),
   ]);
   const providerDiagnostics: ProviderDiagnostic[] = [];
   const providerOutput: ResultOutput = {
@@ -234,11 +230,10 @@ interface SyntheticLaneExecution {
 
 async function executeSyntheticLane(lane: ExecutionLane, execution: SyntheticLaneExecution): Promise<void> {
   const { service, options, signal, telemetry, probes, publishResults, results, initialize } = execution;
-  const clock = options.clock ?? systemClock;
-  const startedAt = clock.wallNow();
+  const startedAt = Date.now();
   const minuteBudgetMs = service.type === "exchange"
     ? options.once ? 59000 : Math.max(1, 59000 - startedAt % 60000) : undefined;
-  const minuteDeadline = minuteBudgetMs === undefined ? undefined : clock.timeout(minuteBudgetMs);
+  const minuteDeadline = minuteBudgetMs === undefined ? undefined : AbortSignal.timeout(minuteBudgetMs);
   const laneSignal = minuteDeadline ? AbortSignal.any([signal, minuteDeadline]) : signal;
   const laneProbes = probes.filter(probe => lane.journeys.includes(probeServices[probe.type].journey));
   const initializationFailed = async (error: unknown) => {
@@ -247,7 +242,6 @@ async function executeSyntheticLane(lane: ExecutionLane, execution: SyntheticLan
         service, laneProbes, publishResults, telemetry, error, startedAt, results, laneSignal,
         options.project?.groups.filter(group => group.service === service.type)
           .map(group => ({ id: group.id, displayName: group.displayName, targetIds: group.targetIds })),
-        clock,
       );
     }
   };
@@ -296,8 +290,7 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
     ? observationSink?.publish ?? createDirectHealthReporter(options.project, service, telemetry, env) : undefined;
   const results = createResultOutput(telemetry);
   let initialized: InitializedService | undefined;
-  const clock = options.clock ?? systemClock;
-  const now = options.now ?? (() => service.type === "exchange" ? clock.wallNow() : clock.monotonicNow());
+  const now = options.now ?? Date.now;
   const sleep = options.sleep ?? ((ms, abort) => delay(ms, undefined, { signal: abort }));
   const workerErrors: unknown[] = [];
   try {

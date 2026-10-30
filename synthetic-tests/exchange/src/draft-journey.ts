@@ -13,9 +13,13 @@ import {
   type MailAttempt,
 } from "./steps.js";
 
+/**
+ * Executes the Exchange draft lifecycle synthetic probe by creating, reading,
+ * updating, re-reading, and deleting a draft message in the target mailbox.
+ */
 export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, context) => {
-  const { signal, telemetry, now = Date.now } = context;
-  const startedAt = now();
+  const { signal, telemetry } = context;
+  const startedAt = Date.now();
   const result = baseResult(probe, startedAt);
   const attempt: MailAttempt = {
     mailbox: probe.mailbox,
@@ -23,66 +27,66 @@ export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, 
     ownedMessageIds: new Set(),
     mutationAttempted: false,
   };
+
   try {
     result.diagnosticContext.testStage = "authentication";
     const graph = await measureStep(
       result,
       "authenticate",
       () => authenticate(context.graph, signal),
-      now,
     );
     result.diagnosticContext.authenticationDurationMs = Math.max(
       0,
-      now() - startedAt,
+      Date.now() - startedAt,
     );
+
     result.diagnosticContext.testStage = "execution";
     const draftId = await measureStep(
       result,
       "create-draft",
       () => createDraft(graph, attempt, signal),
-      now,
     );
     await measureStep(
       result,
       "read-initial-draft",
       () => readDraft(graph, attempt, draftId, signal, false),
-      now,
     );
     await measureStep(
       result,
       "update-draft",
       () => updateDraft(graph, attempt, draftId, signal),
-      now,
     );
+
     result.diagnosticContext.testStage = "download";
     await measureStep(
       result,
       "read-draft",
       () => readDraft(graph, attempt, draftId, signal),
-      now,
     );
     await measureStep(
       result,
       "delete-draft",
       () => deleteDraft(graph, attempt, draftId, signal),
-      now,
+      Date.now,
       () => "cleanup-failure",
     );
+
     result.success = true;
     result.diagnosticContext.testStage = "complete";
   } catch (error) {
     journeyFailure(result, error, telemetry);
   } finally {
     context.executionComplete?.();
+    const cleanupEnabled = context.config.EXCHANGE_CLEANUP_ENABLED !== "false";
     await cleanupStep(
       result,
       attempt.mutationAttempted,
       (cleanupSignal) => cleanup(context.graph!, attempt, cleanupSignal),
       telemetry,
-      now,
-      context.config.EXCHANGE_CLEANUP_ENABLED !== "false",
-      context.clock,
+      Date.now,
+      cleanupEnabled,
     );
   }
-  return finishJourney(result, startedAt, now);
+
+  return finishJourney(result, startedAt);
 };

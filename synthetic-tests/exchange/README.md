@@ -1,232 +1,58 @@
-# Exchange: five single-user mail and calendar journeys
+# Exchange synthetic journeys
 
-Every target is **one configured user's mailbox**. All five executable journeys
-stay in that mailbox; no second account, distribution group or meeting attendee
-is involved. This API-backed coverage does not measure Outlook UI, employee
-sign-in/MFA, external mail delivery or tenant-wide availability.
+This service validates mailbox and calendar flows through Microsoft Graph using configured test users.
 
-## Primary setup
+## Journeys
 
-Run npm commands from `synthetic-tests/`; maintain only root `monitoring.config.json`.
-Setup requires `deployment.foundation.mode: "existing"` even when creating missing
-bare-name foundation resources.
+| Scenario | Summary |
+| --- | --- |
+| `send-receive-mail` | Send from sender mailbox and confirm receipt in receiver mailbox |
+| `edit-reopen-draft` | Create draft, reopen, edit, and validate saved changes |
+| `attachment-mail` | Send mail with attachment and verify attachment metadata |
+| `reply-mail` | Reply to seeded conversation and verify response handling |
+| `recurring-calendar` | Create recurring event and verify generated instances |
 
-1. Select the five scenarios and independent mailboxes in root
-   `monitoring.config.json`, under `tenants[].services.exchange`:
+## Required setup
 
-   ```json
-   {
-     "targets": {
-       "userGroup1": {
-         "userGroupName": "User Group One",
-         "users": [
-           { "mailbox": "synthetic-user@example.invalid" }
-         ]
-       }
-     }
-   }
+1. Configure Exchange targets in root `monitoring.config.json`.
+2. Run ID resolution:
+   ```sh
+   npm run setup:ids
+   ```
+3. If `reply-mail` is enabled, provision reply seeds:
+   ```sh
+   npm run setup:reply-seeds
    ```
 
-   [User groups](../../docs/monitoring-groups.md) contain the user target objects;
-   the same mailbox address with identical settings can belong to several groups but executes
-   once. Distinct targets must identify unique mailboxes case-insensitively. Optional `region` and simulation
-   `scenario` remain supported; generated `replySeed` bindings come from `.env`,
-   not the config. Account keys are derived automatically; do not supply a target `id`.
-   Removed `recipientMailbox`, `distributionList`,
-   distribution and invitation scenario options are rejected, even when disabled.
-2. Obtain administrator approval for dedicated mailboxes and mailbox-scoped
-   `Application Mail.Send`, `Application Mail.ReadWrite` and, for the recurring
-   calendar journey, `Application Calendars.ReadWrite`. Retain the allowed/denied
-   control checks and prohibition on additional unscoped Entra mail/calendar grants
-   in the [access request](../../MAILBOX-SYNTHETIC-ACCESS.md).
-3. Name the approved identity in `worker.identity`, and configure live opt-in and
-   destination in the same root config. Follow [`docs/setup.md`](../../docs/setup.md) as an
-   approved administrator: it creates missing named foundation resources/identities and
-   Exchange application RBAC, and extends its mailbox scope, by hand; it never removes old
-   access. Then run `npm run setup:reply-seeds` (only when `reply-mail` is selected), which
-   provisions missing reply-seed bindings.
-4. On an approved host with explicit credentials and live gates, run
-   `npm run exchange -- --once`, then verify actual
-   operations, cleanup and accepted health ingestion. No live acceptance or service
-   capacity is established by source checks.
-
-Local live commands need `ENABLE_LIVE_M365=true`; the checked-in beta activity
-selection also needs the separately approved `ENABLE_BETA_SERVICE_ACTIVITY=true`.
-Hosted opt-ins come from `deployment`. Managed identity requires explicit
-`AZURE_CLIENT_ID` and tenant binding; certificate Graph access is an explicit local
-option, not a fallback, and cannot use `providerClientId` federation. See
-[setup and credential requirements](../../docs/deployment.md#set-up-microsoft-365)
-and [identity/permissions](../../docs/deployment.md#identity-and-permissions).
-
-## Journeys and scheduling
-
-| Scenario | Stable entity | Sequential business steps |
-| --- | --- | --- |
-| `send-receive-mail` | `exchange-global` | Create mail addressed to self, send, verify own Inbox receipt |
-| `edit-reopen-draft` | `exchange-draft` | Create, read, edit, reopen/verify and delete own draft |
-| `attachment-mail` | `exchange-attachment` | Send attachment to self; download and verify byte length and SHA-256 |
-| `reply-mail` | `exchange-reply` | **SELF-REPLY** to a retained received self-addressed fixture; verify transport correlation in own Inbox |
-| `recurring-calendar` | `exchange-recurring` | Create a private daily series with no attendees; read all three occurrences, update/read series and occurrences, delete and observe removal |
-
-Mail (`exchange-mail`) parents the four mail journeys; Calendar
-(`exchange-calendar`) parents the private recurring-series journey. “Private”
-means **no other participant**, not a change to calendar sharing or mailbox ACLs.
-
-Every selected journey for every configured mailbox runs on **one aligned
-wall-clock minute schedule**: 100 mailboxes × five journeys = 500 attempts/minute.
-Independent journeys start concurrently; dependent steps stay sequential and all
-results settle before reporting. Normal continuous execution waits for the next
-minute boundary; explicit `--once` is an immediate single-cycle diagnostic.
-Missed minute slots are skipped without overlap or catch-up/repeated batches.
-
-The root Exchange `execution` block uses this cadence and these request limits:
-
-```json
-{
-  "intervalSeconds": 60,
-  "timeoutSeconds": 30,
-  "maxConcurrentRequests": 32,
-  "maxConcurrentRequestsPerMailbox": 2
-}
-```
-
-They limit **actual Graph HTTP requests**, not active journeys. Polling, retries
-and cleanup use the same global/per-mailbox permits; waiting is abortable and
-counts against the attempt deadline. One busy mailbox cannot occupy all global
-permits while waiting on its own limit. The older `maxConcurrentProbes` setting
-continues to govern only other products. The runner derives one fixed 60-second,
-30-second-timeout Exchange lane; custom assignments, if supplied, must put all
-five journeys in one 60-second lane and cannot relax the journey caps below.
-
-SELF-REPLY has a **30-second execution deadline**; all other Exchange journeys have
-**15 seconds**. A timeout contributes a failed sample (success 0), not Unknown.
-Aggregate entity state follows configured success-percentage and mean-duration
-thresholds; one timeout need not make a large cohort Unhealthy. The checked-in
-latency degradation threshold remains **15 seconds for the aggregate mean**.
-Cleanup has its independent ten-second signal and twelve-second runner
-settlement grace. The minute reserves at most 42 seconds for execution/settlement,
-12 for health publication and 5 for telemetry flush; delayed starts reduce the
-remaining execution budget instead of extending the minute. Other products and
-independently scheduled provider collection retain their existing cadences.
-
-`exchange-minute-capacity` is emitted once per reporting group with expected,
-started, completed and timed-out attempts, Graph-request count and permit waiting.
-It is runner-capacity evidence, separate from Exchange availability. Requests
-that time out waiting for capacity still produce unsuccessful journey results;
-they are not dropped to improve a percentage. These limits are not a throughput
-guarantee: obtain live evidence for the selected cohort without relaxing deadlines.
-
-## Provision and test attachment and reply separately
-
-A reply seed is a **retained received self-addressed message in that same user's
-Inbox**, provisioned outside the timed attempt. `npm run setup:reply-seeds` invokes the mail
-fixture command in a one-time job under the worker's approved identity when bindings
-are missing or `-Reprovision` is requested. Otherwise it skips the seed job;
-it does not revalidate existing Inbox fixtures on every setup run. The fixture
-command reuses valid seeds and reprovisions observed missing IDs. Setup duration and
-failures are separate diagnostics, with a 120-second per-target execution budget
-and independent five-second cleanup. The PowerShell job can retry permission-only
-failures over a longer propagation window.
-Provisioning reports ready only after bounded cleanup of owned draft/sent copies;
-cleanup failure fails setup without deleting the retained Inbox fixture. Review
-any partial fixture artifacts before explicitly re-provisioning.
-
-The received immutable ID and correlation UUID are saved only in the gitignored
-`.env` beside the root config, as
-`<TENANT>__<TARGET>__REPLY_SEED_MESSAGE_ID` and
-`<TENANT>__<TARGET>__REPLY_SEED_CORRELATION_ID`. Commands/deploy fill them in
-automatically. Never copy secrets or generated seed IDs into the config.
-
-On an approved managed-identity host (or with explicit certificate authentication
-and federation-based providers disabled), provision and measure independently:
+## Run locally
 
 ```sh
-npm run exchange:mail-test                         # plan; no cloud writes
-ENABLE_LIVE_M365=true ENABLE_BETA_SERVICE_ACTIVITY=true \
-  npm run exchange:mail-test -- --apply --setup-only
-ENABLE_LIVE_M365=true ENABLE_BETA_SERVICE_ACTIVITY=true \
-  npm run exchange:mail-test -- --apply --samples 3
+npm run exchange -- --once
+npm run exchange -- --tenant <alias> --once
 ```
 
-Add `--tenant <alias>` for a multi-tenant config. The diagnostic publishes no health
-reports; measured attachment/SELF-REPLY samples retain the worker's 15/30-second
-deadlines. Missing setup fails honestly instead of manufacturing success.
-
-### Migrating old paired fixtures
-
-Old paired seed IDs are **not** accepted as single-user fixtures. Folder-scoped
-lookup must find the configured ID in the user's own Inbox, and validation requires
-self `from`/`to`, no non-self `replyTo`/CC/BCC, a self-fixture subject/body marker and
-the `x-ahm-reply-seed-scope: self-v1` header. Failure is explicit
-`configuration-failure`, with `self-reply-seed-…-reprovision` diagnostics.
-
-Before upgrading workers, stop old Exchange revisions/jobs, convert every unique
-former sender **and recipient** into an independent target, preserve reporting-group
-account membership, and run:
+Mailbox verification helper:
 
 ```sh
-npm run setup:reply-seeds -- -Reprovision
-# Or, with the explicitly approved local credential:
-ENABLE_LIVE_M365=true ENABLE_BETA_SERVICE_ACTIVITY=true \
-  npm run exchange:mail-test -- --apply --setup-only --reprovision-seeds
+npm run exchange:mail-test -- --tenant <alias>
 ```
 
-The opt-in replaces only missing/incompatible bindings after validation; valid
-self fixtures are reused, denied access is never bypassed, and old retained seeds
-are **not deleted**. Review old artifacts separately under the tenant's retention
-policy. No fixture migration, tenant modification or `.env` update is performed
-by local source validation.
+## Scheduling notes
 
-## Exact Graph operations and ownership
+- Cycles align to minute boundaries.
+- Journey deadlines are split into two windows:
+  - first check at 15 seconds
+  - hard deadline at 30 seconds
 
-All endpoints use `https://graph.microsoft.com/v1.0`, encoded mailbox/artifact IDs
-and `Prefer: IdType="ImmutableId"`. `{user}` always means the target's sole mailbox.
+## Diagnostics
 
-| Operation | Endpoint/evidence |
-| --- | --- |
-| Create mail/draft/attachment | `POST /users/{user}/messages`; unique UUID subject, body marker and correlation header; only self in `toRecipients` |
-| Read/edit/delete draft | `GET`, `PATCH`, `DELETE /users/{user}/messages/{ownedId}`; verify initial and edited body, subject, ID and draft status |
-| Send | `POST /users/{user}/messages/{ownedId}/send` |
-| Receive | `GET /users/{user}/mailFolders/inbox/messages`; exact subject or reply conversation/recent creation filter; verify self sender/recipients and attempt body marker |
-| Download attachment | `GET …/messages/{receivedId}/attachments`, then `GET …/attachments/{attachmentId}`; decode and compare byte length/SHA-256 |
-| Read retained fixture | `GET /users/{user}/mailFolders/inbox/messages/{seedId}` with headers, body, sender and recipient fields selected |
-| SELF-REPLY | `POST …/messages/{seedId}/createReply` with atomic attempt comment; validate inherited subject/conversation and **all generated recipients before sending**; `PATCH` owned body, then `POST …/{replyId}/send` |
-| Confirm SELF-REPLY | Own Inbox message must have one `In-Reply-To` equal to the seed's transport `internetMessageId`, a distinct reply Message-ID, matching subject/conversation, self sender/recipients and unique attempt marker |
-| Private recurrence | `POST /users/{user}/events` with UUID `transactionId`, three daily occurrences and `attendees: []`; `GET …/{seriesId}/instances`, `PATCH`/`GET` series, `DELETE` series and poll for observed 404 |
-| Cleanup | Delete known owned IDs first, then discover and delete remaining attempt-marked copies under this user's `/messages`. Reply discovery uses mailbox-local conversation and the unique attempt marker, never the seed ID. Ambiguous event creation is reconciled only by exact subject, transaction ID, own organizer and no attendees |
+Journey output includes:
 
-[`createReply`](https://learn.microsoft.com/en-us/graph/api/message-createreply?view=graph-rest-1.0)
-honors the original `replyTo`; fixture and generated-recipient checks therefore
-reject any non-self destination before send. This is intentionally labelled
-SELF-REPLY, not evidence of interaction between two people.
+- step status and latency
+- Graph request failures with operation labels
+- message, draft, or event IDs used during cleanup
 
-Ambiguous writes are not blindly retried. Cleanup tries all known owned IDs even
-when reconciliation or another deletion fails, and never claims another attempt's
-reply, a foreign message or a retained seed. Draft deletion and recurring-series
-deletion are mandatory business steps. `exchangeCleanupEnabled: false` is a mail
-artifact retention diagnostic only; it cannot disable those business steps.
-Late server-side completion after bounded cleanup can require ownership-checked
-operator reconciliation. Deleted Items/compliance retention is not a purge.
+## Related docs
 
-## Removed model entities and coverage limits
-
-Incremental deployment does not delete old entities. After old workers stop,
-review paginated model inventories and retire only `exchange-distribution` with
-its `send-group-mail`/`confirm-group-delivery` children, and `exchange-meeting` with
-its `create-meeting`, `confirm-invitation`, `verify-attendee-calendar`,
-`accept-meeting`, `confirm-acceptance` and `cancel-meeting` children.
-Remove relationships before entities; preserve Mail, Calendar and all five retained
-journey IDs. See the [ordered model migration](../../health-model/README.md#single-user-exchange-conversion).
-
-Stable Service Health and all nine supported beta activity functions run on an
-independent `execution.providerIntervalSeconds` lane (default 300 seconds).
-They publish to the single suppressed `exchange-service-health` entity, including
-dynamically ingested `microsoft-activity-*` signals—not separate per-API nodes or
-synthetic success evidence. Issue counts and activity values without configured
-thresholds are diagnostic; unavailable/stale sources explicitly report Unknown
-without a value, keeping every selected signal visible.
-The separate provider application uses approved `ServiceHealth.Read.All` and
-`ServiceActivity-Exchange.Read.All` access; see
-[provider monitoring](../../docs/provider-monitoring.md).
-Source validation is not live tenant execution, delivered notifications, capacity
-acceptance, Outlook client coverage or calendar-sharing/privacy validation.
+- Worker runtime: `../utils/README.md`
+- Root setup and deployment: `../../README.md`

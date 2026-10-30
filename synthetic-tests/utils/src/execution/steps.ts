@@ -2,8 +2,10 @@ import {
   maxStepDetailLength, probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
 } from "../contracts.js";
 import { categoryOf, IntegrationError } from "../integrations/http.js";
-import { systemClock, type ExecutionClock } from "./clock.js";
 
+/**
+ * Runs one probe step and records step timing and diagnostics on the result object.
+ */
 export async function measureStep<T>(
   result: SyntheticResult, name: StepName, operation: () => Promise<T>,
   now: () => number = Date.now,
@@ -29,6 +31,9 @@ export async function measureStep<T>(
   }
 }
 
+/**
+ * Marks a probe result failed from a caught journey error and emits failure telemetry.
+ */
 export function journeyFailure(result: SyntheticResult, error: unknown, telemetry: Telemetry): void {
   const failed = result.steps.find(step => step.status === "failed");
   result.success = false;
@@ -41,10 +46,13 @@ export function journeyFailure(result: SyntheticResult, error: unknown, telemetr
   });
 }
 
+/**
+ * Runs bounded cleanup for a journey and records cleanup status without hiding failures.
+ */
 export async function cleanupStep(
   result: SyntheticResult, mutationAttempted: boolean,
-  operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry, now: () => number, enabled = true,
-  clock: ExecutionClock = systemClock,
+  operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry,
+  now: () => number = Date.now, enabled = true,
 ): Promise<void> {
   if (!enabled) {
     result.steps.push({ name: "cleanup", status: "skipped", observedAt: new Date(now()).toISOString(), reason: "cleanup-disabled" });
@@ -60,7 +68,7 @@ export async function cleanupStep(
   }
   try {
     // Cleanup has its own budget, independent of the cancelled journey.
-    await measureStep(result, "cleanup", () => operation(clock.timeout(10000)), now, () => "cleanup-failure");
+    await measureStep(result, "cleanup", () => operation(AbortSignal.timeout(10000)), now, () => "cleanup-failure");
     result.diagnosticContext.cleanupSucceeded = true;
   } catch {
     result.diagnosticContext.cleanupSucceeded = false;
@@ -75,7 +83,10 @@ export async function cleanupStep(
   }
 }
 
-export function finishJourney(result: SyntheticResult, startedAt: number, now: () => number): SyntheticResult {
+/**
+ * Finalizes a journey result by setting observed/duration fields and filling skipped steps.
+ */
+export function finishJourney(result: SyntheticResult, startedAt: number, now: () => number = Date.now): SyntheticResult {
   result.observedAt = new Date(now()).toISOString();
   result.durationMs = Math.max(0, now() - startedAt);
   const order: readonly StepName[] = probeServices[result.testType].steps;

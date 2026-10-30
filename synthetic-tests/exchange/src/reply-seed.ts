@@ -8,128 +8,336 @@ import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfMessage
 
 type ReplyTarget = Pick<Probe, "id" | "mailbox" | "replySeed">;
 export type ReplySeedGraph = GraphOperations;
+
 export interface ReplySeedOptions {
-  signal: AbortSignal; telemetry: Telemetry;
-  now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  signal: AbortSignal;
+  telemetry: Telemetry;
   reprovision?: boolean;
 }
-const seedMessage = messageSchema.extend({
-  subject: z.string(), isDraft: z.boolean(), bodyPreview: z.string(),
-  conversationId: z.string().min(1), internetMessageId: z.string().min(1),
-  internetMessageHeaders: z.array(z.object({ name: z.string(), value: z.string() })),
-});
-const user = (mailbox: string) => `/users/${encodeURIComponent(mailbox)}`;
-export const replySeedSubject = (correlationId: string) => `AHM SELF-REPLY seed ${correlationId}`;
-const seedMarker = (correlationId: string) => `Retained self-addressed synthetic reply fixture ${correlationId}`;
 
-function validateSeed(message: z.infer<typeof seedMessage>, mailbox: string, correlationId: string) {
-  const header = (name: string, value: string) => {
-    const matches = message.internetMessageHeaders.filter(header => header.name.toLowerCase() === name);
-    return matches.length === 1 && matches[0]!.value === value;
-  };
-  if (message.isDraft || message.subject !== replySeedSubject(correlationId) || !selfMessage(message, mailbox) ||
-      !message.bodyPreview.includes(seedMarker(correlationId)) ||
-      !header("x-ahm-reply-seed-id", correlationId) || !header("x-ahm-reply-seed-scope", "self-v1")) {
-    throw new IntegrationError("configuration-failure", undefined, "self-reply-seed-incompatible-reprovision");
+const seedMessageSchema = messageSchema.extend({
+  subject: z.string(),
+  isDraft: z.boolean(),
+  bodyPreview: z.string(),
+  conversationId: z.string().min(1),
+  internetMessageId: z.string().min(1),
+  internetMessageHeaders: z.array(
+    z.object({
+      name: z.string(),
+      value: z.string(),
+    }),
+  ),
+});
+
+const inboxSeedMessagesSchema = z.object({
+  value: z.array(seedMessageSchema),
+  "@odata.nextLink": z.string().optional(),
+});
+
+const createdDraftSchema = z.object({
+  id: z.string().min(1),
+});
+
+type SeedMessage = z.infer<typeof seedMessageSchema>;
+
+/**
+ * Formats the Graph API root path for a user mailbox.
+ */
+function userMailboxPath(mailbox: string): string {
+  return `/users/${encodeURIComponent(mailbox)}`;
+}
+
+/**
+ * Formats the subject line for a retained self-reply seed message.
+ */
+export function replySeedSubject(correlationId: string): string {
+  return `AHM SELF-REPLY seed ${correlationId}`;
+}
+
+/**
+ * Formats the body marker identifying a retained self-reply seed message.
+ */
+function seedMarker(correlationId: string): string {
+  return `Retained self-addressed synthetic reply fixture ${correlationId}`;
+}
+
+/**
+ * Checks whether a seed message contains exactly one internet header with the given name and value.
+ */
+function hasExpectedSeedHeader(
+  message: SeedMessage,
+  headerName: string,
+  expectedValue: string,
+): boolean {
+  const matchingHeaders = message.internetMessageHeaders.filter(
+    (header) => header.name.toLowerCase() === headerName,
+  );
+  return matchingHeaders.length === 1 && matchingHeaders[0]!.value === expectedValue;
+}
+
+/**
+ * Validates that a fetched message matches all safety and correlation invariants
+ * required of a retained self-reply seed fixture.
+ */
+function validateSeed(
+  message: SeedMessage,
+  mailbox: string,
+  correlationId: string,
+): SeedMessage {
+  const hasExpectedSubject = message.subject === replySeedSubject(correlationId);
+  const isSelfAddressed = selfMessage(message, mailbox);
+  const hasExpectedBody = message.bodyPreview.includes(seedMarker(correlationId));
+  const hasSeedIdHeader = hasExpectedSeedHeader(message, "x-ahm-reply-seed-id", correlationId);
+  const hasSeedScopeHeader = hasExpectedSeedHeader(message, "x-ahm-reply-seed-scope", "self-v1");
+
+  if (
+    message.isDraft ||
+    !hasExpectedSubject ||
+    !isSelfAddressed ||
+    !hasExpectedBody ||
+    !hasSeedIdHeader ||
+    !hasSeedScopeHeader
+  ) {
+    throw new IntegrationError(
+      "configuration-failure",
+      undefined,
+      "self-reply-seed-incompatible-reprovision",
+    );
   }
+
   return message;
 }
 
-export async function readReplySeed(graph: ReplySeedGraph, target: ReplyTarget, signal: AbortSignal) {
-  if (!target.mailbox || !target.replySeed) throw new IntegrationError("configuration-failure", undefined, "self-reply-seed-required");
-  let saved: z.infer<typeof seedMessage>;
+/**
+ * Reads and validates the pre-provisioned reply seed message from the target mailbox's inbox.
+ */
+export async function readReplySeed(
+  graph: ReplySeedGraph,
+  target: ReplyTarget,
+  signal: AbortSignal,
+): Promise<SeedMessage> {
+  if (!target.mailbox || !target.replySeed) {
+    throw new IntegrationError("configuration-failure", undefined, "self-reply-seed-required");
+  }
+
+  let saved: SeedMessage;
   try {
     // Folder-scoped lookup excludes the sent copy even though sender and recipient are the same user.
-    saved = await graph.json(
-      `${user(target.mailbox)}/mailFolders/inbox/messages/${encodeURIComponent(target.replySeed.messageId)}?$select=${messageSelect}`,
-      seedMessage, signal,
-    );
+    const encodedMessageId = encodeURIComponent(target.replySeed.messageId);
+    const seedPath = `${userMailboxPath(target.mailbox)}/mailFolders/inbox/messages/${encodedMessageId}?$select=${messageSelect}`;
+    saved = await graph.json(seedPath, seedMessageSchema, signal);
   } catch (error) {
     if (error instanceof IntegrationError && error.status === 404) {
-      throw new IntegrationError("configuration-failure", 404, "self-reply-seed-missing-or-paired-reprovision");
+      throw new IntegrationError(
+        "configuration-failure",
+        404,
+        "self-reply-seed-missing-or-paired-reprovision",
+      );
     }
     throw error;
   }
-  if (saved.id !== target.replySeed.messageId) throw new IntegrationError("configuration-failure", undefined, "self-reply-seed-id-mismatch");
+
+  if (saved.id !== target.replySeed.messageId) {
+    throw new IntegrationError("configuration-failure", undefined, "self-reply-seed-id-mismatch");
+  }
+
   return validateSeed(saved, target.mailbox, target.replySeed.correlationId);
 }
 
-export async function provisionReplySeed(graph: ReplySeedGraph, target: ReplyTarget, options: ReplySeedOptions) {
+/**
+ * Ensures the target mailbox has a valid retained self-reply seed message in its inbox,
+ * reusing an existing valid fixture or provisioning a fresh one and cleaning up transient copies.
+ */
+export async function provisionReplySeed(
+  graph: ReplySeedGraph,
+  target: ReplyTarget,
+  options: ReplySeedOptions,
+): Promise<{ messageId: string; correlationId: string }> {
   const mailbox = target.mailbox;
-  if (!mailbox) throw new IntegrationError("configuration-failure");
-  const now = options.now ?? Date.now;
-  const started = now();
+  if (!mailbox) {
+    throw new IntegrationError("configuration-failure");
+  }
+  const mailboxAddress: string = mailbox;
+
+  const startedAt = Date.now();
   await graph.authenticate(options.signal);
+
   if (target.replySeed) {
     try {
       await readReplySeed(graph, target, options.signal);
-      options.telemetry.emit("exchange-self-reply-seed-ready", { targetId: target.id, created: false, durationMs: now() - started });
+      options.telemetry.emit("exchange-self-reply-seed-ready", {
+        targetId: target.id,
+        created: false,
+        durationMs: Date.now() - startedAt,
+      });
       return target.replySeed;
     } catch (error) {
-      if (!(error instanceof IntegrationError) ||
-          (error.status !== 404 && !(options.reprovision && error.category === "configuration-failure"))) throw error;
+      const isMissingSeed = error instanceof IntegrationError && error.status === 404;
+      const isReprovisionableConfigFailure =
+        error instanceof IntegrationError &&
+        Boolean(options.reprovision) &&
+        error.category === "configuration-failure";
+
+      if (!isMissingSeed && !isReprovisionableConfigFailure) {
+        throw error;
+      }
+
+      let reprovisionReason = "incompatible-fixture";
+      if (isMissingSeed) {
+        reprovisionReason = "missing-or-paired-binding";
+      }
+
       options.telemetry.emit("exchange-self-reply-seed-reprovisioning", {
-        targetId: target.id, action: "create-self-fixture-without-deleting-prior-seed",
-        reason: error.status === 404 ? "missing-or-paired-binding" : "incompatible-fixture",
+        targetId: target.id,
+        action: "create-self-fixture-without-deleting-prior-seed",
+        reason: reprovisionReason,
       });
     }
   }
+
   const correlationId = randomUUID();
   const subject = replySeedSubject(correlationId);
-  const query = new URLSearchParams({ "$filter": `subject eq '${subject}'`, "$select": messageSelect, "$top": "100" });
-  const owned = new Set<string>();
+  const query = new URLSearchParams({
+    "$filter": `subject eq '${subject}'`,
+    "$select": messageSelect,
+    "$top": "100",
+  });
+  const ownedMessageIds = new Set<string>();
   let retainedId: string | undefined;
   let cleanupFailed = false;
+
   try {
-    const draft = await graph.json(`${user(mailbox)}/messages`, z.object({ id: z.string().min(1) }), options.signal, "POST", {
-      subject, body: { contentType: "Text", content: `${seedMarker(correlationId)}.` },
-      toRecipients: [{ emailAddress: { address: mailbox } }],
-      internetMessageHeaders: [
-        { name: "x-ahm-reply-seed-id", value: correlationId },
-        { name: "x-ahm-reply-seed-scope", value: "self-v1" },
+    const draftPayload = {
+      subject,
+      body: {
+        contentType: "Text",
+        content: `${seedMarker(correlationId)}.`,
+      },
+      toRecipients: [
+        {
+          emailAddress: {
+            address: mailboxAddress,
+          },
+        },
       ],
-    }, false);
-    owned.add(draft.id);
-    await graph.request(`${user(mailbox)}/messages/${encodeURIComponent(draft.id)}/send`, options.signal, "POST", undefined, false);
-    const sleep = options.sleep ?? ((ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }));
+      internetMessageHeaders: [
+        {
+          name: "x-ahm-reply-seed-id",
+          value: correlationId,
+        },
+        {
+          name: "x-ahm-reply-seed-scope",
+          value: "self-v1",
+        },
+      ],
+    };
+
+    const draft = await graph.json(
+      `${userMailboxPath(mailboxAddress)}/messages`,
+      createdDraftSchema,
+      options.signal,
+      "POST",
+      draftPayload,
+      false,
+    );
+    ownedMessageIds.add(draft.id);
+
+    await graph.request(
+      `${userMailboxPath(mailboxAddress)}/messages/${encodeURIComponent(draft.id)}/send`,
+      options.signal,
+      "POST",
+      undefined,
+      false,
+    );
+
     while (true) {
       options.signal.throwIfAborted();
-      const inbox = await graph.json(`${user(mailbox)}/mailFolders/inbox/messages?${query}`,
-        z.object({ value: z.array(seedMessage), "@odata.nextLink": z.string().optional() }), options.signal);
-      if (inbox["@odata.nextLink"]) throw new IntegrationError("read-failure");
-      const saved = inbox.value.find(message => message.subject === subject);
+      const inbox = await graph.json(
+        `${userMailboxPath(mailboxAddress)}/mailFolders/inbox/messages?${query}`,
+        inboxSeedMessagesSchema,
+        options.signal,
+      );
+      if (inbox["@odata.nextLink"]) {
+        throw new IntegrationError("read-failure");
+      }
+
+      const saved = inbox.value.find((message) => message.subject === subject);
       if (saved) {
         validateSeed(saved, mailbox, correlationId);
         retainedId = saved.id;
         break;
       }
-      await sleep(2000, options.signal);
+
+      await delay(2000, undefined, { signal: options.signal });
     }
   } finally {
     const cleanupSignal = AbortSignal.timeout(5000);
     let failed = false;
-    const attempted = new Set<string>();
-    const deleteKnown = async () => {
-      for (const id of owned) {
-        if (id === retainedId || attempted.has(id)) continue;
-        attempted.add(id);
-        try { await graph.request(`${user(mailbox)}/messages/${encodeURIComponent(id)}`, cleanupSignal, "DELETE"); }
-        catch { failed = true; }
+    const attemptedMessageIds = new Set<string>();
+
+    /**
+     * Deletes any non-retained seed copies that have already been identified.
+     */
+    async function deleteKnownSeedCopies(): Promise<void> {
+      for (const messageId of ownedMessageIds) {
+        if (messageId === retainedId || attemptedMessageIds.has(messageId)) {
+          continue;
+        }
+        attemptedMessageIds.add(messageId);
+        try {
+          await graph.request(
+            `${userMailboxPath(mailboxAddress)}/messages/${encodeURIComponent(messageId)}`,
+            cleanupSignal,
+            "DELETE",
+          );
+        } catch {
+          failed = true;
+        }
       }
-    };
-    await deleteKnown();
+    }
+
+    await deleteKnownSeedCopies();
+
     try {
-      const copies = await graph.json(`${user(mailbox)}/messages?${query}`, messagesSchema, cleanupSignal);
+      const copies = await graph.json(
+        `${userMailboxPath(mailboxAddress)}/messages?${query}`,
+        messagesSchema,
+        cleanupSignal,
+      );
       for (const copy of copies.value) {
-        if (ownedMessage(copy, mailbox, subject, seedMarker(correlationId))) owned.add(copy.id);
+        if (ownedMessage(copy, mailboxAddress, subject, seedMarker(correlationId))) {
+          ownedMessageIds.add(copy.id);
+        }
       }
-      if (copies["@odata.nextLink"]) failed = true;
-    } catch { failed = true; }
-    await deleteKnown();
+      if (copies["@odata.nextLink"]) {
+        failed = true;
+      }
+    } catch {
+      failed = true;
+    }
+
+    await deleteKnownSeedCopies();
     cleanupFailed = failed;
-    if (failed) options.telemetry.emit("exchange-self-reply-seed-cleanup-failed", { targetId: target.id, category: "cleanup-failure" });
+
+    if (failed) {
+      options.telemetry.emit("exchange-self-reply-seed-cleanup-failed", {
+        targetId: target.id,
+        category: "cleanup-failure",
+      });
+    }
   }
-  if (cleanupFailed) throw new IntegrationError("cleanup-failure");
-  options.telemetry.emit("exchange-self-reply-seed-ready", { targetId: target.id, created: true, durationMs: now() - started });
-  return { messageId: retainedId, correlationId };
+
+  if (cleanupFailed) {
+    throw new IntegrationError("cleanup-failure");
+  }
+
+  options.telemetry.emit("exchange-self-reply-seed-ready", {
+    targetId: target.id,
+    created: true,
+    durationMs: Date.now() - startedAt,
+  });
+  return {
+    messageId: retainedId,
+    correlationId,
+  };
 }

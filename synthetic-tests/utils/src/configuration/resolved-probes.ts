@@ -5,13 +5,23 @@ import { probeSchema, type TestType } from "../contracts.js";
 const exchange = probeSchema.required({ mailbox: true });
 const oneDrive = probeSchema.required({ userId: true, userPrincipalName: true, folderName: true });
 const channel = probeSchema.required({
-  tenantId: true, teamId: true, channelId: true, serviceUrl: true, botPairId: true, botClientId: true,
+  tenantId: true,
+  teamId: true,
+  channelId: true,
+  serviceUrl: true,
+  botPairId: true,
+  botClientId: true,
 });
 const call = probeSchema.required({
-  tenantId: true, meetingThreadId: true, organizerUserId: true,
-  botPairId: true, botClientId: true, peerBotClientId: true,
+  tenantId: true,
+  meetingThreadId: true,
+  organizerUserId: true,
+  botPairId: true,
+  botClientId: true,
+  peerBotClientId: true,
 });
 
+/** Discriminated union schema enforcing the required target fields for each live synthetic journey type. */
 export const liveProbeSchema = z.discriminatedUnion("type", [
   exchange.extend({ type: z.literal("exchange-mail-flow") }),
   exchange.extend({ type: z.literal("exchange-draft") }),
