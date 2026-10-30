@@ -24,7 +24,7 @@
    OneDrive's drives and folders or the Exchange approval above.
 7. Enable live execution only after allowed/denied access checks: name each approved identity in `worker.identity`, set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove `deployment.stage` (default `workers`) and run `npm run deploy` (see the [worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)). Verify real journeys and cleanup, then fresh reports and service/root rollup.
 
-**Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Teams uses only `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`; hosted `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the attached UAMI for Bot Connector, with a second explicitly selected UAMI for meetings. Graph read permissions alone do not authorize posting: approve and install the matching bot. No delegated-user sign-in, bootstrap or token cache exists. Provider credentials remain application-only and separate from synthetic access.
+**Same tenant does not eliminate permission or policy reviews.** Keep images, identities, diagnostics and alerts customer-controlled. Teams uses only `teamsAuthentication: "bot"` and `botAuthentication: "managed-identity"`; each root-configured `botPairs` entry selects attached primary/peer UAMIs with matching `BOT_TENANT_ID`. Graph read permissions alone do not authorize posting: approve and install every primary bot's matching app. No runtime delegated-user sign-in, bootstrap or token cache exists. Provider credentials remain application-only and separate from synthetic access.
 
 ## Temporary cross-tenant lab: reuse existing Azure hosting
 

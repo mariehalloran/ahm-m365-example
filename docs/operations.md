@@ -40,22 +40,23 @@ Do not enable live mode against real-user resources.
 6. Use `--once` first and inspect operation and cleanup outcomes.
 
 Teams defaults to an installed managed-identity bot in a dedicated standard channel.
-Supply `BOT_TENANT_ID`/`BOT_CLIENT_ID` for the bot UAMI and matching
-`AZURE_TENANT_ID`. A separate same-tenant Entra application holds team-scoped
+Supply the root `botPairs` inventory and generated per-pair client-ID bindings,
+with matching hosted `BOT_TENANT_ID` and `AZURE_TENANT_ID`.
+A separate same-tenant Entra application holds team-scoped
 `ChannelMessage.Read.Group`; service `teamsReadbackClientId` selects it through
 worker-UAMI federation. The manifest's `webApplicationInfo.id` references this
 application, not the UAMI. See [bot setup](../synthetic-tests/teams/README.md#primary-setup-unattended-bot).
 No runtime user MFA/cache or certificate is needed. Bot-only meeting calls require
 two distinct explicit UAMIs with approved `Calls.JoinGroupCall.All` and root-owned
 `{ id, meetingThreadId, organizer }` call targets (setup looks up the organizer's user ID
-and the peer bot's client ID).
+and both client IDs of each configured bot pair).
 The organizer is owner metadata, never a participant/token identity. Success requires
 both established legs, matching meeting metadata, both identities in both
 rosters and both verified departures. No audio upload, playback or recording is
 required, and connectivity does not prove received audio, bidirectional audio or
 call quality.
-The existing Teams app attaches the approved peer through
-`tenants[].services.teams.access.peerIdentity`; no runtime
+The existing Teams worker attaches every `botPairs[].identity` and `peerIdentity`;
+each pair exercises every selected channel and meeting. No runtime
 grants or extra app/host are created.
 
 Live workers require scoped service-model report and private configuration Blob reader

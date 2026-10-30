@@ -29,7 +29,7 @@ for a resource in another resource group or subscription.
 | --- | --- |
 | `deployment.foundation` | `{ "mode": "existing", "environment": "<name or ID>", "registry": "<name or ID>" }`; `create` mode names the ones to create |
 | `worker.identity` | The existing, administrator-approved managed identity of a service's worker; `worker.identityName` instead names one the deployment creates |
-| Teams `access.bot`, `access.peerBot`, `access.peerIdentity` | The two Azure Bot registrations and the peer bot's managed identity |
+| Teams `botPairs[]` | Each pair's `id`, `bot`, `identity`, `peerBot` and `peerIdentity`; existing Azure Bot registrations and managed identities |
 
 **IDs you supply.** A resource ID is needed only for a resource outside the health model's
 resource group. Otherwise the only IDs left each name something that exists outside this
@@ -54,15 +54,15 @@ command's own client IDs ([OneDrive setup](./onedrive-setup.md#plan-apply-and-re
   the subscription's real tenant, so set it only to host in a different tenant than
   Microsoft 365.
 - Teams targets and call targets default `tenantId` to the tenant's. Channel targets
-  default `serviceUrl` to `https://smba.trafficmanager.net/teams/`. A call target's
-  `peerBotClientId` defaults to the peer bot's client ID.
+  default `serviceUrl` to `https://smba.trafficmanager.net/teams/`. Every configured
+  pair exercises every selected target; participant client IDs come from that pair.
 - A tenant's `providerClientId` is inherited by each service that has `serviceHealth` or
   `serviceActivity` enabled and no `execution.providerClientId` of its own; set the
   per-service value only to override it.
 
 **Looked up by `npm run setup:ids`**, never in the config: each OneDrive account's user ID,
 each call target's organizer user ID (from its `organizer`, the organizer's user principal
-name, which only that command reads), the peer bot's client ID and the Teams calling
+name, which only that command reads), both client IDs of each bot pair and the Teams calling
 callback URL. It writes them to `.env` ([keys](#generated-ids-in-env)).
 
 ## Set up Microsoft 365
@@ -72,7 +72,7 @@ Every Microsoft 365 or Azure **access grant** is manual: follow
 exact `az`, Graph or PowerShell commands to run. Two small commands then generate `.env`
 values from that access — never a new grant — and are safe to automate:
 
-- `npm run setup:ids` looks up or creates the Teams channel, the peer bot's client ID, the
+- `npm run setup:ids` looks up or creates the Teams channel, both client IDs of each pair, the
   Teams calling callback URL, call targets' organizer user IDs and OneDrive accounts' user
   IDs.
 - `npm run setup:reply-seeds` provisions the retained SELF-REPLY message each `reply-mail`
@@ -95,7 +95,8 @@ deploy fails and names the conflict when the config sets one to a different valu
 | Exchange target | `REPLY_SEED_MESSAGE_ID`, `REPLY_SEED_CORRELATION_ID` | `replySeed` | `npm run setup:reply-seeds`; a local `npm run exchange:mail-test -- --apply` |
 | Teams channel target | `CHANNEL_ID` | `channelId` | `npm run setup:ids` |
 | Teams call target | `ORGANIZER_USER_ID` | `organizerUserId` | `npm run setup:ids`, from the target's `organizer` |
-| Teams service (`<TARGET>` is `TEAMS`) | `BOT_PEER_CLIENT_ID`, `CALLING_CALLBACK_URL` | `access.botPeerClientId`, `execution.teamsCallingCallbackUrl` | `npm run setup:ids`, from `access.peerIdentity` and the foundation's environment |
+| Teams bot pair (`<TARGET>` is the pair ID) | `BOT_CLIENT_ID`, `BOT_PEER_CLIENT_ID` | `botPairs[].botClientId`, `botPairs[].botPeerClientId` | `npm run setup:ids`, from that pair's `identity` and `peerIdentity` |
+| Teams service (`<TARGET>` is `TEAMS`) | `CALLING_CALLBACK_URL` | `execution.teamsCallingCallbackUrl` | `npm run setup:ids`, from the foundation's environment |
 | OneDrive target | `USER_ID` | `userId` | `npm run setup:ids`, from `userPrincipalName` |
 | OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup` |
 
@@ -108,7 +109,7 @@ explicitly migrating its bindings.
 
 Teams retains configured target IDs, uppercased with non-alphanumeric characters
 replaced by `_`; for example, `CONSTO__TEAMS_PROBE_002__CHANNEL_ID`
-or `CONSTO__TEAMS__BOT_PEER_CLIENT_ID`. `.env` holds tenant-specific IDs but no secrets, and
+or `CONSTO__TEAMS_PAIR_002__BOT_PEER_CLIENT_ID`. `.env` holds tenant-specific IDs but no secrets, and
 it is safe to delete and regenerate by re-running the setup commands (reply seeds are then
 re-created). What stays in the config is listed [above](#what-the-config-holds).
 

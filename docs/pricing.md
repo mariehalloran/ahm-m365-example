@@ -7,8 +7,41 @@ observation pipeline and KQL-backed model health.
 
 These are **planning estimates, not an invoice or a service quote**. They use
 October 2026 USD Central US list-price assumptions, 730 hours/month, and the
-current configuration. Check your Azure agreement and regional prices before
+baseline configuration described below. Check your Azure agreement and regional prices before
 committing a budget.
+
+The following public retail meters were checked on **2026-10-30**, in USD for
+`centralus`, using the [Azure Retail Prices API](https://prices.azure.com/api/retail/prices).
+The estimates below still depend on workload assumptions, grants and actual billing.
+
+| Configured component / public meter | Verified list rate |
+| --- | ---: |
+| Container Apps, Standard vCPU Active Usage | $0.000024/vCPU-second |
+| Container Apps, Standard Memory Active Usage | $0.000003/GiB-second |
+| Container Registry, Basic Registry Unit | $0.1666/day |
+| Event Hubs, Standard Throughput Unit | $0.03/TU-hour |
+| Event Hubs, Standard Ingress Events | $0.028/million billable events |
+| Event Hubs, Standard Capture | $0.10/TU-hour |
+| Log Analytics, Analytics Logs Data Ingestion, paid tier | $2.76/GB |
+
+## Where costs come from
+
+```mermaid
+flowchart LR
+    base["Both modes"] --> workers["Container Apps Consumption<br/>three replicas - vCPU/GiB time"]
+    base --> registry["Container Registry Basic<br/>registry time, builds and storage"]
+    base --> config["Private configuration Blob<br/>storage and transactions"]
+    base --> models["Azure Monitor Health Models and alerts<br/>verify current offer and notification meters"]
+    logging["Only logAnalytics.enabled: true"] --> hub["Event Hubs Standard<br/>throughput-unit time + ingress"]
+    logging --> function["Functions Flex Consumption<br/>executions and GB-seconds"]
+    logging --> logs["Log Analytics Analytics Logs<br/>billed ingestion GB + extra retention"]
+    logging --> capture["Optional Capture<br/>TU-hours + archive storage/transactions"]
+    growth["More accounts or Teams bot pairs"] -->|"more attempts and bytes"| logs
+    growth -->|"check request limits and runtime capacity"| workers
+```
+
+The [architecture diagrams](./architecture.md) connect each cost driver to its
+actual data path. These subtotals are not a complete service quote.
 
 ## What changes with the toggle?
 
@@ -33,13 +66,13 @@ container registry. They exclude the separately listed items below and do not
 deduct shared grants or negotiated discounts. Function and storage costs are
 allowances, not measured invoices.
 
-| Reporting configuration | Current targets: 4 Exchange, 2 OneDrive, Teams unchanged | Projection: 100 Exchange + 100 OneDrive, Teams unchanged |
+| Reporting configuration | Measured baseline: 4 Exchange, 2 OneDrive, one Teams pair | Projection: 100 Exchange + 100 OneDrive, baseline Teams |
 | --- | ---: | ---: |
 | **Log Analytics off: direct reports** | **About $65/month** | **About $65/month, subject to worker capacity** |
 | Log Analytics on, Capture off | About $105-115/month | About $510-530/month |
 | Log Analytics on, Capture on | About $180-190/month | About $590-610/month |
 
-The current targets and all 100-account projections use **three workers, not one
+The baseline and all 100-account projections use **three workers, not one
 worker per account**. The same 100 users may be targets for both Exchange and
 OneDrive; this is not an assumption that 200 separate user identities are needed.
 
@@ -50,12 +83,29 @@ accounts within all deadlines.** Resource increases would change the subtotal.
 For comparison with a budget that already pays for the workers/registry, the
 **additional logging path** is approximately:
 
-| Logging add-on only | Current targets | 100-account projection |
+| Logging add-on only | Baseline targets | 100-account projection |
 | --- | ---: | ---: |
 | Capture off | $40-50/month | $445-465/month |
 | Capture on | $115-125/month | $525-545/month |
 
 Do not compare a logging-only estimate with a subtotal that also includes hosting.
+
+### Additional Teams bot pairs
+
+The measured baseline above predates the second configured pair; do not treat
+its Log Analytics GB/month as a new two-pair measurement. Two pairs still use
+one Teams container, the same registry, Event Hub and Function, so fixed hosting
+does not double. At the configured 120-second cadence, another pair adds
+2 channel attempts + 1 meeting attempt each cycle: **2,160 attempts/day**.
+With all currently measured steps/call phases, that is 18 additional observation
+events per cycle, or **12,960/day** before transport/ingestion diagnostics.
+
+Marginal log ingestion is:
+`additional observations x measured billed bytes per observation / 1e9 x regional GB rate`.
+Re-measure `_BilledSize` after a change; no fixed per-pair log price is claimed.
+The Azure Bot registrations use F0; verify
+[Bot Service channel pricing](https://azure.microsoft.com/pricing/details/bot-services/)
+and any channel-specific limits rather than assuming all future bot traffic is free.
 
 ## Cost components
 
@@ -117,7 +167,7 @@ The following extrapolate actual `_BilledSize` measurements from the steady-stat
 2026-10-30 00:25-00:40 UTC window. They include synthetic observations and ingestion
 Function diagnostics, without the removed worker-side exporter data.
 
-| | Current targets | 100-account projection |
+| | Measured baseline | 100-account projection |
 | --- | ---: | ---: |
 | Monthly billed data, 730-hour month | About 6.87 GB | About 151.02 GB |
 | Ingestion before free allocation | **$18.96** | **$416.82** |

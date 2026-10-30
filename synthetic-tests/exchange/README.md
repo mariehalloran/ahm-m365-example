@@ -218,12 +218,13 @@ its `create-meeting`, `confirm-invitation`, `verify-attendee-calendar`,
 Remove relationships before entities; preserve Mail, Calendar and all five retained
 journey IDs. See the [ordered model migration](../../health-model/README.md#single-user-exchange-conversion).
 
-Stable Service Health and the five approved beta activity functions run on an
+Stable Service Health and all nine supported beta activity functions run on an
 independent `execution.providerIntervalSeconds` lane (default 300 seconds).
 They publish to the single suppressed `exchange-service-health` entity, including
 dynamically ingested `microsoft-activity-*` signals—not separate per-API nodes or
 synthetic success evidence. Issue counts and activity values without configured
-thresholds are diagnostic; unavailable/stale sources do not refresh health reports.
+thresholds are diagnostic; unavailable/stale sources explicitly report Unknown
+without a value, keeping every selected signal visible.
 The separate provider application uses approved `ServiceHealth.Read.All` and
 `ServiceActivity-Exchange.Read.All` access; see
 [provider monitoring](../../docs/provider-monitoring.md).

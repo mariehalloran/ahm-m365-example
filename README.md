@@ -6,7 +6,34 @@ Health Models shows which business step, journey and service that evidence affec
 Microsoft-reported Service Health supplies separate supporting context, not a
 substitute for a successful synthetic test.
 
+## What Azure Monitor Health Models helps you do
 
+Logs and individual alerts describe observations. A health model connects those
+observations to the **experience you care about** and the dependencies behind it:
+
+- **See impact, not just failed requests.** A failed mail-delivery step affects its
+  journey, Exchange Experience and the root Microsoft 365 Experience.
+- **Find the failing part.** Drill from the root to a service, journey and
+  business step instead of correlating unrelated availability checks.
+- **Combine reliability and speed.** Completion percentage and measured duration
+  can make a journey Healthy, Degraded or Unhealthy using configured thresholds.
+- **Compare your reporting groups.** Exchange and OneDrive journey entities show
+  the user groups you define, while the infrastructure remains centrally hosted.
+- **Separate evidence from context.** Microsoft-reported incidents and activity
+  sit alongside your synthetics, but cannot turn a failed synthetic journey green
+  or make the Experience unhealthy on their own.
+- **Route actionable alerts.** Root-state changes notify existing Azure Monitor
+  action groups; Log Analytics can then identify affected users, groups and errors.
+
+For example, a successful API response is not enough to prove mail delivery:
+the synthetic sends a message and confirms it in the same mailbox's Inbox. The
+model connects that completion evidence to the mail journey and service.
+It does not establish employee sign-in, client rendering, audio quality or every
+Microsoft 365 workflow. Unknown also does not mean Healthy, and a stopped worker
+needs the [independent freshness safeguards](./docs/operations.md#enterprise-reliability-acceptance-gate).
+
+See the [infrastructure, health-data and Log Analytics diagrams](./docs/architecture.md)
+and [cost-driver diagram and pricing](./docs/pricing.md).
 
 ## Supported journeys
 
@@ -22,8 +49,8 @@ ingested health reports or notification delivery. See
 | Exchange | `attachment-mail` | Send to self and verify downloaded attachment bytes/hash | Aligned minute |
 | Exchange | `reply-mail` | Explicit SELF-REPLY to a retained received self-addressed fixture; verify transport correlation | Aligned minute |
 | Exchange | `recurring-calendar` | Create/read/update/delete own private recurring series, without attendees | Aligned minute |
-| Teams | `channel-conversation` | One selected bot posts a root and reply; Graph verifies both authors and correlations | 120 seconds |
-| Teams | `scheduled-meeting` | Two managed-identity bots join one meeting, establish both calls, verify metadata/rosters and leave | 120 seconds |
+| Teams | `channel-conversation` | Each pair's primary bot posts a root and reply to every selected channel; Graph verifies both authors and correlations | 120 seconds |
+| Teams | `scheduled-meeting` | Each managed-identity bot pair joins every selected meeting, establishes both calls, verifies metadata/rosters and leaves | 120 seconds |
 | OneDrive | `user-drive-roundtrip` | Create nested folder/file, enumerate/download/hash, delete and verify absence | 300 seconds |
 | OneDrive | `app-folder-lifecycle` | Write/read/update/read app data in a new cycle-owned folder, then delete it | 300 seconds |
 | OneDrive | `document-versions` | Update a file and verify actual prior-version bytes; optional downloaded-byte restore | 300 seconds |
@@ -45,11 +72,25 @@ Generated IDs go to a gitignored `.env` beside it; secrets do not belong in eith
 
 **Review before running:** the checked-in configuration belongs to a real test
 tenant and enables live probes, Azure Monitor export, stable Service Health,
-Exchange beta Service Activity and root health alerts. It is not an offline example.
+Exchange/Teams beta Service Activity and root health alerts. It is not an offline example.
 
 After deployment, verify fresh journey reports, roll-up and notifications end to
 end. A finished deployment proves only the rollout; see
 [operations](./docs/operations.md#enterprise-reliability-acceptance-gate).
+
+Once the setup guide's one-time grants and generated-ID steps are complete:
+
+```sh
+cd synthetic-tests
+npm ci
+npm run deploy -- --plan
+npm run deploy
+```
+
+The plan is local validation, not proof of Azure permissions. Deployment reads
+the same root config, deploys models before workers and verifies fresh ingestion
+for every selected live journey/target. It does not grant Microsoft 365 access,
+install Teams apps or verify notification delivery for you.
 
 ## Worker architecture
 
@@ -65,52 +106,7 @@ aggregation groups to their journey entities, not extra models or entity branche
 Teams targets stay ungrouped; workers stay centrally hosted.
 
 
-```mermaid
-flowchart LR
-    config["monitoring.config.json<br/>(single root config)"]
-    m365["Microsoft 365<br/>Microsoft Graph<br/>Teams Bot Connector"]
-
-    subgraph workers["Azure Container Apps"]
-        exchange["Exchange worker<br/>Execution lanes<br/>Result reporting"]
-        teams["Teams worker<br/>Execution lanes<br/>Result reporting"]
-        onedrive["OneDrive worker<br/>Execution lanes<br/>Result reporting"]
-    end
-
-    config -.-> exchange
-    config -.-> teams
-    config -.-> onedrive
-    m365 <--> exchange
-    m365 <--> teams
-    m365 <--> onedrive
-
-    subgraph models["Azure Monitor Health Models"]
-        exchangeModel["Exchange model<br/>Journey / business-step signals"]
-        teamsModel["Teams model<br/>Journey / business-step signals"]
-        onedriveModel["OneDrive model<br/>Journey / business-step signals"]
-        root["Root M365 model<br/>Service Experience references"]
-
-        exchangeModel -->|"Experience health"| root
-        teamsModel -->|"Experience health"| root
-        onedriveModel -->|"Experience health"| root
-    end
-
-    hub["Shared Event Hub"]
-    archive["Optional Capture<br/>Private Blob archive"]
-    bridge["Managed-identity Function"]
-    dcr["DCR transformation"]
-    logs["Log Analytics<br/>M365Synthetic_CL"]
-    exchange -->|"enabled: true"| hub
-    teams -->|"enabled: true"| hub
-    onedrive -->|"enabled: true"| hub
-    exchange -->|"enabled: false — direct reports"| exchangeModel
-    teams -->|"enabled: false — direct reports"| teamsModel
-    onedrive -->|"enabled: false — direct reports"| onedriveModel
-    hub --> archive
-    hub --> bridge --> dcr --> logs
-    logs -->|"KQL"| exchangeModel
-    logs -->|"KQL"| teamsModel
-    logs -->|"KQL"| onedriveModel
-```
+[View the actual services, both health-data paths and the Log Analytics pipeline](./docs/architecture.md).
 
 1. **Execute:** the root config selects journeys and targets and sets each
    service's lane cadences and deadlines. Lanes run concurrently without overlapping
@@ -181,15 +177,16 @@ advanced feature's license minimum.
 
 When opted in, all three services can collect stable Service Health on independent
 provider lanes, initially every 300 seconds. Exchange and Teams additionally
-support five approved beta activity functions each; OneDrive has no beta collector.
+support all nine Exchange and five Teams beta activity functions; OneDrive has no beta collector.
 Each product's single suppressed Service Health entity cannot change synthetic metrics or
 Experience rollup. Beta collection requires separate explicit approval.
-Usable activity observations create `microsoft-activity-*` external signals on
+Each selected activity source creates a `microsoft-activity-*` external signal on
 that entity, not separate Service Activity nodes. The checked-in config enables
-the five Exchange functions, not Teams beta collection; without configured
-thresholds, their numeric measurements have diagnostic `Unknown` health.
-Unavailable sources publish **no health reports**; collection failures remain
-diagnostic-only. Observed Service Health statuses map to 100/50/0 availability.
+all nine Exchange and five Teams functions; without configured thresholds,
+their numeric measurements have diagnostic `Unknown` health. Missing, denied,
+invalid or stale sources explicitly report **Unknown without a numeric value**
+on each provider cycle. Signals remain visible; failures retain diagnostic context.
+Observed Service Health statuses map to 100/50/0 categorical availability scores.
 When `logAnalytics.enabled` is true, the
 [shared observation pipeline](./health-model/README.md#shared-observation-queries)
 adds the synthetic table and five administrator saved searches. One shared ingestion
@@ -201,6 +198,7 @@ The optional queries show which groups and users are affected, and why: see
 ## Guides and acceptance
 
 - [Runtime configuration, validation and local usage](./synthetic-tests/README.md)
+- [Architecture diagrams: deployed services, health-model data and Log Analytics](./docs/architecture.md)
 - [Setup: test accounts, prerequisites and access](./docs/setup.md)
 - [What the config holds, generated IDs (`.env`), deployment and dated evidence](./docs/deployment.md)
 - [Pricing: direct reports versus optional Log Analytics and Capture](./docs/pricing.md)

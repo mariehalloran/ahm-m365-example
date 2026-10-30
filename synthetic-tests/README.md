@@ -5,8 +5,10 @@ TypeScript configuration, dependencies and build output live here. The single
 user-owned [monitoring.config.json](../monitoring.config.json) stays at the repository
 root, with the gitignored `.env` that the setup commands write beside it
 ([generated IDs](../docs/deployment.md#generated-ids-in-env)). The three service
-workers run independently in Azure Container Apps and publish health directly; no
-telemetry worker or persistent journey state is required.
+workers run independently in Azure Container Apps. The single logging toggle selects
+direct health reports or the observation pipeline; no telemetry worker or
+persistent journey state is required.
+See [architecture and reporting diagrams](../docs/architecture.md).
 
 Supported workflows: [Exchange journeys](./exchange/README.md),
 [two bot-backed Teams journeys](./teams/README.md), and
@@ -23,7 +25,7 @@ steps are complete ([setup and deploy](../docs/deployment.md)):
 
 | Command | What it does |
 | --- | --- |
-| `npm run setup:ids` | Looks up or creates the Teams channel, peer bot client ID, Teams calling callback URL, call targets' organizer user IDs and OneDrive accounts' user IDs |
+| `npm run setup:ids` | Looks up or creates the Teams channel; resolves both client IDs of every bot pair, the calling callback URL, meeting organizer IDs and OneDrive user IDs |
 | `npm run setup:reply-seeds` | Provisions the retained SELF-REPLY message each `reply-mail` mailbox answers; `-- -Reprovision` replaces one that no longer validates |
 | `npm run deploy` | Health models, foundation and workers from the root config; `-- --plan` previews |
 | `npm run onedrive:setup` | OneDrive folders and grants; writes drive and folder IDs to `.env` ([guide](../docs/onedrive-setup.md)) |
@@ -161,17 +163,19 @@ supported by the current catalogue even if their scenarios are disabled.
    it. See the [live gates](../docs/deployment.md#live-execution-gates).
 
 Hosted Graph/reporting explicitly selects `AZURE_CLIENT_ID`, not a guessed host,
-CLI or developer login. Teams Bot Connector selects `BOT_CLIENT_ID` and matching
-`BOT_TENANT_ID`/`AZURE_TENANT_ID`; scheduled meetings additionally select the
-approved peer UAMI. No user sign-in, MFA or refresh-token cache is implemented.
+CLI or developer login. Teams Bot Connector selects each configured pair's primary
+client ID from the root snapshot, with matching `BOT_TENANT_ID`/`AZURE_TENANT_ID`;
+scheduled meetings additionally select that pair's peer UAMI.
+No runtime user sign-in, MFA or refresh-token cache is implemented.
 Exchange retains explicit `graphAuthentication: "certificate"` with
 `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH` for approved
 local/alternative access; Azure reporting credentials stay independent.
 
 Providers require root `"serviceHealth": { "enabled": true }`; omission or false
 excludes their model entities and stops all provider collection/reporting.
-Sources without usable data publish no health reports; collection failures remain
-diagnostic-only. Observed Service Health statuses map to 100/50/0 availability.
+Every enabled selected provider source reports each cycle; missing or unusable
+data reports Unknown without a value, with failure diagnostics retained.
+Observed Service Health statuses map to categorical 100/50/0 scores.
 Permissions are stable `ServiceHealth.Read.All` for all three services,
 and separately gated Exchange/Teams beta permissions with
 `deployment.enableBetaServiceActivity: true` (`ENABLE_BETA_SERVICE_ACTIVITY=true`). See

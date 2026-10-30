@@ -157,7 +157,7 @@ export function createProviderReporter(
           serviceHealthIssuesReport(service.type, cycle, policy.signalWindowMinutes, Date.now(), service.serviceActivity.maxAgeMinutes),
         ] : []),
         ...serviceActivityReports(service, cycle, policy.signalWindowMinutes),
-      ].filter(report => report.body.value !== undefined) : [];
+      ] : [];
     const reports = overall.map(qualified);
     await publish(reports, cycle);
   };

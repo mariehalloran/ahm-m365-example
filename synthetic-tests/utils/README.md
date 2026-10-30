@@ -62,7 +62,7 @@ Each `tenants[].services.<service>.execution` block is then validated with `serv
 | `teamsCallingCallbackUrl` / `teamsCallingPort` | Public HTTPS exact `/api/calls`, written to `.env` by `npm run setup:ids`; default port 8080 |
 | `teamsCallingAnswerTimeoutSeconds` | Default 20, bounded 1–30; execution budget must allow this plus five seconds |
 | `serviceHealth` / `providerIntervalSeconds` | Optional stable collection, default off; independent provider lane, default 300 seconds |
-| `serviceActivity` | Optional separately gated five-function Exchange/Teams beta collection and explicit customer thresholds |
+| `serviceActivity` | Separately gated beta collection: all nine Exchange or five Teams methods by default, with optional function selection and explicit customer thresholds |
 
 `enabled`, `targets`, report settings and obsolete `telemetry` fields are
 rejected inside `execution`. Selection, scenario keys and target fields are
@@ -70,8 +70,11 @@ strict; removed workloads/modes cannot reappear via compatibility defaults.
 Scenario switches derive from the shared catalogue, and typed execution settings pass
 directly into runtime validation without serializing probe inventories or numeric
 settings through environment variables. Beside `execution`, each service block has
-`access` (nonsecret certificate references and, for Teams, bot, peer bot and peer
-identity names), `worker` (Container App name, identity and size) and, for OneDrive, `setup`.
+`access` (nonsecret certificate references), `worker` (Container App name, identity
+and size), Teams `botPairs` (distinct bot/identity and peerBot/peerIdentity per pair)
+and, for OneDrive, `setup`. All pairs exercise every selected Teams target;
+generated client IDs select per-pair clients without extra workers.
+See [architecture and reporting diagrams](../../docs/architecture.md).
 The scheduled meeting is connectivity-only with five measured business steps and
 needs no audio upload, playback or recording.
 OneDrive stable collection matches its distinct `OneDriveForBusiness` /
@@ -97,9 +100,9 @@ target set avoids duplicate traffic; statelessness is not a distributed lock.
 ## Credentials and report publication
 
 Hosted Graph/reporting explicitly selects `ManagedIdentityCredential({clientId})`
-using `AZURE_CLIENT_ID`. Teams Connector explicitly selects `BOT_CLIENT_ID`
-with matching `BOT_TENANT_ID`/`AZURE_TENANT_ID`. Meeting access additionally
-selects `TEAMS_CALLING_PEER_CLIENT_ID`; no CLI, secret, certificate or guessed
+using `AZURE_CLIENT_ID`. Teams Connector explicitly selects each configured
+pair's primary client ID with matching `BOT_TENANT_ID`/`AZURE_TENANT_ID`.
+Meeting access additionally selects that pair's peer client ID; no CLI, secret, certificate or guessed
 identity fallback exists for bot participants.
 
 Readback/provider application federation uses `api://AzureADTokenExchange`.
@@ -171,11 +174,11 @@ Exchange/Teams beta observations report directly to each product's single impact
 Service Health entity. OneDrive has no beta collector. Provider failures,
 counts and thresholds cannot change synthetic success or Experience rollup.
 One rejected source cannot erase sibling observations.
-Usable beta data creates `microsoft-activity-<function>` external signals on that
+Every enabled selected beta source creates `microsoft-activity-<function>` external signals on that
 existing entity through ingestion; Bicep does not predeclare them or add activity
 nodes. Without explicit thresholds, numeric activity measurements have `Unknown`
-health. Missing, denied, stale or invalid data produces no health report, so an
-enabled collector need not have a visible signal.
+health. Missing, denied, stale or invalid data produces explicit Unknown without
+a numeric value; the enabled signal remains visible with diagnostic context.
 See [permissions, exact endpoints and bounded contracts](../../docs/provider-monitoring.md).
 
 ## Reporting modes and reliability

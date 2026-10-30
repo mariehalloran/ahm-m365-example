@@ -279,7 +279,11 @@
       "getMessageVolumeMetricsForEmailDelivery",
       "getActiveUserMetricsForOutlookWebByReadEmail",
       "getActiveUserMetricsForOutlookWebByAppOpening",
-      "getActiveUserMetricsForEmailByModernAuthentication"
+      "getActiveUserMetricsForEmailByModernAuthentication",
+      "getActiveUserMetricsForDesktopMailByReadEmail",
+      "getActiveUserMetricsForOutlookMobileByReadEmail",
+      "getActiveUserMetricsForOutlookMacByReadEmail",
+      "getActiveUserMetricsForiOSOrAndroidMailByReadEmail"
     ],
     "teams": [
       "getUsageMetricsForTeamsByMeetingsJoined",

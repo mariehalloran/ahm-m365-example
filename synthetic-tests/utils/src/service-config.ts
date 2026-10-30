@@ -9,7 +9,7 @@ export const serviceActivitySchema = z.object({
   enabled: z.boolean().default(false),
   aggregationIntervalMinutes: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(30)]).default(15),
   lookbackMinutes: z.number().int().min(5).max(1440).default(30),
-  functions: z.array(z.enum(activityFunctionNames)).min(1).max(5).optional(),
+  functions: z.array(z.enum(activityFunctionNames)).min(1).max(activityFunctionNames.length).optional(),
   maxAgeMinutes: z.number().int().min(5).max(1440).default(60),
   thresholds: z.record(z.enum(activityFunctionNames), z.object({
     degradedBelow: z.number().finite().nonnegative(),

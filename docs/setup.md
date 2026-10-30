@@ -125,7 +125,7 @@ gitignored `.env` beside it. They do not create or license accounts or grant
 application permissions:
 
 - `npm run setup:ids` ([`setup/generate-ids.ps1`](../synthetic-tests/setup/generate-ids.ps1)):
-  finds or creates the named Teams channel, and looks up the peer bot's client ID, the Teams
+  finds or creates the named Teams channel, and looks up both client IDs of each pair, the Teams
   calling callback URL, the meeting organizer's user ID and each OneDrive account's user ID.
 - `npm run setup:reply-seeds` ([`setup/provision-reply-seeds.ps1`](../synthetic-tests/setup/provision-reply-seeds.ps1)):
   provisions the retained SELF-REPLY message each reply-mail mailbox answers.
@@ -186,10 +186,10 @@ az acr create --name crm365ctbcoagujf67a --resource-group $RG --location $LOCATI
 az containerapp env create --name cae-m365-experience-consto --resource-group $RG --location $LOCATION \
   --enable-workload-profiles true --logs-destination none
 
-# One identity per hosted service named in worker.identity, plus the second Teams bot's
-# identity in access.peerIdentity, only when scheduled-meeting is selected:
+# One identity per service worker, plus every distinct botPairs identity/peerIdentity:
 for NAME in uami-m365-experience-consto-exchange uami-m365-experience-consto-teams \
-            uami-m365-experience-consto-onedrive uami-m365-experience-consto-teams-peer; do
+            uami-m365-experience-consto-onedrive uami-m365-experience-consto-teams-peer \
+            uami-m365-consto-teams-002 uami-m365-consto-teams-peer-002; do
   az identity create --name $NAME --resource-group $RG --location $LOCATION
 done
 ```
@@ -262,16 +262,18 @@ on both the provider app and, for the Teams worker, the readback app.
 
 ## 6. Teams: bots, team and channel, app
 
-**Bots.** One Azure Bot per identity in `access.bot` and (when `scheduled-meeting` is
-selected) `access.peerBot`, bound to that identity, with its Teams channel:
+**Bots.** For every `teams.botPairs[]` entry, provision its primary `bot` bound to
+`identity` and its `peerBot` bound to `peerIdentity`, each with a Teams channel.
+Repeat the commands below for each registration; do not reuse participant
+identities between pairs. All pairs share the existing Teams worker and callback:
 
 ```sh
-az bot create --name <access.bot name> --resource-group $RG --app-type UserAssignedMSI \
+az bot create --name <pair.bot or pair.peerBot> --resource-group $RG --app-type UserAssignedMSI \
   --appid <identity clientId> --msi-resource-id <identity resource ID> \
   --tenant-id <tenants[].tenantId> --sku F0 --location global
 
 # Only when scheduled-meeting is selected, the calling callback URL (from npm run setup:ids):
-az bot msteams create --name <access.bot name> --resource-group $RG \
+az bot msteams create --name <pair.bot or pair.peerBot> --resource-group $RG \
   --enable-calling --calling-web-hook "https://<teams worker appName>.<environment default domain>/api/calls"
 ```
 
@@ -283,14 +285,15 @@ Exchange/OneDrive user groups do not grant Teams membership.
 
 **Teams app.** The project's app template lives in
 [`synthetic-tests/setup/teams-app/`](../synthetic-tests/setup/teams-app/) (`manifest.json`
-with `{{placeholders}}`, plus the two icons). Fill in `version`, `appId` (reuse the existing
+with `{{placeholders}}`, plus the two icons). Create a separate package for **each
+pair's primary bot**, using a unique app ID. Fill in `version`, `appId` (reuse the existing
 app's `externalId` when updating it, otherwise the bot's client ID), `botId` (the bot's
 client ID), `calling` (`true`/`false`), `host` (`<teams worker appName>.<environment default
 domain>`) and `readbackClientId`, then zip the three files and, as a Teams administrator:
 
-1. Teams admin center > Teams apps > Manage apps > upload the package (or update the
-   existing "M365 Synthetic Bot").
-2. Teams > the team > Manage team > Apps > add or update "M365 Synthetic Bot" (it asks to
+1. Teams admin center > Teams apps > Manage apps > upload each primary bot's package
+   (or update that same app).
+2. Teams > each selected team > Manage team > Apps > add or update each primary app (it asks to
    consent to `ChannelMessage.Read.Group` for that team only).
 
 **Fixing a stale app after the bot is recreated.** The installed Teams app is a
@@ -301,8 +304,8 @@ messages start failing at the `post-message` step with `diagnosticCategory:
 "permission-failure"` / `httpStatus: 403` even though the app still shows as
 installed. To fix it:
 
-1. Run `npm run setup:ids` to regenerate the package with the current bot's client ID
-   (bump `version` first if you edited the template manually instead).
+1. Run `npm run setup:ids` to refresh the affected pair's client-ID bindings. Update
+   the package's bot ID yourself and bump its version; the command does not create packages.
 2. Re-upload it and re-add it to the team as in the two steps above.
 3. If Teams creates a separate "M365 Synthetic Bot" entry instead of updating the
    existing one in place (happens when the new package's `id` doesn't match the

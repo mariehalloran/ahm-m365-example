@@ -33,7 +33,7 @@ For dated live acceptance, see [deployment status](../../docs/deployment.md#depl
 
 Everything comes from the single root [monitoring.config.json](../../monitoring.config.json):
 the [`deployment` section](../../docs/deployment.md#the-deployment-section) and each
-service's `worker` and `access` blocks under `tenants[]`. There is no parameters file
+service's `worker`, optional `access` and Teams `botPairs` blocks under `tenants[]`. There is no parameters file
 to prepare; `npm run deploy` hands the whole normalized config to this template as
 `projectConfig`, with names expanded to full resource IDs, defaults applied and the
 `.env` IDs filled in ([what the config holds](../../docs/deployment.md#what-the-config-holds)).
@@ -46,20 +46,20 @@ It holds names and a few IDs, never private keys or user tokens.
 | `identityClientId` | Optional; must match the existing `identity`'s client ID |
 | `cpu`, `memory` | Default 0.25 and `0.5Gi`; memory in Gi must equal twice the CPU |
 
-For selected live Teams meeting calling, the Teams service `access` block must name
-`peerIdentity`, the **existing approved** peer UAMI, plus `bot` and `peerBot`, the two
-existing bot registrations; deployment checks them before changing anything. The peer's
-client ID comes from `.env`, where `npm run setup:ids` looks it up from `peerIdentity`, and
-every call target's `peerBotClientId` (which defaults to it) must match. The worker template
-attaches that identity alongside the unchanged primary reporting/image-pull UAMI and
-supplies `TEAMS_CALLING_PEER_CLIENT_ID`; non-Teams, simulation and calling-disabled
-workers receive neither. It creates no peer, Azure Bot or Graph grants. Both bots
-require separately approved `Calls.JoinGroupCall.All` and the same `/api/calls`
+For live Teams, every `botPairs[]` entry names its existing `bot`, `identity`,
+`peerBot` and `peerIdentity`; deployment verifies the actual registration/UAMI
+bindings before changes. `npm run setup:ids` writes both pair client IDs to `.env`.
+The worker template attaches all selected participant identities alongside the
+unchanged reporting/image-pull identity. Runtime selects the correct clients for
+each pair/target attempt; it creates no peer, Azure Bot or Graph grants.
+For meeting calling, both identities in each pair require separately approved
+`Calls.JoinGroupCall.All` and every bot shares the same `/api/calls`
 callback (`execution.teamsCallingCallbackUrl`, which `npm run setup:ids` writes to `.env`), on existing
 port 8080 with one replica. See
 [meeting setup](../teams/README.md#two-bot-meeting-setup).
 Access grants come from [`docs/setup.md`](../../docs/setup.md), by hand; deployment itself
 only verifies and attaches those already prepared bindings.
+See [the actual infrastructure and data-flow diagrams](../../docs/architecture.md).
 
 A `live` service attempts real
 authentication/operations: incomplete setup produces observed Unhealthy
@@ -135,8 +135,9 @@ independently default to `managed-identity`. Hosted reporting uses the selected 
 UAMI and ARM audience, even when Graph uses another application identity.
 
 Teams defaults to `teamsAuthentication: bot` and
-`botAuthentication: managed-identity`. `BOT_CLIENT_ID`/`BOT_TENANT_ID` select the
-attached UAMI for Bot Connector and calling. Team-scoped Graph readback uses a
+`botAuthentication: managed-identity`. Each `botPairs` entry supplies explicit
+attached primary/peer client IDs; `BOT_TENANT_ID` fixes their tenant.
+Team-scoped Graph readback uses a
 separate Entra registration with `teamsReadbackClientId` and managed-identity
 federation. Follow the [exact identity mapping](../teams/README.md#primary-setup-unattended-bot);
 do not put the UAMI ID in the manifest's RSC `webApplicationInfo.id`.
@@ -224,13 +225,15 @@ can prevent publication and require independent detection.
 
 Each service's optional stable collector also runs an independent provider lane
 (`providerIntervalSeconds`, default 300), with no second worker/container.
-Exchange/Teams additionally support five approved beta activity functions each.
+Exchange/Teams additionally support all nine Exchange and five Teams beta functions.
 Beta collection needs `deployment.enableBetaServiceActivity: true`, which mounts
 `ENABLE_BETA_SERVICE_ACTIVITY=true`; the service's `execution.serviceActivity` still
 owns beta enablement, functions and thresholds. See the
 [direct provider report setup](../../docs/provider-monitoring.md).
 OneDrive rejects beta activity settings; its stable collector requires the approved
 provider application's consent and federation trust for the OneDrive worker UAMI.
+Every enabled selected provider source is reported on its supporting entity;
+no-data sources report Unknown without a numeric value, not a synthetic failure.
 
 Production acceptance additionally requires [worker-stall, publication-failure and
 end-to-end notification checks](../../docs/operations.md#enterprise-reliability-acceptance-gate).

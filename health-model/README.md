@@ -7,6 +7,8 @@ journeys and their business steps; there is no optional proposal catalog or
 planned-entity deployment switch.
 Bicep reads its generated JSON projection; use `npm run catalog:generate` from
 `synthetic-tests/` after changing metadata.
+See [architecture and health-model data-flow diagrams](../docs/architecture.md)
+for the distinction between synthetic evaluation and supporting provider context.
 
 ## Root health alerts
 
@@ -46,10 +48,11 @@ Every service model contains:
   direct worker reports or native observation queries. The only signal aggregation groups are your
   [Exchange/OneDrive user groups](../docs/monitoring-groups.md), on their journey entities.
 
-The supporting entity receives available stable overview and issue-count signals,
-plus enabled beta activity signals, ungrouped: up to seven for Exchange and Teams
-(two stable and five beta), and up to two for OneDrive, which has no approved beta
-endpoint. Disabled or unavailable sources do not get placeholder signals.
+The supporting entity receives stable overview and issue-count signals plus
+enabled beta activity signals, ungrouped: up to eleven for Exchange (two stable
+and nine beta), seven for Teams (two stable and five beta), and two for OneDrive,
+which has no beta endpoint in the referenced Graph resource. Unavailable enabled
+sources report Unknown without a numeric value; disabled sources are not reported.
 There are **no per-API child entities or relationships**.
 Provider context never supplies synthetic samples or Experience health.
 
@@ -225,20 +228,21 @@ overview ID `OneDriveForBusiness`; it is **not** the `SharePoint Online` service
 The collector uses the list endpoints, never an individual overview lookup;
 the individual-ID endpoint returned 403 in the earlier hosted trial.
 OneDrive issues are filtered by exact `Microsoft OneDrive` service name. Denied
-or missing OneDrive data produces no health report; no beta permission or invented OneDrive
+or missing OneDrive data reports Unknown without a value; no beta permission or invented OneDrive
 activity call is introduced.
 
-Ingestion of usable observations creates these external signals on the existing
-supporting entity; configuration alone does not make them appear. They are not
+The first provider cycle ingests every selected signal on the existing supporting
+entity, including an explicit Unknown report when no observation is available.
+Configuration alone does not make them appear. They are not
 grouped, and the template writes no read-only external signal definitions. Each
 report retains its source and API version in `additionalContext`, so stable status
 stays distinct from beta activity.
 
 Only approved stable status mappings are automatic: operational 100/Healthy,
 degradation 50/Degraded, interruption 0/Unhealthy. Missing, denied, malformed,
-unknown or stale data produces no report, not even an Unknown placeholder or a
-fallback 50. Collection failures remain diagnostic; any previous report ages out
-at its configured TTL rather than being refreshed. Issues report observed counts
+unknown or stale data produces explicit Unknown without a value, not a
+fallback 50. Collection failures retain diagnostics; the Unknown report replaces
+the previous state and has the configured TTL. Issues report observed counts
 with Unknown health. Beta functions report the latest fresh bucket;
 counts/percentages remain diagnostic unless explicit customer thresholds apply.
 The supporting entity itself is `impact: Suppressed` and has no provider-child

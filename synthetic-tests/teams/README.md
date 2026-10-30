@@ -9,6 +9,7 @@ ingestion; see [deployment evidence](../../docs/deployment.md#deployment-status-
 Channel `targets[]` and meeting `callTargets[]` are ungrouped arrays. User groups
 apply only to Exchange and OneDrive; Teams publishes its journey, step and
 call-phase reports without user-group signals or telemetry labels.
+For resource and reporting diagrams, see [architecture](../../docs/architecture.md).
 
 ## Journeys and evidence
 
@@ -28,7 +29,11 @@ There is no separate reply journey, P2P media implementation, file-sharing
 workflow, Adaptive Card interaction or always-failing capability assertion.
 
 The checked-in Teams lane starts immediately and recurs every 120 seconds.
-Every selected channel target or meeting target runs its enabled journey.
+Every configured `botPairs` entry runs the enabled journey against **every**
+selected channel or meeting target. The checked-in two pairs therefore produce
+four channel attempts and two meeting attempts per lane, without extra workers.
+Channel attempts use that pair's primary; meeting attempts use both identities.
+Attempt IDs are `<pair-id>--<target-id>` and logs include `Dimensions.botPairId`.
 Execution is concurrent up to `execution.maxConcurrentProbes` per lane (default 3),
 with sequential business steps and independent results:
 
@@ -55,9 +60,12 @@ readback application (step 2 below) — administrators create that outside this 
 Keep the root foundation mode `"existing"`; missing bare-name foundation resources can
 still be created.
 
-1. Name the approved same-tenant worker UAMI in `worker.identity` and Azure Bot in
-   `access.bot`; [`docs/setup.md`](../../docs/setup.md) creates missing named resources,
-   binds the bot as `UserAssignedMSI` and enables its Teams channel.
+1. Name the approved same-tenant worker UAMI in `worker.identity`. In each
+   `botPairs[]` entry, name its `id`, primary `bot` and `identity`, and `peerBot`
+   and `peerIdentity`. Provision two distinct UAMIs and `UserAssignedMSI` Azure Bot
+   registrations for each pair, following [setup](../../docs/setup.md#6-teams-bots-team-and-channel-app).
+   The worker identity may also be the first pair's primary, but pairs cannot share
+   a bot registration or participant identity.
 2. Supply a separate existing same-tenant Entra application for Graph readback.
    In the generated Teams manifest, `webApplicationInfo.id` is **that application's client ID**;
    `bots[].botId` is the bot UAMI's client ID. Request only installed-team
@@ -69,7 +77,8 @@ still be created.
    Set `execution.teamsReadbackClientId` to the readback application's client ID.
 4. Keep `teamsAuthentication: "bot"`, `botAuthentication: "managed-identity"` and
    `graphAuthentication: "managed-identity"` in `execution`. Hosting supplies explicit
-   `BOT_CLIENT_ID`, `BOT_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`.
+   `BOT_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`; the root snapshot
+   supplies each pair's generated client IDs.
    The bot/observer/target tenants must match. No certificate/user/CLI fallback
    is attempted.
 5. Configure `tenants[].services.teams.targets[]` with `id`, `teamId` and
@@ -106,18 +115,17 @@ uses the tenant's `providerClientId`.
    organizer's user principal name. `npm run setup:ids` looks up that user's ID into `.env`
    (`<TENANT>__<CALLTARGET>__ORGANIZER_USER_ID`, filled in as `organizerUserId`); only
    that command reads `organizer`. The organizer is ownership metadata, not a synthetic
-   participant. `tenantId` defaults to the tenant's and `peerBotClientId` to the peer
-   bot's client ID.
-4. Name the approved peer's UAMI in `access.peerIdentity` and the two bot registrations
-   in `access.bot` and `access.peerBot` (a bare name in the health model's resource
+   participant. `tenantId` defaults to the tenant's; the runtime selects
+   `peerBotClientId` from the current pair, not from the meeting target.
+4. Name each pair's two UAMIs and bot registrations in `botPairs[]` (a bare name in the health model's resource
    group, or a full `/subscriptions/...` resource ID elsewhere:
    [names](../../docs/deployment.md#what-the-config-holds)). `npm run setup:ids` looks up
-   the peer's client ID with `az identity show` into `.env`
-   (`<TENANT>__TEAMS__BOT_PEER_CLIENT_ID`, filled in as `access.botPeerClientId`).
-   [`docs/setup.md`](../../docs/setup.md) creates the named peer identity/bot and grants
-   calling access, by hand; the worker template only attaches the existing UAMI.
-   `TEAMS_CALLING_PEER_CLIENT_ID` must match every selected call target's peer.
-5. Register both bots' calling channels against the same public HTTPS `/api/calls`
+   both client IDs with `az identity show` into `.env`:
+   `<TENANT>__<PAIR_ID>__BOT_CLIENT_ID` and `...__BOT_PEER_CLIENT_ID`.
+   The worker attaches all selected participant identities and selects clients per
+   attempt. It never grants Graph access. Install each primary bot's own Teams app
+   package in every selected team; existing readback federation remains shared.
+5. Register every bot's calling channel against the same public HTTPS `/api/calls`
    callback on the existing Teams app:
    `https://<Teams worker appName>.<environment default domain>/api/calls`.
    `npm run setup:ids` finds the named environment, reads its default domain
@@ -125,6 +133,8 @@ uses the tenant's `providerClientId`.
    (`<TENANT>__TEAMS__CALLING_CALLBACK_URL`, filled in as
    `execution.teamsCallingCallbackUrl`); the port is 8080. Only selected live scheduled
    meetings enable public ingress; `/healthz` is static readiness, not journey progress.
+   Callback verification accepts only the configured primary/peer audience IDs
+   and the configured tenant; it does not accept arbitrary bot identities.
 6. Both legs share the default 20-second establishment/roster budget, with concurrent
    state and roster checks. The probe timeout must allow that budget plus five
    seconds for requests. Both owned calls get independent bounded departure attempts
@@ -139,10 +149,14 @@ application, the team and the meeting (other `execution` settings omitted):
 "teams": {
   "execution": { "teamsReadbackClientId": "<readback application client ID>" },
   "worker": { "appName": "m365-ctbcoa-teams", "identity": "uami-m365-experience-consto-teams" },
-  "access": {
-    "bot": "bot-m365-consto", "peerBot": "ahm-m365-consto-peer",
-    "peerIdentity": "uami-m365-experience-consto-teams-peer"
-  },
+  "botPairs": [
+    { "id": "teams-pair-001", "bot": "bot-m365-consto",
+      "identity": "uami-m365-experience-consto-teams",
+      "peerBot": "ahm-m365-consto-peer", "peerIdentity": "uami-m365-experience-consto-teams-peer" },
+    { "id": "teams-pair-002", "bot": "bot-m365-consto-002",
+      "identity": "uami-m365-consto-teams-002",
+      "peerBot": "bot-m365-consto-peer-002", "peerIdentity": "uami-m365-consto-teams-peer-002" }
+  ],
   "targets": [{ "id": "teams-probe-001", "teamId": "<team ID>", "channelName": "General" }],
   "callTargets": [{
     "id": "teams-bot-meeting-001", "meetingThreadId": "19:meeting_...@thread.v2",
@@ -150,6 +164,11 @@ application, the team and the meeting (other `execution` settings omitted):
   }]
 }
 ```
+
+Pair IDs are unique lowercase slugs of at most 30 characters. Combined
+`<pair-id>--<target-id>` IDs must fit 80 characters, and each journey's pair/target
+product is limited to 1,000 attempts. Size lane concurrency/budgets before scaling;
+the limit is not a guarantee of completing 1,000 attempts every two minutes.
 
 Join bodies include the configured tenant both at top level and at
 `meetingInfo.organizer.user.tenantId`. Every owned call is checked against the
@@ -207,7 +226,8 @@ and `ENABLE_BETA_SERVICE_ACTIVITY=true` (the hosted gate is
 and, for beta activity, `ServiceActivity-Teams.Read.All`. Stable reports and dynamic
 `microsoft-activity-*` signals share the single suppressed `teams-service-health`
 entity; they never change synthetic success or the Experience rollup. Counts and
-unthresholded activity values are diagnostic; unavailable sources are not ingested.
+unthresholded activity values are diagnostic. All five selected Teams functions
+report each provider cycle; unavailable sources report Unknown without a value.
 Tenant audio-stream activity context is not per-bot call quality. See
 [provider monitoring](../../docs/provider-monitoring.md).
 

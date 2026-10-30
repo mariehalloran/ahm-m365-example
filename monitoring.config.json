@@ -56,7 +56,11 @@
               "getMessageVolumeMetricsForEmailDelivery",
               "getActiveUserMetricsForOutlookWebByReadEmail",
               "getActiveUserMetricsForOutlookWebByAppOpening",
-              "getActiveUserMetricsForEmailByModernAuthentication"
+              "getActiveUserMetricsForEmailByModernAuthentication",
+              "getActiveUserMetricsForDesktopMailByReadEmail",
+              "getActiveUserMetricsForOutlookMobileByReadEmail",
+              "getActiveUserMetricsForOutlookMacByReadEmail",
+              "getActiveUserMetricsForiOSOrAndroidMailByReadEmail"
             ]
           }
         },
@@ -87,6 +91,16 @@
         "execution": {
           "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 45, "cohort": "teams-global",
           "serviceHealth": true,
+          "serviceActivity": {
+            "enabled": true,
+            "functions": [
+              "getUsageMetricsForTeamsByMeetingsJoined",
+              "getUsageMetricsForTeamsByLaunch",
+              "getMessageVolumeMetricsForTeamsChat",
+              "getAudioStreamQoEMetricsForTeams",
+              "getAudioStreamsOverUdpMetricsForTeams"
+            ]
+          },
           "teamsCleanupEnabled": false,
           "teamsReadbackClientId": "417d47e9-6ef3-40de-a8af-ac15b5438d54",
           "executionLanes": [

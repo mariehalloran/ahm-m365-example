@@ -38,7 +38,7 @@ Each existing service container has an **independent provider lane**. It does no
 }
 ```
 
-The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects 1–5 unique functions for that service; omitting it selects all five approved functions. Beta remains **disabled by default**; enable it per service.
+The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects unique functions for that service: up to nine for Exchange or five for Teams. Omitting it selects every supported function for that service. Beta remains **disabled by default**; enable it per service. The checked-in configuration explicitly enables all nine Exchange and five Teams functions.
 
 For **OneDrive**, set `serviceHealth: true` and keep `serviceActivity.enabled: false`, with no beta `functions` or `thresholds`. The tenant's `providerClientId` is inherited here too and selects the existing read-only provider app; it does not add Graph permissions. Its provider lane is also 300 seconds.
 
@@ -58,7 +58,7 @@ Stable `GET https://graph.microsoft.com/v1.0/admin/serviceAnnouncement/healthOve
 
 | Product | Stable service selection | Single destination | Approved beta functions |
 | --- | --- | --- | ---: |
-| Exchange | `Exchange Online` | `exchange-service-health` | 5 |
+| Exchange | `Exchange Online` | `exchange-service-health` | 9 |
 | Teams | `Microsoft Teams` | `teams-service-health` | 5 |
 | OneDrive | `Microsoft OneDrive`, overview ID `OneDriveForBusiness` | `onedrive-service-health` | 0 |
 
@@ -73,6 +73,10 @@ All activity endpoints are GETs beneath `https://graph.microsoft.com/beta/report
 | Exchange | `getActiveUserMetricsForOutlookWebByReadEmail` | Active-user successful read count for Outlook web, not all mail clients |
 | Exchange | `getActiveUserMetricsForOutlookWebByAppOpening` | Active-user web-app opening count, not an app-opening success rate |
 | Exchange | `getActiveUserMetricsForEmailByModernAuthentication` | Active-user modern-authentication count, not individual sign-in events |
+| Exchange | `getActiveUserMetricsForDesktopMailByReadEmail` | Active-user successful read count for desktop mail clients, not a read success rate |
+| Exchange | `getActiveUserMetricsForOutlookMobileByReadEmail` | Active-user successful read count for Outlook mobile |
+| Exchange | `getActiveUserMetricsForOutlookMacByReadEmail` | Active-user successful read count for Outlook for Mac |
+| Exchange | `getActiveUserMetricsForiOSOrAndroidMailByReadEmail` | Active-user successful read count for iOS/Android mail apps |
 | Teams | `getUsageMetricsForTeamsByMeetingsJoined` | Successful meeting join count; no failure/total denominator |
 | Teams | `getUsageMetricsForTeamsByLaunch` | Successful Teams launch count; no failure/total denominator |
 | Teams | `getMessageVolumeMetricsForTeamsChat` | Successfully sent/delivered chat count, not synthetic message success |
@@ -87,6 +91,11 @@ getConnectivityMetricsForExchange(inclusiveIntervalStartDateTime=2026-10-26T12:0
 
 Aggregation is 5/10/15/30 minutes; lookback must be an integer multiple, at most 1,440 minutes. Requests end at the current completed UTC aggregation boundary, stay within 30-day Graph retention, and never request future buckets. Polling every 300 seconds does **not** mean source data is five minutes fresh.
 
+This is the complete Exchange/Teams inventory in the
+[Microsoft Graph serviceActivity resource](https://learn.microsoft.com/en-us/graph/api/resources/serviceactivity?view=graph-rest-beta).
+Its Microsoft 365 Apps and Entra methods are different products, not OneDrive
+signals; they are outside this project's selected service scope.
+
 ## Direct reports and unavailable data
 
 Only approved stable categorical mappings are automatic:
@@ -96,19 +105,28 @@ Only approved stable categorical mappings are automatic:
 | `serviceOperational` | 100 / Healthy |
 | `serviceDegradation` | 50 / Degraded |
 | `serviceInterruption` | 0 / Unhealthy |
-| Missing, failed, unrecognized/investigation/recovery states | No health report |
+| Missing, failed, unrecognized/investigation/recovery states | Unknown, with no numeric value |
 
-Authentication or permission failures and unavailable observations produce **no health report**, including no Unknown placeholder. Collection failures remain console diagnostics. Successfully retrieved supported statuses are converted to the availability scores above; these are categorical mappings, not measured availability percentages.
+Every enabled selected source produces a report on each provider cycle, even
+when it has no usable data. Authentication/permission failures, empty results,
+invalid or stale observations produce **explicit Unknown with no numeric value**.
+This keeps the signal visible and replaces any prior state without fabricating a
+zero, a success or a fallback availability score. Failure categories and HTTP
+statuses remain in sanitized report context and console diagnostics.
+Successfully retrieved supported statuses use the categorical scores above,
+not measured availability percentages.
 
-Issue history is bounded diagnostic context, not an independent availability score. A successful complete snapshot emits an `issue-summary` diagnostic, including an empty snapshot as count zero; `microsoft-reported-issue-count` reports that count on the same supporting entity with Unknown health and no evaluation rules. Failed/incomplete/missing snapshots produce no report, never zero issues. Old incident update times are not the collection freshness of an overview.
+Issue history is bounded diagnostic context, not an independent availability score. A successful complete snapshot emits an `issue-summary` diagnostic, including an empty snapshot as count zero; `microsoft-reported-issue-count` reports that count on the same supporting entity with Unknown health and no evaluation rules. Failed/incomplete/missing snapshots report Unknown without a value, never zero issues. Old incident update times are not the collection freshness of an overview.
 
-Every enabled selected function with usable data produces `microsoft-activity-<function>` on **`${service}-service-health`**, alongside available `microsoft-reported-service-status` and `microsoft-reported-issue-count` reports. Signal names remain distinct and unchanged; only destinations are consolidated. With more than one tenant in the config each is published as `tenant-<tenant id>--<name>`, one set per tenant on the shared entity; with one tenant the names stay plain. Without a threshold an activity signal reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic score. A disabled or unselected function simply receives no new reports; OneDrive has only its two stable signals.
+Every enabled selected function produces `microsoft-activity-<function>` on **`${service}-service-health`**, alongside the selected `microsoft-reported-service-status` and `microsoft-reported-issue-count` reports, whether data is available or not. Signal names remain distinct and unchanged. With more than one tenant in the config each is published as `tenant-<tenant id>--<name>`, one set per tenant on the shared entity; with one tenant the names stay plain. Without a threshold an activity signal reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic score. A disabled or unselected function receives no new reports; OneDrive has only its two stable signals.
 
 The signals are plain external signals on the one supporting entity: no aggregation group, child-entity graph or writable external-signal declaration is created for them. Per-signal health and source diagnostics remain authoritative for missing data. `additionalContext.source` and `apiVersion` distinguish each stable endpoint/beta function on the shared entity; the supporting entity remains suppressed.
+ARM can return external signal names in lowercase. Compare those names
+case-insensitively; `additionalContext.source` retains the exact Graph function name.
 
-Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Available diagnostic measurements with Unknown health also retain unit context; missing observations are not published. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#direct-report-units-platform-limitation) and [ordered migration with exact retired IDs and model inventory](../health-model/README.md#consolidating-service-health-ordered-handoff). All old worker revisions must be inactive before final child/relationship pruning.
+Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Both numeric diagnostic measurements and missing-data Unknown reports retain unit context. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#external-report-units-and-definitions) and [ordered migration with exact retired IDs and model inventory](../health-model/README.md#consolidating-service-health-ordered-handoff). All old worker revisions must be inactive before final child/relationship pruning.
 
-Select the **latest complete bucket**, not an average/sum of overlapping history. Missing/invalid/duplicate/future/out-of-window data, failed source collection, or bucket age exceeding `maxAgeMinutes` produces **no health report**. Failure categories and HTTP statuses, such as 403, remain console diagnostics. A previously published report is not refreshed and remains visible until its configured TTL expires; omission does not immediately delete it. The default maximum age is 60 minutes and is configurable independently of cadence. QoE/UDP interpretations remain explicit in report context even with customer thresholds.
+Select the **latest complete bucket**, not an average/sum of overlapping history. Missing/invalid/duplicate/future/out-of-window data, failed source collection, or bucket age exceeding `maxAgeMinutes` produces **Unknown without a value** on that cycle. Failure categories and HTTP statuses, such as 403, remain console diagnostics and report context. The default maximum age is 60 minutes and is configurable independently of cadence. QoE/UDP interpretations remain explicit in report context even with customer thresholds. No missing-data report changes synthetic attempt success or Experience rollup.
 
 Each source has a 30-second cancellation budget, five exact-origin/version/path pages and a 2 MB/page cap; malformed/partial snapshots fail the source. A rejected source does not kill siblings. Provider lane slots never overlap and missed slots are logged. Simulation emits skipped source diagnostics, never provider status. Console diagnostics always accompany direct provider reporting in either Log Analytics mode.
 
