@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AzureCliCredential } from "@azure/identity";
 import { BlockBlobClient } from "@azure/storage-blob";
@@ -58,6 +58,23 @@ async function local(
   });
 }
 
+// Archive contents must be readable by the Linux Function user without exposing the private staging root.
+async function makeFunctionPackageReadable(directory: string): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      await makeFunctionPackageReadable(path);
+      await chmod(path, 0o755);
+    } else if (entry.isFile()) {
+      const { mode } = await stat(path);
+      await chmod(path, mode & 0o111 ? 0o755 : 0o644);
+    } else {
+      throw new ConfigurationError(`Unsupported file in ingestion Function package: ${path}`);
+    }
+  }
+}
+
 export async function deployIngestionFunction(run: DeploymentRun): Promise<void> {
   const settings = run.prepared.document.logAnalytics;
   if (!settings.enabled) throw new ConfigurationError("The ingestion Function requires logAnalytics.enabled");
@@ -77,6 +94,8 @@ export async function deployIngestionFunction(run: DeploymentRun): Promise<void>
     await cp(join(nodeProjectDirectory, "dist"), join(directory, "dist"), { recursive: true });
     await cp(join(nodeProjectDirectory, "ingestion/host.json"), join(directory, "host.json"));
     await local(run, "npm", "package-ingestion-dependencies", ["ci", "--omit=dev", "--ignore-scripts"], directory);
+    run.phase = "package-ingestion-function";
+    await makeFunctionPackageReadable(directory);
     await local(run, "zip", "package-ingestion-function", ["-q", "-r", zip, "."], directory);
     await az(run, "deploy-ingestion-function", [
       "functionapp", "deployment", "source", "config-zip",

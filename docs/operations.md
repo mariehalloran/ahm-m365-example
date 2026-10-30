@@ -120,6 +120,15 @@ and `service-cycle-failed`. The Function logs `observations-ingested`,
 `observation-ingestion-failed` and `observations-quarantined`. API acceptance does
 not prove model propagation or notification delivery.
 
+If all services stop ingesting while Event Hubs incoming messages continue but
+outgoing messages stop, check the Function host logs and indexed functions, not
+just its Running state. An `EACCES` entry-point error indicates unreadable package
+contents. The packager normalizes archive directories to `0755`, files to `0644`
+and executables to `0755`, keeping the local staging root private (`0700`).
+Redeploy the repaired Function package without resetting the consumer group or
+checkpoints, then verify fresh `ingestion_time()` values in `M365Synthetic_CL`
+and model queries returning data.
+
 Initialization failures retain journey diagnostics when Azure publication is
 usable; cancellations are Unknown, while genuine authentication/configuration
 failures remain failed. Unexecuted steps are not invented. Workers retry on their
