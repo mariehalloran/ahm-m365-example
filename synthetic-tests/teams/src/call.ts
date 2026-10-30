@@ -15,12 +15,12 @@ import {
   waitForAnswer,
 } from "./call-steps.js";
 import { teamsCallingCallbackUrlSchema } from "../../utils/src/config.js";
-import type { GraphClient } from "../../utils/src/graph.js";
+import type { GraphOperations } from "../../utils/src/graph.js";
 import { z } from "zod";
 
 export interface ConnectedTeamsCall {
-  primary: { graph: GraphClient; id: string };
-  peer: { graph: GraphClient; id: string };
+  primary: { graph: GraphOperations; id: string };
+  peer: { graph: GraphOperations; id: string };
   signal: AbortSignal;
   deadline: number;
   verifyConnected: (signal: AbortSignal) => Promise<void>;
@@ -30,7 +30,7 @@ export type TeamsCallConnectedHook = (
 ) => Promise<void>;
 
 export const createTeamsCallProbe =
-  (onConnected?: TeamsCallConnectedHook): ProbeHandler =>
+  (onConnected?: TeamsCallConnectedHook): ProbeHandler<"teams-call"> =>
   async (probe, context) => {
     const { config, signal, telemetry, now = Date.now } = context;
     const startedAt = now();
@@ -43,7 +43,7 @@ export const createTeamsCallProbe =
     result.call = { resultCodes: [] };
     const legs: {
       name: "primary" | "peer";
-      graph: GraphClient | undefined;
+      graph: GraphOperations | undefined;
       id?: string;
       established: boolean;
       disconnected: boolean;
@@ -138,12 +138,7 @@ export const createTeamsCallProbe =
           if (
             legs.some((leg) => !leg.graph) ||
             legs[0]!.graph === legs[1]!.graph ||
-            !probe.tenantId ||
-            !probe.meetingThreadId ||
-            !probe.organizerUserId ||
-            !probe.peerBotClientId ||
             "callUserId" in probe ||
-            !probe.botClientId ||
             probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase() ||
             !teamsCallingCallbackUrlSchema.safeParse(
               config.TEAMS_CALLING_CALLBACK_URL,
@@ -268,9 +263,9 @@ export const createTeamsCallProbe =
                 leg.graph!,
                 leg.id!,
                 {
-                  threadId: probe.meetingThreadId!,
-                  organizerUserId: probe.organizerUserId!,
-                  tenantId: probe.tenantId!,
+                  threadId: probe.meetingThreadId,
+                  organizerUserId: probe.organizerUserId,
+                  tenantId: probe.tenantId,
                 },
                 executionSignal,
               ),
@@ -296,7 +291,7 @@ export const createTeamsCallProbe =
               await verifyParticipants(
                 leg.graph!,
                 leg.id!,
-                [probe.botClientId!, probe.peerBotClientId!],
+                [probe.botClientId, probe.peerBotClientId],
                 executionSignal,
                 joinDeadline,
                 interval,

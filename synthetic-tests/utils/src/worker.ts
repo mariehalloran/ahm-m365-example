@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { ConfigurationError, type Config } from "./config.js";
+import { ConfigurationError, filterRuntimeProbes, type Config } from "./config.js";
 import { consoleTelemetry, probeServices, resultSchema, type Probe, type Telemetry } from "./contracts.js";
 import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { baseResult, type ProbeHandler } from "./probes.js";
@@ -297,7 +297,8 @@ export async function runServiceWorker(raw: ServiceConfig, options: WorkerOption
           });
         const laneInitialization = initialization.then(value => ({
           ...value, config: {
-            ...value.config, probes: laneProbes, PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000,
+            ...filterRuntimeProbes(value.config, probe => lane.journeys.includes(probeServices[probe.type].journey)),
+            PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000,
             ...(minuteBudgetMs === undefined ? {} : {
               CYCLE_TIMEOUT_MS: Math.max(1, Math.min(30000, minuteBudgetMs - EXCHANGE_COMPLETION_BUDGET_MS)),
             }),

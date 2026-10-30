@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createLiveGraphClient } from "../../utils/src/auth.js";
 import { bindingKey, bindingsFile, saveBindings } from "../../utils/src/bindings.js";
-import { ConfigurationError } from "../../utils/src/config.js";
+import { ConfigurationError, filterRuntimeProbes } from "../../utils/src/config.js";
 import { exchangeJourneyMilliseconds, type Telemetry } from "../../utils/src/contracts.js";
 import { executionLanes } from "../../utils/src/execution-lanes.js";
 import { categoryOf, IntegrationError } from "../../utils/src/http.js";
@@ -14,6 +14,7 @@ import { runCycle } from "../../utils/src/runner.js";
 import { serviceEnvironment, validateProjectTenantBinding, validateRuntimeConsent } from "../../utils/src/runtime.js";
 import { canonicalProjectFile } from "../../utils/src/paths.js";
 import { serviceSettings } from "../../utils/src/service-config.js";
+import { dispatchProbeHandlers } from "../../utils/src/probes.js";
 import { exchangeAttachmentProbe, exchangeReplyProbe } from "./extended-journeys.js";
 import { provisionReplySeed, type ReplySeedGraph, type ReplySeedOptions } from "./reply-seed.js";
 
@@ -91,11 +92,12 @@ export async function main(argv: string[]) {
     if (!values["setup-only"]) {
       const config = serviceSettings(service, env, selected.scenarios);
       const lanes = executionLanes(service);
-      const handlers = { "exchange-attachment": exchangeAttachmentProbe, "exchange-reply": exchangeReplyProbe };
+      const handler = dispatchProbeHandlers({
+        "exchange-attachment": exchangeAttachmentProbe, "exchange-reply": exchangeReplyProbe,
+      });
       const results = createResultOutput(telemetry);
       for (let sample = 1; sample <= samples; sample++) {
         for (const type of ["exchange-attachment", "exchange-reply"] as const) {
-          const handler = handlers[type];
           const journey = type === "exchange-attachment" ? "attachment-mail" : "reply-mail";
           if (!selected.scenarios[journey]) continue;
           // The deadline the worker applies: the journey's lane timeout, never above the journey's own cap.
@@ -108,7 +110,8 @@ export async function main(argv: string[]) {
               telemetry.emit("exchange-mail-test-skipped", { targetId: target.id, journey, sample, reason: "seed-setup-failed" });
               continue;
             }
-            const cycle = await runCycle({ ...config, PROBE_TIMEOUT_MS: deadlineMs, probes: [{ ...target, cohort: service.cohort, type }] }, {
+            const selectedConfig = filterRuntimeProbes(config, probe => probe.type === type && probe.id === target.id);
+            const cycle = await runCycle({ ...selectedConfig, PROBE_TIMEOUT_MS: deadlineMs }, {
               graph, handler, telemetry, results,
             }, controller.signal);
             const result = cycle.results[0]!;

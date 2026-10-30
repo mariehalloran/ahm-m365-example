@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { GraphClient } from "../../utils/src/graph.js";
+import type { GraphOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import { messageSelect, messagesSchema, ownedMessage } from "./mail-safety.js";
 
@@ -28,13 +28,13 @@ function paths(attempt: MailAttempt) {
   };
 }
 
-export async function authenticate(graph: GraphClient | undefined, signal: AbortSignal): Promise<GraphClient> {
+export async function authenticate(graph: GraphOperations | undefined, signal: AbortSignal): Promise<GraphOperations> {
   if (!graph) throw new IntegrationError("collector-failure");
   await graph.authenticate(signal);
   return graph;
 }
 
-export async function createDraft(graph: GraphClient, attempt: MailAttempt, signal: AbortSignal, attachment?: string): Promise<string> {
+export async function createDraft(graph: GraphOperations, attempt: MailAttempt, signal: AbortSignal, attachment?: string): Promise<string> {
   signal.throwIfAborted();
   attempt.mutationAttempted = true;
   const draft = await graph.json(paths(attempt).messages, messageSchema, signal, "POST", {
@@ -50,12 +50,12 @@ export async function createDraft(graph: GraphClient, attempt: MailAttempt, sign
   return draft.id;
 }
 
-export async function sendMessage(graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal): Promise<void> {
+export async function sendMessage(graph: GraphOperations, attempt: MailAttempt, draftId: string, signal: AbortSignal): Promise<void> {
   await graph.request(`${paths(attempt).messages}/${encodeURIComponent(draftId)}/send`, signal, "POST", undefined, false);
 }
 
 export async function confirmDelivery(
-  graph: GraphClient, attempt: MailAttempt, signal: AbortSignal,
+  graph: GraphOperations, attempt: MailAttempt, signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now,
   sleep: (ms: number, signal: AbortSignal) => Promise<void> = (ms, abort) => delay(ms, undefined, { signal: abort }),
 ): Promise<void> {
@@ -72,7 +72,7 @@ export async function confirmDelivery(
   throw new IntegrationError("delivery-timeout");
 }
 
-export async function cleanup(graph: GraphClient, attempt: MailAttempt, signal: AbortSignal): Promise<void> {
+export async function cleanup(graph: GraphOperations, attempt: MailAttempt, signal: AbortSignal): Promise<void> {
   const failures: unknown[] = [];
   const attempted = new Set<string>();
   const deleteKnown = async () => {

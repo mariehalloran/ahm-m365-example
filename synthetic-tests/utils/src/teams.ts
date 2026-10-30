@@ -5,6 +5,8 @@ const identifier = z.string().min(1).max(2048).refine(value =>
   value.trim() === value && value !== "." && value !== ".." && !/[\u0000-\u001f\u007f]/.test(value));
 const createdPostSchema = z.object({ id: identifier, activityId: identifier });
 const createdReplySchema = z.object({ id: identifier });
+export type TeamsBotOperations = Pick<TeamsBotClient,
+  "applicationId" | "authenticate" | "createChannelPost" | "replyToActivity" | "deleteMessage">;
 
 export function validateTeamsServiceUrl(value: string): string {
   // Match the original input: URL parsing alone silently removes dot segments and default ports.

@@ -1,4 +1,4 @@
-import { categoryOf, IntegrationError } from "../../utils/src/http.js";
+import { categoryOf } from "../../utils/src/http.js";
 import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
 import {
   cleanupStep,
@@ -15,12 +15,12 @@ import {
   type MailAttempt,
 } from "./steps.js";
 
-export const exchangeProbe: ProbeHandler = async (probe, context) => {
+export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, context) => {
   const { config, signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const result = baseResult(probe, startedAt);
   const attempt: MailAttempt = {
-    mailbox: probe.mailbox ?? "",
+    mailbox: probe.mailbox,
     correlationId: result.correlationId,
     ownedMessageIds: new Set(),
     mutationAttempted: false,
@@ -40,10 +40,7 @@ export const exchangeProbe: ProbeHandler = async (probe, context) => {
     const graph = await measureStep(
       result,
       "authenticate",
-      async () => {
-        if (!probe.mailbox) throw new IntegrationError("configuration-failure");
-        return authenticate(context.graph, signal);
-      },
+      () => authenticate(context.graph, signal),
       now,
       classify,
     );

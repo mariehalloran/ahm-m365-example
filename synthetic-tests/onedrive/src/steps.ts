@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Probe } from "../../utils/src/contracts.js";
-import { graphNextPagePath, type GraphClient } from "../../utils/src/graph.js";
+import type { OneDriveProbe } from "../../utils/src/resolved-probes.js";
+import { graphNextPagePath, type GraphFileOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 
 const parentSchema = z.object({ id: z.string().min(1), driveId: z.string().min(1) });
@@ -26,7 +26,7 @@ export interface Payload {
 }
 
 export interface FileAttempt {
-  probe: Probe;
+  probe: OneDriveProbe;
   correlationId: string;
   driveId: string;
   parentId: string;
@@ -46,7 +46,7 @@ export function payload(attempt: FileAttempt, revision: 1 | 2): Payload {
   const text = `OneDrive synthetic ${attempt.correlationId} revision ${revision}`;
   return {
     schemaVersion: "1.0", owner: "ahm-onedrive", targetId: attempt.probe.id,
-    userId: attempt.probe.userId!, correlationId: attempt.correlationId, revision, text, sha256: digest(text),
+    userId: attempt.probe.userId, correlationId: attempt.correlationId, revision, text, sha256: digest(text),
   };
 }
 
@@ -58,7 +58,7 @@ function validateItem(attempt: FileAttempt, item: Item, name: string, parentId: 
   return item;
 }
 
-async function getOptional(graph: GraphClient, path: string, signal: AbortSignal): Promise<Item | undefined> {
+async function getOptional(graph: GraphFileOperations, path: string, signal: AbortSignal): Promise<Item | undefined> {
   try { return await graph.json(path, itemSchema, signal); }
   catch (error) {
     if (error instanceof IntegrationError && error.status === 404) return undefined;
@@ -66,14 +66,14 @@ async function getOptional(graph: GraphClient, path: string, signal: AbortSignal
   }
 }
 
-export async function verifySelectedFolder(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+export async function verifySelectedFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
   if (!attempt.driveId || !attempt.parentId || !attempt.probe.folderName) throw new IntegrationError("configuration-failure");
   const folder = await graph.json(itemPath(attempt, attempt.parentId), itemSchema, signal);
   if (!folder.folder || folder.id !== attempt.parentId || folder.name !== attempt.probe.folderName ||
       folder.parentReference.driveId !== attempt.driveId) throw new IntegrationError("configuration-failure");
 }
 
-async function createFolder(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+async function createFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
   attempt.mutationAttempted = true;
   const folder = await graph.json(`${itemPath(attempt, attempt.parentId)}/children`, itemSchema, signal, "POST", {
     name: attempt.folderName, folder: {}, "@microsoft.graph.conflictBehavior": "fail",
@@ -81,13 +81,13 @@ async function createFolder(graph: GraphClient, attempt: FileAttempt, signal: Ab
   attempt.folderId = validateItem(attempt, folder, attempt.folderName, attempt.parentId, true).id;
 }
 
-export async function createOwnedFolder(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+export async function createOwnedFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
   await verifySelectedFolder(graph, attempt, signal);
   await createFolder(graph, attempt, signal);
 }
 
 export async function writeFile(
-  graph: GraphClient, attempt: FileAttempt, value: Payload, signal: AbortSignal, name = "probe.json",
+  graph: GraphFileOperations, attempt: FileAttempt, value: Payload, signal: AbortSignal, name = "probe.json",
 ): Promise<string> {
   if (!attempt.folderId) throw new IntegrationError("configuration-failure");
   attempt.mutationAttempted = true;
@@ -95,7 +95,7 @@ export async function writeFile(
   return validateItem(attempt, file, name, attempt.folderId, false).id;
 }
 
-export async function downloadFile(graph: GraphClient, attempt: FileAttempt, fileId: string, signal: AbortSignal): Promise<Buffer> {
+export async function downloadFile(graph: GraphFileOperations, attempt: FileAttempt, fileId: string, signal: AbortSignal): Promise<Buffer> {
   return graph.downloadContent(`${itemPath(attempt, fileId)}/content`, signal);
 }
 
@@ -103,7 +103,7 @@ export function verifyBytes(actual: Buffer, expected: Payload): void {
   if (digest(actual) !== digest(JSON.stringify(expected))) throw new IntegrationError("read-failure");
 }
 
-export async function reopenOwnedFile(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<Buffer> {
+export async function reopenOwnedFile(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<Buffer> {
   const collection = `${itemPath(attempt, attempt.folderId!)}/children`;
   let path: string | undefined = `${collection}?$top=200`;
   for (let page = 0; page < 5 && path; page++) {
@@ -119,7 +119,7 @@ export async function reopenOwnedFile(graph: GraphClient, attempt: FileAttempt, 
 }
 
 async function deleteVerified(
-  graph: GraphClient, attempt: FileAttempt, id: string, name: string, parentId: string, folder: boolean, signal: AbortSignal,
+  graph: GraphFileOperations, attempt: FileAttempt, id: string, name: string, parentId: string, folder: boolean, signal: AbortSignal,
 ): Promise<void> {
   const current = await getOptional(graph, itemPath(attempt, id), signal);
   if (!current) return;
@@ -129,7 +129,7 @@ async function deleteVerified(
   if (await getOptional(graph, itemPath(attempt, id), signal)) throw new IntegrationError("read-failure");
 }
 
-export async function deleteOwnedFolder(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+export async function deleteOwnedFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
   if (!attempt.driveId || !attempt.parentId) throw new IntegrationError("configuration-failure");
   if (!attempt.folderId) {
     const folder = await getOptional(graph, childPath(attempt, attempt.parentId, attempt.folderName), signal);
@@ -140,9 +140,9 @@ export async function deleteOwnedFolder(graph: GraphClient, attempt: FileAttempt
   attempt.mutationAttempted = false;
 }
 
-export async function openAppFolder(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
+export async function openAppFolder(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<void> {
   // AppFolder-only access need not permit reading the drive root; resolve through the approved user instead.
-  const root = await graph.json(`/users/${encoded(attempt.probe.userId!)}/drive/special/approot`,
+  const root = await graph.json(`/users/${encoded(attempt.probe.userId)}/drive/special/approot`,
     z.object({
       id: z.string().min(1), folder: z.object({}), specialFolder: z.object({ name: z.literal("approot") }),
       parentReference: z.object({ driveId: z.string().min(1) }),
@@ -153,7 +153,7 @@ export async function openAppFolder(graph: GraphClient, attempt: FileAttempt, si
   await createFolder(graph, attempt, signal);
 }
 
-export async function listVersions(graph: GraphClient, attempt: FileAttempt, signal: AbortSignal): Promise<string[]> {
+export async function listVersions(graph: GraphFileOperations, attempt: FileAttempt, signal: AbortSignal): Promise<string[]> {
   const collection = `${itemPath(attempt, attempt.fileId!)}/versions`;
   let path: string | undefined = `${collection}?$top=200`;
   const ids: string[] = [];
@@ -167,7 +167,7 @@ export async function listVersions(graph: GraphClient, attempt: FileAttempt, sig
 }
 
 export async function findPriorVersion(
-  graph: GraphClient, attempt: FileAttempt, versions: string[], expected: Payload, signal: AbortSignal,
+  graph: GraphFileOperations, attempt: FileAttempt, versions: string[], expected: Payload, signal: AbortSignal,
 ): Promise<Payload | undefined> {
   // Graph returns newest/current first; /versions/{current}/content is explicitly unsupported.
   for (const version of versions.slice(1).reverse().slice(0, 10)) {

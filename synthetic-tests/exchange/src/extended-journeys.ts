@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { Probe, StepName, SyntheticResult } from "../../utils/src/contracts.js";
-import type { GraphClient } from "../../utils/src/graph.js";
+import type { StepName, SyntheticResult } from "../../utils/src/contracts.js";
+import type { GraphOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/probes.js";
 import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
 import { authenticate, createDraft, mailMarker, sendMessage, type MailAttempt } from "./steps.js";
 import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfDraft, selfMessage } from "./mail-safety.js";
 import { readReplySeed } from "./reply-seed.js";
+import type { LiveProbeFor } from "../../utils/src/resolved-probes.js";
+
+type ExtendedJourney = "exchange-attachment" | "exchange-reply" | "exchange-recurring-calendar";
 
 const identified = z.object({ id: z.string().min(1) });
 const event = identified.extend({
@@ -24,11 +27,11 @@ const quote = (value: string) => value.replaceAll("'", "''");
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 interface Attempt {
-  probe: Probe;
+  probe: LiveProbeFor<ExtendedJourney>;
   mailbox: string;
   context: ProbeContext;
   result: SyntheticResult;
-  graph: GraphClient;
+  graph: GraphOperations;
   startedAt: number;
   now: () => number;
   subject: string;
@@ -246,12 +249,12 @@ async function clean(a: Attempt, signal: AbortSignal): Promise<void> {
   if (failures.length) throw new IntegrationError("cleanup-failure");
 }
 
-function journey(calendar: boolean, operation: (attempt: Attempt) => Promise<void>): ProbeHandler {
+function journey(calendar: boolean, operation: (attempt: Attempt) => Promise<void>): ProbeHandler<ExtendedJourney> {
   return async (probe, context) => {
     const now = context.now ?? Date.now;
     const startedAt = now();
     const result = baseResult(probe, startedAt);
-    const mailbox = probe.mailbox ?? "";
+    const mailbox = probe.mailbox;
     const a: Attempt = {
       probe, mailbox, context, result, startedAt, now, graph: context.graph!,
       subject: `AHM synthetic ${result.correlationId}`, mutated: false,
@@ -260,7 +263,6 @@ function journey(calendar: boolean, operation: (attempt: Attempt) => Promise<voi
     };
     try {
       await step(a, "authenticate", async () => {
-        if (!mailbox) throw new IntegrationError("configuration-failure");
         a.graph = await authenticate(context.graph, context.signal);
       });
       await operation(a);

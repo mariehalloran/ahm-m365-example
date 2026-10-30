@@ -4,6 +4,7 @@ import { ManagedIdentityCredential } from "@azure/identity";
 import { BlobClient } from "@azure/storage-blob";
 import { z } from "zod";
 import { probeSchema, probeServices, scenarios, serviceProbeLimits, type Probe } from "./contracts.js";
+import { liveProbeSchema, type LiveProbe } from "./resolved-probes.js";
 import { validateTeamsServiceUrl } from "./teams.js";
 import { canonicalProjectFile } from "./paths.js";
 
@@ -67,10 +68,14 @@ const runtimeSettingsSchema = z.object({
   TEAMS_CLEANUP_ENABLED: z.enum(["true", "false"]).default("true"),
   EXCHANGE_CLEANUP_ENABLED: z.enum(["true", "false"]).default("true"),
 });
-export type Config = z.infer<typeof runtimeSettingsSchema> & { probes: Probe[] };
+type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
+export type Config = Omit<RuntimeSettings, "EXECUTION_MODE"> & (
+  | { EXECUTION_MODE: "simulation"; probes: Probe[] }
+  | { EXECUTION_MODE: "live"; probes: LiveProbe[] }
+);
 
 export function createRuntimeConfig(
-  settings: Partial<Omit<Config, "probes">> & { probes: unknown },
+  settings: Partial<RuntimeSettings> & { probes: unknown },
   env: NodeJS.ProcessEnv = process.env,
 ): Config {
   if (env.TEAMS_CALLING_WAIT_SECONDS !== undefined || env.TEAMS_CALLING_RING_SECONDS !== undefined ||
@@ -99,6 +104,7 @@ export function createRuntimeConfig(
     throw new ConfigurationError("Probe IDs must be unique within each journey type");
   }
   const cohorts = new Map<string, string>();
+  const liveProbes: LiveProbe[] = [];
   for (const probe of probes) {
     const service = probeServices[probe.type].service;
     if (cohorts.has(probe.cohort) && cohorts.get(probe.cohort) !== service) {
@@ -106,20 +112,20 @@ export function createRuntimeConfig(
     }
     cohorts.set(probe.cohort, service);
     if (config.EXECUTION_MODE === "live") {
-      const hasDedicatedResources = service === "exchange"
-        ? Boolean(probe.mailbox)
-        : service === "onedrive"
-          ? Boolean(probe.userId && probe.userPrincipalName && probe.folderName)
-          : probe.type === "teams-call"
-            ? Boolean(probe.tenantId && probe.meetingThreadId && probe.organizerUserId && probe.peerBotClientId &&
-              config.TEAMS_CALLING_CALLBACK_URL)
-            : Boolean(probe.tenantId && probe.teamId && probe.channelId && probe.serviceUrl);
-      if (!hasDedicatedResources) {
+      if (probe.type === "teams-call" && !config.TEAMS_CALLING_CALLBACK_URL) {
         throw new ConfigurationError(`Missing dedicated resources for probe ${probe.id}`);
       }
-      if (service === "teams" && (!probe.botPairId || !probe.botClientId ||
-          (probe.type === "teams-call" && (!probe.peerBotClientId ||
-            probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase())))) {
+      const resolved = liveProbeSchema.safeParse(probe);
+      if (!resolved.success) {
+        const missingBotIdentity = resolved.error.issues.every(issue =>
+          issue.path[0] === "botPairId" || issue.path[0] === "botClientId");
+        if (missingBotIdentity) {
+          throw new ConfigurationError("Live Teams journeys require a named bot pair with explicit distinct managed-identity client IDs; run npm run setup:ids");
+        }
+        throw new ConfigurationError(`Missing dedicated resources for probe ${probe.id}`);
+      }
+      const live = resolved.data;
+      if (live.type === "teams-call" && live.botClientId.toLowerCase() === live.peerBotClientId.toLowerCase()) {
         throw new ConfigurationError("Live Teams journeys require a named bot pair with explicit distinct managed-identity client IDs; run npm run setup:ids");
       }
       if (probe.type === "teams-call" && config.PROBE_TIMEOUT_MS <
@@ -133,9 +139,18 @@ export function createRuntimeConfig(
           throw new ConfigurationError(`Unapproved Teams Bot Connector service URL for probe ${probe.id}`);
         }
       }
+      liveProbes.push(live);
     }
   }
-  return { ...config, probes };
+  return config.EXECUTION_MODE === "live"
+    ? { ...config, EXECUTION_MODE: "live", probes: liveProbes }
+    : { ...config, EXECUTION_MODE: "simulation", probes };
+}
+
+export function filterRuntimeProbes(config: Config, include: (probe: Probe) => boolean): Config {
+  return config.EXECUTION_MODE === "live"
+    ? { ...config, probes: config.probes.filter(include) }
+    : { ...config, probes: config.probes.filter(include) };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {

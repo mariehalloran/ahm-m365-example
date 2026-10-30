@@ -1,8 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { graphNextPagePath, type GraphClient } from "../../utils/src/graph.js";
+import { graphNextPagePath, type GraphOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
-import { validateTeamsServiceUrl, type TeamsBotClient } from "../../utils/src/teams.js";
+import { validateTeamsServiceUrl, type TeamsBotOperations } from "../../utils/src/teams.js";
 
 const identifier = z.string().min(1).max(2048);
 const messageSchema = z.object({
@@ -54,7 +54,7 @@ export function matchesMarker(body: { contentType: "text" | "html"; content: str
 }
 
 export async function findMessage(
-  graph: GraphClient, messagesPath: string, marker: string, applicationId: string,
+  graph: GraphOperations, messagesPath: string, marker: string, applicationId: string,
   signal: AbortSignal, now: () => number, deadline: number,
 ): Promise<string | undefined> {
   let path = `${messagesPath}?$top=50`;
@@ -101,8 +101,8 @@ export function channelMessagesPath(attempt: ChannelAttempt): string {
 }
 
 export async function authenticate(
-  graph: GraphClient | undefined, bot: TeamsBotClient | undefined, attempt: ChannelAttempt, signal: AbortSignal,
-): Promise<{ graph: GraphClient; bot: TeamsBotClient }> {
+  graph: GraphOperations | undefined, bot: TeamsBotOperations | undefined, attempt: ChannelAttempt, signal: AbortSignal,
+): Promise<{ graph: GraphOperations; bot: TeamsBotOperations }> {
   if (!graph || !bot || !attempt.tenantId || !attempt.teamId || !attempt.channelId) {
     throw new IntegrationError("collector-failure");
   }
@@ -114,7 +114,7 @@ export async function authenticate(
   return { graph, bot };
 }
 
-export async function postMessage(bot: TeamsBotClient, attempt: ChannelAttempt, signal: AbortSignal): Promise<void> {
+export async function postMessage(bot: TeamsBotOperations, attempt: ChannelAttempt, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   attempt.mutationAttempted = true;
   attempt.created = await bot.createChannelPost(
@@ -122,7 +122,7 @@ export async function postMessage(bot: TeamsBotClient, attempt: ChannelAttempt, 
   );
 }
 
-export async function postReply(bot: TeamsBotClient, attempt: ChannelReplyAttempt, signal: AbortSignal): Promise<void> {
+export async function postReply(bot: TeamsBotOperations, attempt: ChannelReplyAttempt, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   if (!attempt.created) throw new IntegrationError("send-failure");
   attempt.replyMutationAttempted = true;
@@ -139,7 +139,7 @@ export async function postReply(bot: TeamsBotClient, attempt: ChannelReplyAttemp
 }
 
 export async function confirmPublication(
-  graph: GraphClient, applicationId: string, attempt: ChannelAttempt, signal: AbortSignal,
+  graph: GraphOperations, applicationId: string, attempt: ChannelAttempt, signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now,
   sleep: (ms: number, signal: AbortSignal) => Promise<void> = (ms, abort) => delay(ms, undefined, { signal: abort }),
 ): Promise<void> {
@@ -156,7 +156,7 @@ export async function confirmPublication(
 }
 
 export async function confirmReply(
-  graph: GraphClient, applicationId: string, attempt: ChannelReplyAttempt, signal: AbortSignal,
+  graph: GraphOperations, applicationId: string, attempt: ChannelReplyAttempt, signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now,
   sleep: (ms: number, signal: AbortSignal) => Promise<void> = (ms, abort) => delay(ms, undefined, { signal: abort }),
 ): Promise<void> {
@@ -178,13 +178,13 @@ export async function confirmReply(
   throw new IntegrationError("delivery-timeout");
 }
 
-export async function cleanup(bot: TeamsBotClient, attempt: ChannelAttempt, signal: AbortSignal): Promise<void> {
+export async function cleanup(bot: TeamsBotOperations, attempt: ChannelAttempt, signal: AbortSignal): Promise<void> {
   // An ambiguous POST is never repeated or reconciled with unrelated Graph message IDs.
   if (!attempt.created) throw new IntegrationError("cleanup-failure");
   await bot.deleteMessage(attempt.serviceUrl, attempt.created.conversationId, attempt.created.activityId, signal);
 }
 
-export async function cleanupReply(bot: TeamsBotClient, attempt: ChannelReplyAttempt, signal: AbortSignal): Promise<void> {
+export async function cleanupReply(bot: TeamsBotOperations, attempt: ChannelReplyAttempt, signal: AbortSignal): Promise<void> {
   if (!attempt.created) throw new IntegrationError("cleanup-failure");
   let failed = attempt.replyMutationAttempted && !attempt.reply;
   if (attempt.reply) {

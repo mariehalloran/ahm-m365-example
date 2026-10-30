@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GraphClient } from "../../utils/src/graph.js";
+import type { GraphOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import { mailMarker, type MailAttempt } from "./steps.js";
 
@@ -20,7 +20,7 @@ export function editedDraftContent(attempt: MailAttempt): string {
 }
 
 export async function updateDraft(
-  graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal,
+  graph: GraphOperations, attempt: MailAttempt, draftId: string, signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
   await graph.request(draftPath(attempt, draftId), signal, "PATCH", {
@@ -29,7 +29,7 @@ export async function updateDraft(
 }
 
 export async function readDraft(
-  graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal, edited = true,
+  graph: GraphOperations, attempt: MailAttempt, draftId: string, signal: AbortSignal, edited = true,
 ): Promise<void> {
   const query = new URLSearchParams({ "$select": "id,subject,bodyPreview,isDraft" });
   const draft = await graph.json(`${draftPath(attempt, draftId)}?${query}`, savedDraftSchema, signal);
@@ -39,7 +39,7 @@ export async function readDraft(
   }
 }
 
-export async function deleteDraft(graph: GraphClient, attempt: MailAttempt, draftId: string, signal: AbortSignal): Promise<void> {
+export async function deleteDraft(graph: GraphOperations, attempt: MailAttempt, draftId: string, signal: AbortSignal): Promise<void> {
   await graph.request(draftPath(attempt, draftId), signal, "DELETE");
   attempt.ownedMessageIds.delete(draftId);
 }

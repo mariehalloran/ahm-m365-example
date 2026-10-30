@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
 import { exchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
-import type { GraphClient } from "./graph.js";
+import type { GraphFileOperations } from "./graph.js";
 import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
@@ -14,7 +14,9 @@ export type TeamsBotPairClients = Pick<ProbeContext, "teamsBot" | "teamsCalling"
 export interface RunnerDependencies {
   results: ResultOutput;
   telemetry: Telemetry;
-  graph?: GraphClient;
+  graph?: GraphFileOperations & {
+    forMailbox?: (mailbox: string, permits: GraphRequestPermits) => GraphFileOperations;
+  };
   teamsBotPairs?: ReadonlyMap<string, TeamsBotPairClients>;
   shutdown?: () => Promise<void>;
   handler?: ProbeHandler;
@@ -62,11 +64,12 @@ function createCompletionDeadline(
   };
 }
 
-async function runSingleProbe(
-  probe: Probe,
+async function runSingleProbe<P extends Probe>(
+  probe: P,
   config: Config,
   dependencies: RunnerDependencies,
   cycle: CycleContext,
+  handler: ((probe: P, context: ProbeContext) => Promise<SyntheticResult>) | undefined,
 ): Promise<SyntheticResult> {
   const liveExchange = config.EXECUTION_MODE === "live" && probeServices[probe.type].service === "exchange";
   if (liveExchange) {
@@ -79,9 +82,6 @@ async function runSingleProbe(
     cycle.signal,
     execution.signal,
   ]);
-  const handler = config.EXECUTION_MODE === "simulation"
-    ? simulate
-    : dependencies.handler;
   const attemptStartedAt = now();
   let executionFinishedAt: number | undefined;
   let cancelledDuringExecution = false;
@@ -168,11 +168,18 @@ async function executeProbes(
   const results: SyntheticResult[] = [];
   const telemetryErrors: unknown[] = [];
   let nextProbeIndex = 0;
+  const runProbeAt = (index: number) => {
+    if (config.EXECUTION_MODE === "live") {
+      const probe = config.probes[index];
+      return probe ? runSingleProbe(probe, config, dependencies, cycle, dependencies.handler) : undefined;
+    }
+    const probe = config.probes[index];
+    return probe ? runSingleProbe(probe, config, dependencies, cycle, simulate) : undefined;
+  };
   const runNextProbes = async () => {
     while (nextProbeIndex < config.probes.length && !cycle.externalSignal?.aborted) {
-      const probe = config.probes[nextProbeIndex++];
-      if (!probe) break;
-      const result = await runSingleProbe(probe, config, dependencies, cycle);
+      const result = await runProbeAt(nextProbeIndex++);
+      if (!result) break;
       results.push(result);
 
       // Output errors must not be turned into a second, fabricated probe result.

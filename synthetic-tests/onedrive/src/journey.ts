@@ -7,7 +7,7 @@ import {
   openAppFolder, payload, reopenOwnedFile, verifyBytes, writeFile, type FileAttempt,
 } from "./steps.js";
 
-export const oneDriveProbe: ProbeHandler = async (probe, context) => {
+export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfolder" | "onedrive-versions"> = async (probe, context) => {
   const { signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const result = baseResult(probe, startedAt);
@@ -21,10 +21,6 @@ export const oneDriveProbe: ProbeHandler = async (probe, context) => {
     result.diagnosticContext.testStage = "authentication";
     const graph = await measureStep(result, "authenticate", async () => {
       if (!context.graph) throw new IntegrationError("collector-failure");
-      if (!probe.userId || !probe.userPrincipalName || !probe.folderName ||
-          !["onedrive-roundtrip", "onedrive-appfolder", "onedrive-versions"].includes(probe.type)) {
-        throw new IntegrationError("configuration-failure");
-      }
       await context.graph.authenticate(signal);
       return context.graph;
     }, now);

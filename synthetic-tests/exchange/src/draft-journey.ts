@@ -1,4 +1,3 @@
-import { IntegrationError } from "../../utils/src/http.js";
 import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
 import {
   cleanupStep,
@@ -14,12 +13,12 @@ import {
   type MailAttempt,
 } from "./steps.js";
 
-export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
+export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, context) => {
   const { signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const result = baseResult(probe, startedAt);
   const attempt: MailAttempt = {
-    mailbox: probe.mailbox ?? "",
+    mailbox: probe.mailbox,
     correlationId: result.correlationId,
     ownedMessageIds: new Set(),
     mutationAttempted: false,
@@ -29,10 +28,7 @@ export const exchangeDraftProbe: ProbeHandler = async (probe, context) => {
     const graph = await measureStep(
       result,
       "authenticate",
-      async () => {
-        if (!probe.mailbox) throw new IntegrationError("configuration-failure");
-        return authenticate(context.graph, signal);
-      },
+      () => authenticate(context.graph, signal),
       now,
     );
     result.diagnosticContext.authenticationDurationMs = Math.max(

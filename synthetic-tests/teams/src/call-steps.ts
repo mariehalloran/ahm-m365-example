@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { GraphClient } from "../../utils/src/graph.js";
+import type { GraphOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 
 export const callIdSchema = z.string().min(1).max(2048).refine(id =>
@@ -23,7 +23,7 @@ function callPath(id: string): string {
   return `/communications/calls/${encodeURIComponent(id)}`;
 }
 
-async function readOwnedCall(graph: GraphClient, id: string, signal: AbortSignal, onState?: StateObserver) {
+async function readOwnedCall(graph: GraphOperations, id: string, signal: AbortSignal, onState?: StateObserver) {
   const call = await graph.json(callPath(id), callSchema, signal, "GET", undefined, true, "v1.0", 16384);
   if (call.id !== id) throw new IntegrationError("read-failure");
   const info = resultInfoSchema.safeParse(call.resultInfo);
@@ -33,7 +33,7 @@ async function readOwnedCall(graph: GraphClient, id: string, signal: AbortSignal
 }
 
 export async function verifyCallEstablished(
-  graph: GraphClient, id: string, signal: AbortSignal, onState?: StateObserver,
+  graph: GraphOperations, id: string, signal: AbortSignal, onState?: StateObserver,
 ): Promise<void> {
   const call = await readOwnedCall(graph, id, signal, onState);
   signal.throwIfAborted();
@@ -43,7 +43,7 @@ export async function verifyCallEstablished(
 }
 
 export async function waitForAnswer(
-  graph: GraphClient, id: string, signal: AbortSignal, deadline: number,
+  graph: GraphOperations, id: string, signal: AbortSignal, deadline: number,
   pollIntervalMs: number, now: () => number = Date.now, sleep = pause, onState?: StateObserver,
 ): Promise<void> {
   const bounded = AbortSignal.timeout(Math.max(1, deadline - now()));
@@ -75,7 +75,7 @@ const rosterSchema = z.object({
 });
 
 export async function verifyParticipants(
-  graph: GraphClient, id: string, expected: readonly [string, string], signal: AbortSignal,
+  graph: GraphOperations, id: string, expected: readonly [string, string], signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now, sleep = pause,
 ): Promise<void> {
   signal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - now()))]);
@@ -114,7 +114,7 @@ const meetingCallSchema = z.object({
 });
 
 export async function verifyMeetingMetadata(
-  graph: GraphClient, id: string, expected: { threadId: string; organizerUserId: string; tenantId: string },
+  graph: GraphOperations, id: string, expected: { threadId: string; organizerUserId: string; tenantId: string },
   signal: AbortSignal,
 ): Promise<void> {
   const call = await graph.json(callPath(id), meetingCallSchema, signal, "GET", undefined, true, "v1.0", 16384);
@@ -128,7 +128,7 @@ export async function verifyMeetingMetadata(
 }
 
 async function waitForCallTermination(
-  graph: GraphClient, id: string, signal: AbortSignal,
+  graph: GraphOperations, id: string, signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now, sleep = pause, onState?: StateObserver,
 ): Promise<void> {
   callPath(id);
@@ -151,7 +151,7 @@ async function waitForCallTermination(
 }
 
 export async function leaveCall(
-  graph: GraphClient, id: string, signal: AbortSignal, deadline: number,
+  graph: GraphOperations, id: string, signal: AbortSignal, deadline: number,
   pollIntervalMs: number, now: () => number = Date.now, sleep = pause, onState?: StateObserver,
 ): Promise<void> {
   signal.throwIfAborted();

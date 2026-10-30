@@ -16,7 +16,7 @@ import {
   type ChannelReplyAttempt,
 } from "./steps.js";
 
-export const teamsConversationProbe: ProbeHandler = async (probe, context) => {
+export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = async (probe, context) => {
   const { config, signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const deadline = startedAt + config.PROBE_TIMEOUT_MS;
@@ -26,10 +26,10 @@ export const teamsConversationProbe: ProbeHandler = async (probe, context) => {
   ]);
   const result = baseResult(probe, startedAt);
   const attempt: ChannelReplyAttempt = {
-    serviceUrl: probe.serviceUrl ?? "",
-    tenantId: probe.tenantId ?? "",
-    teamId: probe.teamId ?? "",
-    channelId: probe.channelId ?? "",
+    serviceUrl: probe.serviceUrl,
+    tenantId: probe.tenantId,
+    teamId: probe.teamId,
+    channelId: probe.channelId,
     marker: `AHM synthetic ${result.correlationId}`,
     replyMarker: `AHM synthetic reply ${result.correlationId}`,
     mutationAttempted: false,

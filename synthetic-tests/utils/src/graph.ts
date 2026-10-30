@@ -9,6 +9,8 @@ const graphOrigin = "https://graph.microsoft.com";
 const graphScope = `${graphOrigin}/.default`;
 export const graphBase = `${graphOrigin}/v1.0`;
 export type GraphApiVersion = "v1.0" | "beta";
+export type GraphOperations = Pick<GraphClient, "authenticate" | "json" | "request">;
+export type GraphFileOperations = GraphOperations & Pick<GraphClient, "downloadContent">;
 
 // Names the offending fields and Zod issue codes only, never the response content.
 function schemaDetail(error: z.ZodError): string {

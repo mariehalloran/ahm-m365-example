@@ -42,10 +42,10 @@ files.
 | C0 | Establish roadmap and rollback baseline | None | Scope, approvals, checkpoints and blockers recorded | Done: `61d673a` |
 | C1 | Verify communications contracts | None | v1.0 filters/continuations, actual product labels, relevance semantics, report size and useful portal presentation established or explicitly blocked | Verified, including readable annotation preflight and issue timestamp filters |
 | C2 | Add service-scoped collectors and models | C1 contract decisions | Complete bounded snapshots, distinct IDs, isolated source failures, explicit Unknown; no unrelated service feed | Implemented and locally verified |
-| C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded data annotations and informational count/status signals; default-off per-service Message Center opt-in; disabled and messages-only gates work | Initial format deployed; per-notice JSON revision in progress |
-| C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Initial feature `1410917`; entity-read fix `bd0f751` |
-| V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Authorization works; revised presentation and quiet suppression await rollout |
-| R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Paused until feature validation |
+| C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded data annotations and informational count/status signals; default-off per-service Message Center opt-in; disabled and messages-only gates work | Notice-only JSON revision deployed from `5214c49` |
+| C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Initial feature `1410917`; entity-read fix `bd0f751`; notice-only JSON `5214c49` |
+| V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Accepted by user: live quiet/count/topology plus local formatting evidence; no natural update observed |
+| R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Complete: validated live inputs, typed handlers and structural client ports |
 | R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Planned |
 | R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Planned |
 | R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Planned |
@@ -254,14 +254,50 @@ does not meet the acceptance gate.
   assertion did not establish complete acceptance.
 - The user rejected the quiet entries and old presentation. The replacement emits
   only new/updated notices, one title-only annotation each, with pretty JSON and no
-  duplicate snapshot timestamp. Local checks and the approved deployment must
-  verify this revised contract; no preview publication is approved.
+  duplicate snapshot timestamp. The entire rejected quiet placeholder is absent
+  from the publisher; an empty selection returns before any annotation append.
+  No preview publication is approved.
 - Revised sources pass `typecheck`, `build`, the local no-cloud deployment plan
   and nine temporary behavior groups, including quiet suppression, per-notice
   JSON, legacy/tenant-isolated version history, valid Unicode truncation and
   partial-append recovery without duplicate notices. The final RBAC audit confirms
   exactly the three approved actions and unchanged direct entity assignments.
-- Reverify current counts, quiet suppression, sibling freshness and unchanged
-  service topology after rollout. Real notice creation cannot be forced; distinguish
-  mocked new/update formatting from live empty-window evidence. Keep the broader
-  coding refactor paused until this acceptance gate is resolved.
+- Revised checkpoint `5214c49` was deployed by standard run
+  `20261030T161657796Z-d4d76395`, completed at `2026-10-30T16:29:57Z`.
+  All three existing workers run image digest
+  `e48377ad9d0ccbbb6bf286642f68f1aff7e25fc5fd8648e2614ba044489fa6e5`.
+  Independent readback verified the source revision, ready revisions, unchanged
+  worker identity sets and unchanged root relationships.
+- Fresh hosted source controls at `2026-10-30T16:30:47Z` returned active
+  issue/message counts of Exchange `1/51`, Teams `0/129` and OneDrive `1/18`,
+  with no recent updates. Native acceptance observed two aligned post-rollout
+  cycles for every service, matching those full counts and adding **zero Data
+  annotations** after the rollout cutoff. Quiet cycles no longer append the
+  rejected placeholder; previously stored annotations remain.
+- All three Service Health entities remain suppressed, service relationships
+  are unchanged, and overview and approved beta signals retain fresh reporting
+  (nine Exchange and five Teams beta signals). Fresh reports do not establish
+  that every beta source is available or every synthetic journey is healthy.
+  Deployment ingestion checks observed 77 Exchange records for 20 journey/target
+  pairs, including seven failed attempts; Teams had 24 records for six pairs and
+  OneDrive had 12 for six, with no failed attempts in those checks.
+- New-notice JSON/title-only formatting, version suppression and failure handling
+  have local behavioral evidence, but no natural Microsoft update occurred during
+  live acceptance. No sample or preview was posted. The remaining presentation
+  gate was explicitly accepted by the user using the local formatting evidence
+  alongside live quiet/count/topology evidence. No live new-notice rendering is
+  claimed; this decision permits the broader coding refactor to start.
+- R1 introduces schema-derived live journey inputs and mode-discriminated runtime
+  configuration without changing authored probe fields. Runtime filtering preserves
+  the live/simulation distinction; handler maps now check journey/input alignment.
+  Structural Graph/Bot operation interfaces remove concrete-client coupling from
+  journey helpers. Existing fixture ownership checks, request permits, deadlines,
+  schedules, provider sources and report contracts remain in place.
+- R1 passes the existing `typecheck`, `build` and no-cloud deployment plan.
+  Temporary comparisons against compiled baseline `5214c49` passed 81
+  configuration cases, 100 simulations, 31 live-handler output/request-trace
+  cases and all five Exchange execution-deadline cases. A 100-mailbox inventory
+  retains all 500 journey attempts. Compile-time checks reject unresolved inputs
+  and wrong-journey handlers while accepting structural client fakes. All nine
+  communications behavior groups still pass, including zero quiet annotations.
+  No refactor rollout or new cloud mutation is authorized or performed.

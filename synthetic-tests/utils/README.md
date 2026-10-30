@@ -87,6 +87,15 @@ provider catalogue. Runtime contracts derive from it; Bicep reads its generated
 `npm run catalog:generate` from `synthetic-tests/`. Typechecking, builds and
 `npm run deploy` reject stale projections.
 
+`contracts.ts` keeps configuration/simulation probe inputs separate from the
+journey-specific live variants in `resolved-probes.ts`. `createRuntimeConfig`
+validates required resources before returning a live configuration; narrowing its
+execution mode also narrows its probes. Handler maps bind each journey to the
+matching input type. Retained reply fixtures and OneDrive folder ownership still
+get checked in their existing journey steps, not as worker-wide prerequisites.
+Journey helpers accept structural Graph/Bot operation interfaces rather than
+concrete authenticated clients, so isolated callers can supply focused fakes.
+
 The checked-in configuration uses one aligned-minute Exchange lane for all five
 single-user journeys, one Teams lane for both journeys, and three explicit
 OneDrive lanes. Without `executionLanes`, non-Exchange services use one lane for all

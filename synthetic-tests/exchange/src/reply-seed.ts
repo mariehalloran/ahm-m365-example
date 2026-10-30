@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { Probe, Telemetry } from "../../utils/src/contracts.js";
-import type { GraphClient } from "../../utils/src/graph.js";
+import type { GraphOperations } from "../../utils/src/graph.js";
 import { IntegrationError } from "../../utils/src/http.js";
 import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfMessage } from "./mail-safety.js";
 
 type ReplyTarget = Pick<Probe, "id" | "mailbox" | "replySeed">;
-export type ReplySeedGraph = Pick<GraphClient, "authenticate" | "json" | "request">;
+export type ReplySeedGraph = GraphOperations;
 export interface ReplySeedOptions {
   signal: AbortSignal; telemetry: Telemetry;
   now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>;

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { probeServices, type Probe, type Scenario, type StepName, type SyntheticResult, type Telemetry, type TestType } from "./contracts.js";
-import type { GraphClient } from "./graph.js";
-import type { TeamsBotClient } from "./teams.js";
+import type { GraphFileOperations, GraphOperations } from "./graph.js";
+import type { TeamsBotOperations } from "./teams.js";
 import { IntegrationError } from "./http.js";
+import type { LiveProbeFor } from "./resolved-probes.js";
 
 export interface ProbeContext {
   config: {
@@ -15,23 +16,26 @@ export interface ProbeContext {
     TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS?: number;
   };
   signal: AbortSignal;
-  graph?: GraphClient;
-  teamsBot?: TeamsBotClient;
-  teamsCalling?: GraphClient;
-  teamsCallingPeer?: GraphClient;
+  graph?: GraphFileOperations;
+  teamsBot?: TeamsBotOperations;
+  teamsCalling?: GraphOperations;
+  teamsCallingPeer?: GraphOperations;
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   executionComplete?: () => void;
 }
-export type ProbeHandler = (probe: Probe, context: ProbeContext) => Promise<SyntheticResult>;
+export type ProbeHandler<Type extends TestType = TestType> =
+  (probe: LiveProbeFor<Type>, context: ProbeContext) => Promise<SyntheticResult>;
+type ProbeHandlers = { [Type in TestType]?: ProbeHandler<Type> };
 
-export function dispatchProbeHandlers(handlers: Partial<Record<TestType, ProbeHandler>>): ProbeHandler {
-  return (probe, context) => {
-    const handler = handlers[probe.type];
+export function dispatchProbeHandlers(handlers: ProbeHandlers): ProbeHandler {
+  const invoke = <Type extends TestType>(type: Type, probe: LiveProbeFor<Type>, context: ProbeContext) => {
+    const handler = handlers[type];
     if (!handler) throw new IntegrationError("collector-failure");
     return handler(probe, context);
   };
+  return (probe, context) => invoke(probe.type, probe, context);
 }
 
 export function baseResult(probe: Probe, now: number): SyntheticResult {
@@ -54,7 +58,9 @@ export function baseResult(probe: Probe, now: number): SyntheticResult {
   };
 }
 
-export const simulate: ProbeHandler = async (probe, { config, telemetry, now = Date.now }) => {
+export const simulate = async (
+  probe: Probe, { config, telemetry, now = Date.now }: ProbeContext,
+): Promise<SyntheticResult> => {
   const result = baseResult(probe, now());
   const metadata = probeServices[probe.type];
   const retainArtifacts = (metadata.service === "teams" && probe.type !== "teams-call" && config.TEAMS_CLEANUP_ENABLED === "false") ||
