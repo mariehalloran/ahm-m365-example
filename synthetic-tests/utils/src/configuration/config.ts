@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { BlobClient } from "@azure/storage-blob";
+import { parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { z } from "zod";
 import { probeSchema, probeServices, scenarios, serviceProbeLimits, type Probe } from "../contracts.js";
 import { liveProbeSchema, type LiveProbe } from "./resolved-probes.js";
@@ -11,6 +12,19 @@ import { canonicalProjectFile } from "../paths.js";
 export class ConfigurationError extends Error {
   constructor(message: string) { super(message); this.name = "ConfigurationError"; }
 }
+
+/** Allows comments in user configuration without relaxing JSON parsing of API responses. */
+export function parseConfigJson(text: string): unknown {
+  const errors: ParseError[] = [];
+  const document: unknown = parse(text, errors, { allowTrailingComma: false, disallowComments: false });
+  const error = errors[0];
+  if (error) {
+    const line = text.slice(0, error.offset).split(/\r\n|\r|\n/).length;
+    throw new ConfigurationError(`Project config contains invalid JSONC at line ${line}: ${printParseErrorCode(error.error)}`);
+  }
+  return document;
+}
+
 export async function readConfigJson(file: string): Promise<unknown> {
   let text: string;
   const blobUrl = process.env.MONITORING_CONFIG_BLOB_URL;
@@ -38,8 +52,7 @@ export async function readConfigJson(file: string): Promise<unknown> {
     try { text = await readFile(file, "utf8"); }
     catch { throw new ConfigurationError("Cannot read the project config file"); }
   }
-  try { return JSON.parse(text); }
-  catch { throw new ConfigurationError("Project config must contain a valid JSON object"); }
+  return parseConfigJson(text);
 }
 const number = (fallback: number, min: number, max: number, integer = false) => {
   const schema = z.coerce.number().finite().min(min).max(max);

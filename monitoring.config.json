@@ -1,20 +1,33 @@
 {
   "schemaVersion": "2.0",
   "healthModel": {
+    // Root model name; service model names are derived from it.
     "name": "m365-experience-consto",
+    // Azure subscription hosting the monitoring resources.
     "subscriptionId": "17a37fff-b1ef-4af7-9bd2-70898b286aaf",
+    // Default resource group for models, workers and bare Azure resource names.
     "resourceGroup": "rg-m365-consto",
+    // Existing Azure Monitor action groups; manage notification recipients in those groups.
     "alertActionGroupIds": [
+      // Action group notified by the health-model alerts.
       "/subscriptions/17A37FFF-B1EF-4AF7-9BD2-70898B286AAF/resourceGroups/rg-m365-consto/providers/microsoft.insights/actionGroups/ag-m365-experience-consto"
     ],
+    // Rolling observation window, in minutes; also controls direct-report freshness.
     "signalWindowMinutes": 15,
+    // Minimum observed samples required before an aggregate can report measured health.
     "minimumSamples": 1,
+    // Success percentages below this threshold are Degraded unless already Unhealthy.
     "successDegradedPercent": 99,
+    // Success percentages below this threshold are Unhealthy.
     "successUnhealthyPercent": 95,
+    // Mean latency above this many milliseconds is Degraded unless already Unhealthy.
     "latencyDegradedMilliseconds": 15000,
+    // Mean latency above this many milliseconds is Unhealthy; this is not an execution deadline.
     "latencyUnhealthyMilliseconds": 60000
   },
+  // Optional observation pipeline: Event Hubs -> Function -> DCR -> Log Analytics -> KQL signals.
   "logAnalytics": {
+    // True deploys the observation pipeline; false publishes aggregates directly from each worker.
     "enabled": true,
     "eventHubNamespace": "evhns-m365-consto",
     "eventHubName": "m365-synthetic",
@@ -24,132 +37,430 @@
     "ingestionIdentityName": "uami-m365-consto-ingestion",
     "dataCollectionEndpointName": "dce-m365-consto-synthetic",
     "dataCollectionRuleName": "dcr-m365-consto-synthetic",
+    // Additionally archive Event Hub observations to Blob Storage using Capture.
     "captureEnabled": true,
+    // Capture archive retention in days; this does not set Log Analytics table retention.
     "archiveRetentionDays": 90
   },
+  // Azure hosting and deployment settings; these flags do not grant Microsoft 365 access.
   "deployment": {
+    // Azure region hosting the workers and supporting infrastructure, not the users' location.
     "location": "centralus",
+    // Private storage account for hash-verified worker configuration snapshots and Capture archives.
     "configurationStorageAccount": "stm365constosignals",
+    // Explicitly permit deployment of workers that perform real Microsoft 365 operations.
     "enableLiveProbes": true,
+    // Explicitly permit selected Graph beta serviceActivity APIs; beta is not production-supported.
     "enableBetaServiceActivity": true,
-    "foundation": { "mode": "existing", "environment": "cae-m365-experience-consto", "registry": "crm365ctbcoagujf67a" },
-    "image": { "mode": "build", "repository": "m365-synthetic", "tag": "monitoring" }
+    // Container Apps environment and registry used by all service workers.
+    "foundation": {
+      // Reuse existing resources instead of creating a new environment and registry.
+      "mode": "existing",
+      // Existing Container Apps environment, by bare name or full resource ID.
+      "environment": "cae-m365-experience-consto",
+      // Existing Azure Container Registry, by bare name or full resource ID.
+      "registry": "crm365ctbcoagujf67a"
+    },
+    // Container image shared by the independently hosted service workers.
+    "image": {
+      // Build the repository's worker image during deployment.
+      "mode": "build",
+      // Repository name inside the selected container registry.
+      "repository": "m365-synthetic",
+      // Build tag; deployment resolves the image to an immutable digest.
+      "tag": "monitoring"
+    }
   },
-  "serviceHealth": { "enabled": true },
-  "tenants": [{
-    "id": "consto",
-    "displayName": "Consto",
-    "tenantId": "5e7897a0-4a38-43f3-914d-195d5355e969",
-    "$comment": "providerClientId: Entra application (client) ID for the shared read-only Microsoft 365 Service Health, Message Center and optional service activity collector, not the bot identity.",
-    "providerClientId": "a0bc7fcd-820f-4873-83b5-c7dd77ddad92",
-    "services": {
-      "exchange": {
-        "enabled": true,
-        "execution": {
-          "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 60, "cohort": "exchange-global",
-          "maxConcurrentRequests": 32, "maxConcurrentRequestsPerMailbox": 2,
-          "serviceHealth": true,
-          "serviceMessages": true, "providerIntervalSeconds": 60,
-          "serviceActivity": {
-            "enabled": true,
-            "functions": [
-              "getConnectivityMetricsForExchange",
-              "getMessageVolumeMetricsForEmailDelivery",
-              "getActiveUserMetricsForOutlookWebByReadEmail",
-              "getActiveUserMetricsForOutlookWebByAppOpening",
-              "getActiveUserMetricsForEmailByModernAuthentication",
-              "getActiveUserMetricsForDesktopMailByReadEmail",
-              "getActiveUserMetricsForOutlookMobileByReadEmail",
-              "getActiveUserMetricsForOutlookMacByReadEmail",
-              "getActiveUserMetricsForiOSOrAndroidMailByReadEmail"
-            ]
+  // Global gate for Microsoft-reported supporting context, separate from synthetic health.
+  "serviceHealth": {
+    // Include suppressed Service Health entities and allow enabled provider collectors.
+    "enabled": true
+  },
+  // Microsoft 365 tenants to monitor; each enabled service has its own worker per tenant.
+  "tenants": [
+    // Consto monitoring targets and service execution settings.
+    {
+      // Stable tenant alias used in reporting labels and generated-ID binding keys.
+      "id": "consto",
+      // Human-readable tenant label.
+      "displayName": "Consto",
+      // Microsoft Entra directory ID of the Microsoft 365 tenant being monitored.
+      "tenantId": "5e7897a0-4a38-43f3-914d-195d5355e969",
+      // Shared read-only provider application client ID, inherited by the service collectors.
+      "providerClientId": "a0bc7fcd-820f-4873-83b5-c7dd77ddad92",
+      // Independently configured Exchange, Teams and OneDrive workers.
+      "services": {
+        // Mailbox and private-calendar journeys using each configured account independently.
+        "exchange": {
+          // Include Exchange journeys in monitoring and deployment.
+          "enabled": true,
+          "execution": {
+            // Execute real Graph operations against the approved test mailboxes.
+            "mode": "live",
+            // Run every selected journey for every mailbox on aligned two-minute boundaries.
+            "intervalSeconds": 120,
+            // Complete-journey execution deadline in seconds; cleanup is separately bounded.
+            "timeoutSeconds": 60,
+            // Diagnostic execution-cohort label, not a worker location or reporting group.
+            "cohort": "exchange-global",
+            // Shared concurrent Graph HTTP-request limit, including polling, retries and cleanup.
+            "maxConcurrentRequests": 32,
+            // Concurrent Graph HTTP-request limit for any one mailbox.
+            "maxConcurrentRequestsPerMailbox": 2,
+            // Collect stable Microsoft-reported Exchange Service Health.
+            "serviceHealth": true,
+            // Collect Exchange Message Center supporting context.
+            "serviceMessages": true,
+            // Provider collection cadence in seconds, independent of the synthetic schedule.
+            "providerIntervalSeconds": 60,
+            // Optional beta context; missing or denied data reports Unknown, not a synthetic failure.
+            "serviceActivity": {
+              // Collect the selected functions; also requires the deployment beta gate and Graph access.
+              "enabled": true,
+              // Approved Exchange beta methods; counts remain diagnostic without configured thresholds.
+              "functions": [
+                // Exchange connectivity metrics.
+                "getConnectivityMetricsForExchange",
+                // Email-delivery message-volume metrics.
+                "getMessageVolumeMetricsForEmailDelivery",
+                // Active Outlook on the web users reading email.
+                "getActiveUserMetricsForOutlookWebByReadEmail",
+                // Active Outlook on the web users opening the app.
+                "getActiveUserMetricsForOutlookWebByAppOpening",
+                // Active email users using modern authentication.
+                "getActiveUserMetricsForEmailByModernAuthentication",
+                // Active desktop mail users reading email.
+                "getActiveUserMetricsForDesktopMailByReadEmail",
+                // Active Outlook mobile users reading email.
+                "getActiveUserMetricsForOutlookMobileByReadEmail",
+                // Active Outlook for Mac users reading email.
+                "getActiveUserMetricsForOutlookMacByReadEmail",
+                // Active native iOS or Android mail users reading email.
+                "getActiveUserMetricsForiOSOrAndroidMailByReadEmail"
+              ]
+            }
+          },
+          // One Container App owns this tenant's Exchange execution.
+          "worker": {
+            // Container App resource name.
+            "appName": "m365-ctbcoa-exchange",
+            // Existing approved user-assigned managed identity, by name or full resource ID.
+            "identity": "uami-m365-experience-consto-exchange"
+          },
+          // Journeys selected for every configured mailbox; false excludes a journey.
+          "scenarios": {
+            // Send a message to self and verify delivery in the same mailbox's Inbox.
+            "send-receive-mail": true,
+            // Create, read, edit, reopen and delete a draft.
+            "edit-reopen-draft": true,
+            // Send an attachment to self, download it and verify its content hash.
+            "attachment-mail": true,
+            // Reply to a retained self-addressed fixture and verify the delivered self-reply.
+            "reply-mail": true,
+            // Create, verify, update and delete a private recurring calendar series.
+            "recurring-calendar": true
+          },
+          // User-defined reporting groups; geographic names do not move probe execution.
+          "targets": {
+            // Stable aggregation-group key for these Exchange accounts.
+            "united-kingdom-users": {
+              // Group label displayed within health-model entities and in diagnostics.
+              "userGroupName": "United Kingdom Users",
+              // Dedicated licensed mailboxes; account keys and reply-seed bindings are resolved automatically.
+              "users": [
+                // Independent single-mailbox target.
+                {
+                  // Mailbox address; this user is a target, not a worker sign-in credential.
+                  "mailbox": "test-user-4@constosuites.onmicrosoft.com"
+                },
+                // Independent single-mailbox target.
+                {
+                  // Mailbox address; this user is a target, not a worker sign-in credential.
+                  "mailbox": "test-user-5@constosuites.onmicrosoft.com"
+                }
+              ]
+            },
+            // Stable aggregation-group key for these Exchange accounts.
+            "united-states-users": {
+              // Group label displayed within health-model entities and in diagnostics.
+              "userGroupName": "United States Users",
+              // Dedicated licensed mailboxes; every account runs all selected Exchange journeys.
+              "users": [
+                // Independent single-mailbox target.
+                {
+                  // Mailbox address; this user is a target, not a worker sign-in credential.
+                  "mailbox": "test-user-1@constosuites.onmicrosoft.com"
+                },
+                // Independent single-mailbox target.
+                {
+                  // Mailbox address; this user is a target, not a worker sign-in credential.
+                  "mailbox": "test-user-2@constosuites.onmicrosoft.com"
+                }
+              ]
+            }
           }
         },
-        "worker": { "appName": "m365-ctbcoa-exchange", "identity": "uami-m365-experience-consto-exchange" },
-        "scenarios": {
-          "send-receive-mail": true, "edit-reopen-draft": true, "attachment-mail": true,
-          "reply-mail": true, "recurring-calendar": true
-        },
-        "targets": {
-          "united-kingdom-users": {
-            "userGroupName": "United Kingdom Users",
-            "users": [
-              { "mailbox": "test-user-4@constosuites.onmicrosoft.com" },
-              { "mailbox": "test-user-5@constosuites.onmicrosoft.com" }
+        // Bot-only channel and existing-meeting journeys; no interactive user sign-in.
+        "teams": {
+          // Include Teams journeys in monitoring and deployment.
+          "enabled": true,
+          // Teams synthetic schedule and independent provider collection.
+          "execution": {
+            // Execute real bot and Graph operations against approved Teams targets.
+            "mode": "live",
+            // Default synthetic cadence in seconds; the explicit lane below uses the same interval.
+            "intervalSeconds": 120,
+            // Complete-journey execution deadline in seconds, separate from the latency threshold.
+            "timeoutSeconds": 60,
+            // Diagnostic execution-cohort label, not a reporting group.
+            "cohort": "teams-global",
+            // Collect stable Microsoft-reported Teams Service Health.
+            "serviceHealth": true,
+            // Collect Teams Message Center supporting context.
+            "serviceMessages": true,
+            // Provider collection cadence in seconds, independent of the bot journeys.
+            "providerIntervalSeconds": 60,
+            // Optional beta context; missing or denied data reports Unknown without a measured value.
+            "serviceActivity": {
+              // Collect the selected functions; also requires the deployment beta gate and Graph access.
+              "enabled": true,
+              // Approved Teams beta methods, separate from the bot journey results.
+              "functions": [
+                // Teams usage measured by meetings joined.
+                "getUsageMetricsForTeamsByMeetingsJoined",
+                // Teams usage measured by app launches.
+                "getUsageMetricsForTeamsByLaunch",
+                // Teams chat message-volume metrics.
+                "getMessageVolumeMetricsForTeamsChat",
+                // Percentage of streams with QoE telemetry: coverage, not measured call quality.
+                "getAudioStreamQoEMetricsForTeams",
+                // Provider-reported audio streams transported over UDP.
+                "getAudioStreamsOverUdpMetricsForTeams"
+              ]
+            },
+            // False retains channel messages for inspection; meeting calls still disconnect.
+            "teamsCleanupEnabled": false,
+            // Separate approved Graph application for channel-message readback, not a bot identity.
+            "teamsReadbackClientId": "417d47e9-6ef3-40de-a8af-ac15b5438d54",
+            // Explicit synthetic lanes, independent of the provider collection schedule.
+            "executionLanes": [
+              // Both Teams journeys share this two-minute lane.
+              {
+                // Stable lane label used in execution diagnostics.
+                "name": "teams",
+                // Lane cadence in seconds.
+                "intervalSeconds": 120,
+                // Execution deadline in seconds for each journey in the lane.
+                "timeoutSeconds": 60,
+                // Selected journeys assigned to this lane.
+                "journeys": [
+                  // Primary bot posts a root message and reply, verified through Graph.
+                  "channel-conversation",
+                  // Both bots join and leave the existing dedicated meeting.
+                  "scheduled-meeting"
+                ]
+              }
             ]
           },
-          "united-states-users": {
-            "userGroupName": "United States Users",
-            "users": [
-              { "mailbox": "test-user-1@constosuites.onmicrosoft.com" },
-              { "mailbox": "test-user-2@constosuites.onmicrosoft.com" }
-            ]
-          }
-        }
-      },
-      "teams": {
-        "enabled": true,
-        "execution": {
-          "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 60, "cohort": "teams-global",
-          "serviceHealth": true,
-          "serviceMessages": true, "providerIntervalSeconds": 60,
-          "serviceActivity": {
-            "enabled": true,
-            "functions": [
-              "getUsageMetricsForTeamsByMeetingsJoined",
-              "getUsageMetricsForTeamsByLaunch",
-              "getMessageVolumeMetricsForTeamsChat",
-              "getAudioStreamQoEMetricsForTeams",
-              "getAudioStreamsOverUdpMetricsForTeams"
+          // Every pair exercises every selected channel and call target in this same worker.
+          "botPairs": [
+            // First independently identified bot pair.
+            {
+              // Stable pair key, also used to resolve generated bot client IDs from .env.
+              "id": "teams-pair-001",
+              // Existing primary Azure Bot registration, by name or full resource ID.
+              "bot": "bot-m365-consto",
+              // Existing managed identity associated with the primary bot.
+              "identity": "uami-m365-experience-consto-teams",
+              // Existing peer Azure Bot registration used in the meeting journey.
+              "peerBot": "ahm-m365-consto-peer",
+              // Existing managed identity associated with the peer bot.
+              "peerIdentity": "uami-m365-experience-consto-teams-peer"
+            },
+            // Second pair; identities and bot registrations must be distinct across pairs.
+            {
+              // Stable pair key, also used to resolve generated bot client IDs from .env.
+              "id": "teams-pair-002",
+              // Existing primary Azure Bot registration, by name or full resource ID.
+              "bot": "bot-m365-consto-002",
+              // Existing managed identity associated with the primary bot.
+              "identity": "uami-m365-consto-teams-002",
+              // Existing peer Azure Bot registration used in the meeting journey.
+              "peerBot": "bot-m365-consto-peer-002",
+              // Existing managed identity associated with the peer bot.
+              "peerIdentity": "uami-m365-consto-teams-peer-002"
+            }
+          ],
+          // One shared Teams Container App hosts the bot callbacks and all pair/target attempts.
+          "worker": {
+            // Container App resource name.
+            "appName": "m365-ctbcoa-teams",
+            // Existing worker identity; selected participant identities are additionally attached.
+            "identity": "uami-m365-experience-consto-teams"
+          },
+          // Select the supported bot journeys.
+          "scenarios": {
+            // Post and verify a channel root message and threaded reply for each pair.
+            "channel-conversation": true,
+            // Verify both bots' connectivity, rosters and departure in the dedicated meeting.
+            "scheduled-meeting": true
+          },
+          // Ungrouped channel targets; each pair runs against every entry.
+          "targets": [
+            // General channel target.
+            {
+              // Stable target key used in attempt IDs and generated channel-ID bindings.
+              "id": "teams-probe-001",
+              // Existing team's Microsoft 365 group ID.
+              "teamId": "df910f56-b46f-4411-9b77-bcf6474b13fc",
+              // Setup finds or creates this channel and writes its channel ID to .env.
+              "channelName": "General"
+            },
+            // Additional channel target in the same team.
+            {
+              // Stable target key used in attempt IDs and generated channel-ID bindings.
+              "id": "teams-probe-002",
+              // Existing team's Microsoft 365 group ID.
+              "teamId": "df910f56-b46f-4411-9b77-bcf6474b13fc",
+              // Setup finds or creates this channel and writes its channel ID to .env.
+              "channelName": "United Kingdom Users"
+            }
+          ],
+          // Existing dedicated meetings; every selected pair joins each entry without human answers.
+          "callTargets": [
+            // Shared dedicated test meeting for both bot pairs.
+            {
+              // Stable meeting-target key used in attempts and generated organizer-ID bindings.
+              "id": "teams-bot-meeting-001",
+              // Thread ID of a pre-created Teams meeting; the journey does not create meetings.
+              "meetingThreadId": "19:meeting_ZTNkZGVlNTgtMmRiNC00ODY1LThhODAtZDY5MWM0YzI0YmNj@thread.v2",
+              // Organizer UPN resolved by setup; this account is metadata, not a synthetic participant.
+              "organizer": "test-user-1@constosuites.onmicrosoft.com"
+            }
+          ]
+        },
+        // File journeys against licensed users' personal OneDrive resources.
+        "onedrive": {
+          // Include OneDrive journeys in monitoring and deployment.
+          "enabled": true,
+          // Default synthetic schedule, explicit journey lanes and provider collection.
+          "execution": {
+            // Execute real Graph file operations using the selected worker identity.
+            "mode": "live",
+            // Default synthetic cadence in seconds; explicit lanes below also run every five minutes.
+            "intervalSeconds": 300,
+            // Journey execution deadline in seconds, separate from cleanup and latency thresholds.
+            "timeoutSeconds": 120,
+            // Diagnostic execution-cohort label, not a worker location or reporting group.
+            "cohort": "onedrive-global",
+            // Collect stable Microsoft-reported OneDrive Service Health; no approved beta activity API.
+            "serviceHealth": true,
+            // Collect OneDrive Message Center supporting context.
+            "serviceMessages": true,
+            // Provider collection cadence in seconds, independent of the file journeys.
+            "providerIntervalSeconds": 60,
+            // Separate lanes allow each supported journey to have its own cadence.
+            "executionLanes": [
+              // Personal-drive content-integrity lane.
+              {
+                // Stable lane label used in execution diagnostics.
+                "name": "user-drive",
+                // Lane cadence in seconds.
+                "intervalSeconds": 300,
+                // Execution deadline in seconds for its journey.
+                "timeoutSeconds": 120,
+                // Selected journeys assigned to this lane.
+                "journeys": [
+                  // Create, download, verify and delete content beneath the approved test folder.
+                  "user-drive-roundtrip"
+                ]
+              },
+              // Application-folder lifecycle lane.
+              {
+                // Stable lane label used in execution diagnostics.
+                "name": "app-folder",
+                // Lane cadence in seconds.
+                "intervalSeconds": 300,
+                // Execution deadline in seconds for its journey.
+                "timeoutSeconds": 120,
+                // Selected journeys assigned to this lane.
+                "journeys": [
+                  // Write, read, update, reread and delete cycle-owned app-folder content.
+                  "app-folder-lifecycle"
+                ]
+              },
+              // Document version-history lane.
+              {
+                // Stable lane label used in execution diagnostics.
+                "name": "versions",
+                // Lane cadence in seconds.
+                "intervalSeconds": 300,
+                // Execution deadline in seconds for its journey.
+                "timeoutSeconds": 120,
+                // Selected journeys assigned to this lane.
+                "journeys": [
+                  // Verify two revisions and retrieve the actual bytes of an earlier version.
+                  "document-versions"
+                ]
+              }
             ]
           },
-          "teamsCleanupEnabled": false,
-          "teamsReadbackClientId": "417d47e9-6ef3-40de-a8af-ac15b5438d54",
-          "executionLanes": [
-            { "name": "teams", "intervalSeconds": 120, "timeoutSeconds": 60, "journeys": ["channel-conversation", "scheduled-meeting"] }
-          ]
-        },
-        "botPairs": [
-          { "id": "teams-pair-001", "bot": "bot-m365-consto", "identity": "uami-m365-experience-consto-teams", "peerBot": "ahm-m365-consto-peer", "peerIdentity": "uami-m365-experience-consto-teams-peer" },
-          { "id": "teams-pair-002", "bot": "bot-m365-consto-002", "identity": "uami-m365-consto-teams-002", "peerBot": "bot-m365-consto-peer-002", "peerIdentity": "uami-m365-consto-teams-peer-002" }
-        ],
-        "worker": { "appName": "m365-ctbcoa-teams", "identity": "uami-m365-experience-consto-teams" },
-        "scenarios": { "channel-conversation": true, "scheduled-meeting": true },
-        "targets": [
-          { "id": "teams-probe-001", "teamId": "df910f56-b46f-4411-9b77-bcf6474b13fc", "channelName": "General" },
-          { "id": "teams-probe-002", "teamId": "df910f56-b46f-4411-9b77-bcf6474b13fc", "channelName": "United Kingdom Users" }
-        ],
-        "callTargets": [{
-          "id": "teams-bot-meeting-001",
-          "meetingThreadId": "19:meeting_ZTNkZGVlNTgtMmRiNC00ODY1LThhODAtZDY5MWM0YzI0YmNj@thread.v2",
-          "organizer": "test-user-1@constosuites.onmicrosoft.com"
-        }]
-      },
-      "onedrive": {
-        "enabled": true,
-        "execution": {
-          "mode": "live", "intervalSeconds": 300, "timeoutSeconds": 120, "cohort": "onedrive-global",
-          "serviceHealth": true,
-          "serviceMessages": true, "providerIntervalSeconds": 60,
-          "executionLanes": [
-            { "name": "user-drive", "intervalSeconds": 300, "timeoutSeconds": 120, "journeys": ["user-drive-roundtrip"] },
-            { "name": "app-folder", "intervalSeconds": 300, "timeoutSeconds": 120, "journeys": ["app-folder-lifecycle"] },
-            { "name": "versions", "intervalSeconds": 300, "timeoutSeconds": 120, "journeys": ["document-versions"] }
-          ]
-        },
-        "worker": { "appName": "m365-ctbcoa-onedrive", "identity": "uami-m365-experience-consto-onedrive" },
-        "setup": { "authentication": "managed-identity", "workerClientId": "a439a969-afe3-454f-850c-5909490ccd31", "setupClientId": "5dddb683-c13d-448a-9a12-fb7db82147a8" },
-        "scenarios": { "user-drive-roundtrip": true, "app-folder-lifecycle": true, "document-versions": true },
-        "targets": {
-          "united-states-users": {
-            "userGroupName": "United States Users",
-            "users": [
-              { "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false },
-              { "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com", "folderName": "AHM-Synthetic-Tests", "restoreVersion": false }
-            ]
+          // One Container App owns this tenant's OneDrive execution.
+          "worker": {
+            // Container App resource name.
+            "appName": "m365-ctbcoa-onedrive",
+            // Existing approved user-assigned managed identity, by name or full resource ID.
+            "identity": "uami-m365-experience-consto-onedrive"
+          },
+          // One-time folder provisioning settings; not runtime sign-in credentials for test users.
+          "setup": {
+            // Explicit credential type for the separately approved setup operation.
+            "authentication": "managed-identity",
+            // Worker identity's application client ID, used as the recipient of approved folder grants.
+            "workerClientId": "a439a969-afe3-454f-850c-5909490ccd31",
+            // Separate provisioning identity's application client ID; not the everyday worker identity.
+            "setupClientId": "5dddb683-c13d-448a-9a12-fb7db82147a8"
+          },
+          // Journeys selected for every configured OneDrive account.
+          "scenarios": {
+            // Verify personal-drive upload, enumeration, download integrity and deletion.
+            "user-drive-roundtrip": true,
+            // Verify application-folder data creation, reading, updating and deletion.
+            "app-folder-lifecycle": true,
+            // Verify version history and previously saved content.
+            "document-versions": true
+          },
+          // User-defined reporting groups, not separate worker deployments or execution regions.
+          "targets": {
+            // Stable aggregation-group key for these OneDrive accounts.
+            "united-states-users": {
+              // Group label displayed within health-model entities and in diagnostics.
+              "userGroupName": "United States Users",
+              // Licensed accounts with provisioned personal drives; generated drive/folder IDs stay in .env.
+              "users": [
+                // First personal-drive target.
+                {
+                  // Account UPN; its stable internal key is derived automatically.
+                  "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com",
+                  // Approved test folder located or created by OneDrive setup.
+                  "folderName": "AHM-Synthetic-Tests",
+                  // False skips rewriting prior-version bytes as current content; not native restoreVersion.
+                  "restoreVersion": false
+                },
+                // Second personal-drive target.
+                {
+                  // Account UPN; its stable internal key is derived automatically.
+                  "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com",
+                  // Approved test folder located or created by OneDrive setup.
+                  "folderName": "AHM-Synthetic-Tests",
+                  // False skips rewriting prior-version bytes as current content; not native restoreVersion.
+                  "restoreVersion": false
+                }
+              ]
+            }
           }
         }
       }
     }
-  }]
+  ]
 }

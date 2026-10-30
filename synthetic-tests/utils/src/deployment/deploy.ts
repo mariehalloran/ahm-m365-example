@@ -4,11 +4,11 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { ConfigurationError } from "../configuration/config.js";
+import { ConfigurationError, parseConfigJson } from "../configuration/config.js";
 import { applyBindings, parseBindings, readBindingsText } from "../configuration/bindings.js";
 import {
   beginMutations, buildBicep, createStateDirectory, deployFoundation, deployModels, deployWorkers, deploysWorkers, hash, nativeCertificates,
-  parseJson, pinImage, preflight, previewChanges, removeSecureParameters, retireObsoleteEntities, saveProvenance, sourceFingerprint,
+  pinImage, preflight, previewChanges, removeSecureParameters, retireObsoleteEntities, saveProvenance, sourceFingerprint,
   verifyRollout, writeParameterFiles, type DeploymentRun,
 } from "./deploy-phases.js";
 import { canonicalProjectFile } from "../paths.js";
@@ -98,7 +98,7 @@ export async function deployMonitoring(options: DeploymentOptions = {}) {
   const configText = await readFile(file, "utf8");
   const bindingsText = await readBindingsText(file);
   const prepared = prepareProjectDeployment(
-    applyBindings(parseJson<unknown>(configText, "monitoring.config.json"), parseBindings(bindingsText)),
+    applyBindings(parseConfigJson(configText), parseBindings(bindingsText)),
   );
   if (options.plan) {
     const plan = { ...deploymentPlan(prepared), configFile: file };

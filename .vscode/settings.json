@@ -1,0 +1,5 @@
+{
+  "files.associations": {
+    "monitoring.config.json": "jsonc"
+  }
+}

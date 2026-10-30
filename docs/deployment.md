@@ -16,6 +16,10 @@ checked in; it holds your choices, names and a few IDs, never secrets. The IDs t
 looks up or generates live in a gitignored [`.env`](#generated-ids-in-env) beside it, not
 in the config.
 
+The config uses JSON syntax with `//` and `/* ... */` comments (JSONC), keeping its
+existing filename. Setup, deployment and worker commands accept comments; uploaded worker
+snapshots remain standard JSON. Invalid syntax and trailing commas are rejected.
+
 ## What the config holds
 
 The config **names** things, an Azure resource by its name and an account by its address;

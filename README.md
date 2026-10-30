@@ -1,8 +1,8 @@
 # Monitoring M365 with Azure Monitor Health Models
 
-This repository deploys Azure Monitor Health Models and Microsoft 365 synthetic workers from a single root configuration: `monitoring.config.json`.
+This repository deploys Azure Monitor Health Models and Microsoft 365 synthetic workers from a single root configuration: [`monitoring.config.json`](./monitoring.config.json).
 
-Azure Monitor Health Models helps administrators monitor Microsoft 365 in terms of completed tasks rather than isolated API responses. API-backed synthetic journeys provide success and latency signals, and the model connects business steps and journeys to Exchange, Teams, OneDrive, and the overall Microsoft 365 experience. This dependency-based view makes observed impact easier to trace and supports experience-level alerts, while Microsoft-reported Service Health remains separate supporting context.
+The health model helps administrators monitor Microsoft 365 in terms of completed tasks rather than isolated API responses. API-backed synthetic journeys provide success and latency signals, and the model connects business steps and journeys to Exchange, Teams, OneDrive, and the overall Microsoft 365 experience. This dependency-based view makes observed impact easier to trace and supports experience-level alerts, while Microsoft-reported Service Health remains separate supporting context.
 
 ![Exchange Experience health model showing Mail and Calendar journeys, business-step health, and separate Service Health context](./docs/images/exchange-health-model.png)
 
@@ -28,12 +28,12 @@ Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts becaus
 
 ## Quick start
 
-1. Complete prerequisites and access grants in `docs/setup.md`.
-2. From `synthetic-tests/`, install dependencies:
+1. Complete prerequisites and access grants in [`docs/setup.md`](./docs/setup.md).
+2. From [`synthetic-tests/`](./synthetic-tests/), install dependencies:
    ```sh
    npm ci
    ```
-3. Populate generated IDs in `.env`:
+3. Populate the [generated ID bindings](./docs/deployment.md#generated-ids-in-env):
    ```sh
    npm run setup:ids
    npm run setup:reply-seeds      # when Exchange reply journey is enabled
@@ -47,17 +47,17 @@ Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts becaus
 
 ## Configuration
 
-- Use only root `monitoring.config.json`.
-- Keep generated per-target IDs in `.env` beside the config.
+- Use only root [`monitoring.config.json`](./monitoring.config.json).
+- Keep [generated per-target ID bindings](./docs/deployment.md#generated-ids-in-env) beside the config.
 - `logAnalytics.enabled` controls direct reports (`false`) vs observation pipeline (`true`).
 - `serviceHealth.enabled` controls provider context entities and collection.
 
 ## References
 
-- Setup: `docs/setup.md`
-- Deployment flow: `docs/deployment.md`
-- Operations and monitoring: `docs/operations.md`
-- Architecture diagrams: `docs/architecture.md`
-- Group configuration: `docs/monitoring-groups.md`
-- Worker details: `synthetic-tests/README.md`
-- Model details: `health-model/README.md`
+- Setup: [docs/setup.md](./docs/setup.md)
+- Deployment flow: [docs/deployment.md](./docs/deployment.md)
+- Operations and monitoring: [docs/operations.md](./docs/operations.md)
+- Architecture diagrams: [docs/architecture.md](./docs/architecture.md)
+- Group configuration: [docs/monitoring-groups.md](./docs/monitoring-groups.md)
+- Worker details: [synthetic-tests/README.md](./synthetic-tests/README.md)
+- Model details: [health-model/README.md](./health-model/README.md)
