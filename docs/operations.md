@@ -205,12 +205,14 @@ Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_S
 Each source runs per independent provider-lane cycle (`providerIntervalSeconds`, default 60), bounded to 30 seconds and five exact-origin/version/path pages. The whole provider cycle is bounded below its minute slot. Check `m365-provider-collection-failed` and `service-provider-summary.providers.failed`; successful journeys can coexist with provider failures. Missing/invalid/stale provider samples report Unknown, distinct from synthetic timeout failure/Unhealthy. Simulation skips sources without fabricated Microsoft health. No provider value enters synthetic/step measurements.
 
 Optional `execution.serviceMessages` adds the separately approved Message Center
-feed. Inspect **Data annotations** on the existing Service Health entity for each
-minute's recent changes, quiet snapshot or explicit source unavailability.
+feed. Inspect **Data annotations** on the existing Service Health entity for new
+or updated notices: one title-only Details field and a pretty JSON Description.
+Quiet polls create no entries; counts and status still refresh every minute.
 `service-communications-snapshot-failed` and the count signals' `annotation`
 diagnostics identify publication failures. Older unresolved incidents remain in
-active counts; a quiet annotation is not proof of no ongoing incident. See
-[timeline bounds and permissions](./provider-monitoring.md#minute-by-minute-data-annotations).
+active counts; an empty annotation interval is not proof of no ongoing incident.
+Count diagnostics distinguish no unseen changes from unavailable sources. See
+[timeline bounds and permissions](./provider-monitoring.md#notice-update-data-annotations).
 
 See the [strict schema, limits, diagnostics and first-party references](../synthetic-tests/utils/README.md#optional-provider-collectors). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply diagnostic retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
 

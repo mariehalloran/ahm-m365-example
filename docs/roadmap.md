@@ -18,9 +18,14 @@ Baseline: `f0a85cc` on `main`. Delivery branch:
 Read-only Graph/Azure discovery and validated **local checkpoint commits** are
 approved. The user separately approved the `ServiceMessage.Read.All` grant to the
 existing provider application, one value-less context-ingestion preflight report,
-and one clearly labelled Exchange data-annotation preflight. Those specific
-changes have been applied. Additional grants/publications, deployment, live
-synthetic mutations, pushing and history rewriting are not approved.
+and one clearly labelled Exchange data-annotation preflight. The user subsequently
+approved the standard deployment, its existing live journeys, minute annotation
+publication and three entity-scoped annotation assignments. The separately approved
+entity-read addition has also been applied to that role, without redeploying workers.
+The user then replaced quiet minute snapshots with per-notice JSON annotations
+and approved one standard rollout of that validated change, explicitly without a
+format-preview publication. Generic entity write, broader assignments, new Graph
+grants, additional previews, pushing and history rewriting are not approved.
 
 The handoff is the supplied `README-m365-service-communications.md`. It is a
 design input, not evidence that the feature or its permissions already work.
@@ -37,9 +42,9 @@ files.
 | C0 | Establish roadmap and rollback baseline | None | Scope, approvals, checkpoints and blockers recorded | Done: `61d673a` |
 | C1 | Verify communications contracts | None | v1.0 filters/continuations, actual product labels, relevance semantics, report size and useful portal presentation established or explicitly blocked | Verified, including readable annotation preflight and issue timestamp filters |
 | C2 | Add service-scoped collectors and models | C1 contract decisions | Complete bounded snapshots, distinct IDs, isolated source failures, explicit Unknown; no unrelated service feed | Implemented and locally verified |
-| C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded data annotations and informational count/status signals; default-off per-service Message Center opt-in; disabled and messages-only gates work | Implemented and locally verified; not deployed |
-| C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Local validation passed; this feature checkpoint |
-| V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Approval gated |
+| C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded data annotations and informational count/status signals; default-off per-service Message Center opt-in; disabled and messages-only gates work | Initial format deployed; per-notice JSON revision in progress |
+| C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Initial feature `1410917`; entity-read fix `bd0f751` |
+| V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Authorization works; revised presentation and quiet suppression await rollout |
 | R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Paused until feature validation |
 | R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Planned |
 | R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Planned |
@@ -67,15 +72,18 @@ files.
   statuses/categories and latest-update excerpts. Sort posts by timestamp.
   Distinguish total matching items, displayed items and omitted/truncated content.
 - The annotation API adds records rather than updating a named current record.
-  The user selected one snapshot per minute, including explicit quiet snapshots.
-  Summaries contain new/updated source notices in an overlapping 90-second window;
-  active counts/status retain full current state. Suppress same-minute retries and
-  already-recorded notice versions in overlapping windows; do not add a durable
-  cursor/outbox. Retention and deletion have not been established.
+  The user's revised contract is one annotation per new/updated source notice,
+  with pretty JSON Description and title-only Details. Do not post quiet or
+  unavailable placeholders or repeat the annotation's timestamp in its body.
+  Use the overlapping 90-second source window; active count/status signals still
+  refresh every minute. Suppress already-recorded versions and retain explicit
+  publication/failure/omission diagnostics. Do not add a durable cursor/outbox.
+  Retention and deletion have not been established; old annotations remain.
 - Reuse the existing worker, Container App and provider lane. Change the configured
   provider cadence from 300 to 60 seconds; synthetic schedules are unchanged.
   Approved beta sources share that lane and are consequently polled more often.
-  Quiet means complete collection returned no new changes, never failed collection.
+  No new annotation means no unseen change or unavailable collection; signal
+  diagnostics distinguish those cases rather than fabricating a quiet success.
   Worker downtime leaves gaps; there is no retrospective backfill or exactly-once
   guarantee across concurrently running revisions.
 - Preserve existing status and beta signals. Reuse
@@ -124,11 +132,9 @@ stateless workers, skipped-action semantics, existing signal IDs and both loggin
 modes. Provider context remains suppressed and cannot affect synthetic scores or
 Experience rollup.
 
-The specific `ServiceMessage.Read.All` application grant is approved and applied.
-Live acceptance still needs separate approval for deployment, additional
-publications, any additional grants, or live synthetic mutations. Filtering is
-not permission scoping: provider Graph grants are tenant-wide. Do not broaden
-synthetic identities.
+The approvals above cover the initial live acceptance only. Any further grants,
+scope broadening or rollouts need separate approval. Filtering is not permission
+scoping: provider Graph grants are tenant-wide. Do not broaden synthetic identities.
 
 Check disabled/root-off/messages-only cases, multi-service membership, old active
 incidents, duplicate IDs, pagination exhaustion, stale data and denied access.
@@ -167,7 +173,8 @@ does not meet the acceptance gate.
 
 ## Current evidence and blockers
 
-- Roadmap checkpoint: `61d673a`; baseline `f0a85cc`. Existing `typecheck`, `build`
+- Roadmap checkpoint: `61d673a`; feature checkpoint: `1410917`; baseline `f0a85cc`.
+  Existing `typecheck`, `build`
   and `deploy -- --plan` passed before implementation; the plan reported no cloud
   changes. This checkpoint implements communications only; no coding refactor
   has begun.
@@ -212,14 +219,49 @@ does not meet the acceptance gate.
   `service eq 'Exchange Online' and (isResolved eq false or lastModifiedDateTime ge ...)`:
   the historical positive cutoff returned 41 records, a future cutoff returned the
   one unresolved issue, and all results were complete and service-scoped.
-- Azure's operations inventory confirms annotation permissions are
+- Azure's operations inventory advertises the annotation actions
   `Microsoft.CloudHealth/healthmodels/entities/addDataAnnotation/action` and
   `Microsoft.CloudHealth/healthmodels/entities/getDataAnnotations/action`.
-  The local template adds a separate narrow role scoped to each existing Service
-  Health entity. Applying those assignments and deploying workers remain unapproved.
-- Collection, annotation publishing and existing-worker integration are locally
-  implemented and verified, not deployed. The standard deployment also redeploys
-  configured reporting resources and resumes the existing live synthetic journeys;
-  it is not a provider-only preflight. New annotation grants and this rollout need
-  separate approval. Validate real persisted minute snapshots and current counts,
-  then confirm their portal usefulness before starting the coding refactor.
+  The approved deployment applied one assignment per existing worker at its exact
+  Service Health entity, without broadening the ingest-only role.
+- Standard deployment `20261030T150234969Z-cb0f6b74` succeeded from `1410917`.
+  All three existing applications use image digest
+  `9a14dfab47a778380cfd0ea1f55cc6d2999d9578c2933f9b16d9695dcf3a7cf6`;
+  identity sets and root relationships are unchanged. The Exchange observation
+  check found 40 records for 20 journey/target pairs, including one real failure;
+  successful delivery does not mean every synthetic journey was healthy.
+- Independent deployed collectors at `2026-10-30T15:17:23Z` matched native active
+  issue/message signals: Exchange `1/51`, Teams `0/129`, OneDrive `1/18`.
+  All three supporting entities remained suppressed. No recent source updates
+  were observed; new/update rendering has mocked coverage, not a forced live notice.
+- Native annotation history reads returned HTTP 403 under the actual worker
+  credential, explicitly requiring
+  `Microsoft.CloudHealth/healthModels/entities/read`. Both preview API versions
+  behaved identically. The separately approved entity-read action was added to the
+  same role at `2026-10-30T15:31:58Z`; Bicep build/lint passed, and the same three
+  direct entity-scoped assignments were verified unchanged. No worker restart,
+  generic entity-write permission or additional Graph grant was applied.
+- As of the worker-identity read at approximately `15:37Z`, ARM still rejected
+  entity read. Recent native annotation history was empty and count diagnostics
+  explicitly recorded annotation permission failure. The role definition update
+  is not proof of effective authorization. Append authorization remains unverified;
+  malformed requests returning HTTP 400 did not establish it.
+- Authorization subsequently became effective without a worker restart or broader
+  grant. The first real Exchange annotation was confirmed at `15:49Z`; native
+  worker-credential reads with both supported ARM token audiences succeeded.
+  The initial live helper encountered server timestamp normalization (seven
+  fractional digits versus three), not different instants; its literal timestamp
+  assertion did not establish complete acceptance.
+- The user rejected the quiet entries and old presentation. The replacement emits
+  only new/updated notices, one title-only annotation each, with pretty JSON and no
+  duplicate snapshot timestamp. Local checks and the approved deployment must
+  verify this revised contract; no preview publication is approved.
+- Revised sources pass `typecheck`, `build`, the local no-cloud deployment plan
+  and nine temporary behavior groups, including quiet suppression, per-notice
+  JSON, legacy/tenant-isolated version history, valid Unicode truncation and
+  partial-append recovery without duplicate notices. The final RBAC audit confirms
+  exactly the three approved actions and unchanged direct entity assignments.
+- Reverify current counts, quiet suppression, sibling freshness and unchanged
+  service topology after rollout. Real notice creation cannot be forced; distinguish
+  mocked new/update formatting from live empty-window evidence. Keep the broader
+  coding refactor paused until this acceptance gate is resolved.

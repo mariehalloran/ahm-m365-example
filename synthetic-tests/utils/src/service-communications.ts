@@ -64,7 +64,7 @@ export function recentlyUpdated(updatedAt: string, window: CommunicationWindow):
   return updated >= Date.parse(window.startAt) && updated <= Date.parse(window.endAt);
 }
 
-export function communicationVersion(summary: CommunicationSummary): string {
+export function communicationVersion(summary: Pick<CommunicationSummary, "source" | "id" | "lastUpdatedAt">): string {
   return createHash("sha256").update(JSON.stringify([summary.source, summary.id, summary.lastUpdatedAt])).digest("hex");
 }
 

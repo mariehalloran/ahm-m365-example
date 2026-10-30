@@ -178,9 +178,10 @@ advanced feature's license minimum.
 When opted in, all three services can collect stable Service Health on independent
 provider lanes, by default every 60 seconds. With the separately approved
 `execution.serviceMessages` opt-in, Message Center announcements join incidents
-in minute-by-minute **Data annotations** on the existing Service Health entity.
-Annotations show recent changes or explicit quiet/unavailable snapshots; count
-signals retain complete current active totals. Exchange and Teams additionally
+as **Data annotations** on the existing Service Health entity, one per new or
+updated notice. Description is readable JSON; Details shows only its title.
+Quiet polls create no annotations; count signals still refresh complete current
+active totals every minute. Exchange and Teams additionally
 support all nine Exchange and five Teams beta activity functions; OneDrive has no beta collector.
 Each product's single suppressed Service Health entity cannot change synthetic metrics or
 Experience rollup. Beta collection requires separate explicit approval.

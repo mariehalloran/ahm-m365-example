@@ -3,13 +3,13 @@ import type { Telemetry } from "./contracts.js";
 import {
   createHealthModelHttp, healthModelBaseUrl, type HealthReportClientOptions, type HealthReportCycle,
 } from "./health-report-client.js";
-import { IntegrationError, readResponseBody, withAbort } from "./http.js";
+import { categoryOf, IntegrationError, readResponseBody, withAbort } from "./http.js";
 import { ProviderCollectionError, PROVIDER_PAGE_BYTE_LIMIT, PROVIDER_PAGE_LIMIT } from "./provider-collection.js";
 import type { ProviderCategory, ProviderDiagnostic } from "./provider-diagnostics.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { ServiceConfig } from "./service-config.js";
 import {
-  communicationVersion, communicationWindow, COMMUNICATION_WINDOW_MILLISECONDS,
+  communicationVersion, COMMUNICATION_WINDOW_MILLISECONDS, issueCommunicationSchema, messageCommunicationSchema,
   MAX_ANNOTATION_DESCRIPTION_BYTES, MAX_COMMUNICATION_SUMMARIES, serviceHealthNames, type CommunicationSummary,
 } from "./service-communications.js";
 
@@ -24,9 +24,27 @@ export interface CommunicationsSnapshot {
   messages: CommunicationFeed<Extract<CommunicationRecord, { kind: "message-summary" }>>;
 }
 export type AnnotationPublication =
-  | { state: "published" | "already-published"; annotationId: string; snapshotMinute: string }
-  | { state: "failed"; category: ProviderCategory; httpStatus?: number }
+  | { state: "published"; annotations: PublishedCommunication[]; omitted: number }
+  | { state: "no-new-changes" | "source-unavailable" }
+  | { state: "failed"; category: ProviderCategory; httpStatus?: number; annotations?: PublishedCommunication[] }
   | { state: "disabled" };
+interface PublishedCommunication {
+  source: CommunicationSummary["source"];
+  annotationId: string;
+}
+export class AnnotationPublicationError extends Error {
+  readonly publication: Extract<AnnotationPublication, { state: "failed" }>;
+  constructor(cause: unknown, annotations: PublishedCommunication[]) {
+    super("Service communication publication failed after some notices were published", { cause });
+    this.name = "AnnotationPublicationError";
+    this.publication = {
+      state: "failed",
+      category: cause instanceof ProviderCollectionError ? cause.category : categoryOf(cause),
+      ...(cause instanceof IntegrationError && cause.status !== undefined ? { httpStatus: cause.status } : {}),
+      annotations,
+    };
+  }
+}
 type AnnotationPublisher = (snapshot: CommunicationsSnapshot, cycle: HealthReportCycle) => Promise<AnnotationPublication>;
 type FeedName = "issues" | "messages";
 const feedNames: readonly FeedName[] = ["issues", "messages"];
@@ -46,97 +64,44 @@ const annotationPageSchema = z.object({
   nextMarker: z.string().min(1).max(4096).nullish(),
 });
 const versionsSchema = z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(MAX_COMMUNICATION_SUMMARIES);
+const descriptionScope = { tenant: z.string().min(1), service: z.string().min(1).max(128) };
+const descriptionSchema = z.discriminatedUnion("source", [
+  issueCommunicationSchema.omit({ title: true }).extend(descriptionScope),
+  messageCommunicationSchema.omit({ title: true }).extend(descriptionScope),
+]);
+const descriptionScopeSchema = z.object({
+  ...descriptionScope, source: z.enum(["serviceAnnouncement.issues", "serviceAnnouncement.messages"]),
+});
 type DataAnnotation = z.infer<typeof annotationSchema>;
 export interface CommunicationsAnnotation { annotationDetails: Record<string, string>; description: string }
 
-function snapshotMinute(collectedAt: string): string {
-  return new Date(Math.floor(Date.parse(collectedAt) / 60000) * 60000).toISOString();
-}
-
-function renderCommunication(item: CommunicationSummary): string {
-  const classification = item.source === "serviceAnnouncement.issues"
-    ? `Status: ${item.status}${item.classification ? `; classification: ${item.classification}` : ""}`
-    : `Category: ${item.category}; severity: ${item.severity}; major change: ${item.isMajorChange}\n`
-      + `Action required by: ${item.actionRequiredBy ?? "Not specified"}; ends: ${item.endDateTime ?? "Not specified"}`;
-  return [
-    `${item.id}: ${item.title || "(untitled)"}`,
-    `Service: ${item.sourceService}; ${classification}`,
-    `Last source update: ${item.lastUpdatedAt}`,
-    `Latest update: ${item.excerpt || "(no update text)"}${item.textTruncated ? " [text truncated]" : ""}`,
-    `Source: ${item.sourceUrl}`,
-  ].join("\n");
-}
-
-function renderFeed(
-  name: FeedName, feed: CommunicationFeed, candidates: CommunicationSummary[], selected: CommunicationSummary[],
-): string {
-  const label = name === "issues" ? "Service incidents/advisories" : "Message Center";
-  if (feed.state === "disabled") return `${label}: not enabled.`;
-  if (feed.state === "unavailable") return `${label}: DATA UNAVAILABLE (${feed.diagnosticCategories.join(", ")}).`;
-  const alreadyRecorded = feed.summary.recentCount - candidates.length;
-  return [
-    `${label}: ${feed.summary.count} active; ${feed.summary.recentCount} changed in the window; `
-      + `${alreadyRecorded} already recorded; ${selected.length} displayed; ${candidates.length - selected.length} omitted.`,
-    ...selected.map(renderCommunication),
-  ].join("\n\n");
-}
-
 export function prepareCommunicationsAnnotation(
-  tenant: string, service: ServiceConfig["type"], snapshot: CommunicationsSnapshot,
-  previousVersions: ReadonlySet<string> = new Set(),
+  tenant: string, service: ServiceConfig["type"], item: CommunicationSummary,
 ): CommunicationsAnnotation {
-  const window = communicationWindow(snapshot.collectedAt);
-  const candidates: Record<FeedName, CommunicationSummary[]> = {
-    issues: snapshot.issues.state === "complete"
-      ? snapshot.issues.summary.summaries.filter(item => !previousVersions.has(communicationVersion(item))) : [],
-    messages: snapshot.messages.state === "complete"
-      ? snapshot.messages.summary.summaries.filter(item => !previousVersions.has(communicationVersion(item))) : [],
-  };
-  const selected: Record<FeedName, CommunicationSummary[]> = { issues: [], messages: [] };
-  const unavailable = feedNames.some(name => snapshot[name].state === "unavailable");
-  const newChanges = candidates.issues.length + candidates.messages.length;
-  const build = (): CommunicationsAnnotation => ({
-    annotationDetails: {
-      source: annotationSource, tenant, service: serviceHealthNames[service],
-      snapshotMinute: snapshotMinute(snapshot.collectedAt),
-      title: `${serviceHealthNames[service]} communications snapshot`,
-      window: `${window.startAt} / ${window.endAt}`,
-      collectionStatus: feedNames.map(name => `${name}=${snapshot[name].state}`).join(";"),
-      counts: JSON.stringify({
-        activeIssues: snapshot.issues.state === "complete" ? snapshot.issues.summary.count : null,
-        activeMessages: snapshot.messages.state === "complete" ? snapshot.messages.summary.count : null,
-        recentIssues: snapshot.issues.state === "complete" ? snapshot.issues.summary.recentCount : null,
-        recentMessages: snapshot.messages.state === "complete" ? snapshot.messages.summary.recentCount : null,
-        shown: selected.issues.length + selected.messages.length,
-        omitted: newChanges - selected.issues.length - selected.messages.length,
-      }),
-      issueVersions: JSON.stringify(selected.issues.map(communicationVersion)),
-      messageVersions: JSON.stringify(selected.messages.map(communicationVersion)),
-    },
-    description: [
-      `${serviceHealthNames[service]} service communications - tenant ${tenant}`,
-      `Snapshot: ${snapshot.collectedAt}\nSource-update window: ${window.startAt} to ${window.endAt}`,
-      unavailable ? "PARTIAL/UNAVAILABLE SNAPSHOT: a failed source is not an empty feed."
-        : newChanges ? "New or updated source notices; counts below retain all active items."
-          : "No newly observed changes. Previously recorded versions are not repeated. Active items may still exist.",
-      ...feedNames.map(name => renderFeed(name, snapshot[name], candidates[name], selected[name])),
-    ].join("\n\n"),
-  });
-  for (let index = 0; index < MAX_COMMUNICATION_SUMMARIES; index++) {
-    for (const name of feedNames) {
-      const item = candidates[name][index];
-      if (!item) continue;
-      selected[name].push(item);
-      if (Buffer.byteLength(build().description, "utf8") > MAX_ANNOTATION_DESCRIPTION_BYTES) selected[name].pop();
+  const { title, ...notice } = item;
+  const characters = Array.from(notice.excerpt);
+  const render = (length: number): string => JSON.stringify({
+    tenant, service: serviceHealthNames[service], ...notice,
+    excerpt: length === characters.length ? notice.excerpt : length ? `${characters.slice(0, length).join("")}...` : "",
+    textTruncated: notice.textTruncated || length < characters.length,
+  }, null, 2);
+  let description = render(characters.length);
+  if (Buffer.byteLength(description, "utf8") > MAX_ANNOTATION_DESCRIPTION_BYTES) {
+    let lower = 0;
+    let upper = Math.max(0, characters.length - 3);
+    while (lower < upper) {
+      const length = Math.ceil((lower + upper) / 2);
+      if (Buffer.byteLength(render(length), "utf8") <= MAX_ANNOTATION_DESCRIPTION_BYTES) lower = length;
+      else upper = length - 1;
     }
+    description = render(lower);
   }
-  const body = build();
-  if (Buffer.byteLength(body.description, "utf8") > MAX_ANNOTATION_DESCRIPTION_BYTES ||
-      (newChanges > 0 && selected.issues.length + selected.messages.length === 0) ||
-      !detailsSchema.safeParse(body.annotationDetails).success) {
+  const annotationDetails = { title: title || "(untitled)" };
+  if (Buffer.byteLength(description, "utf8") > MAX_ANNOTATION_DESCRIPTION_BYTES ||
+      !detailsSchema.safeParse(annotationDetails).success) {
     throw new IntegrationError("malformed-response", undefined, "annotation-size-budget");
   }
-  return body;
+  return { annotationDetails, description };
 }
 
 async function annotationJson<T>(response: Response, schema: z.ZodType<T>, signal: AbortSignal): Promise<T> {
@@ -156,9 +121,26 @@ async function annotationJson<T>(response: Response, schema: z.ZodType<T>, signa
   return parsed.data;
 }
 
-function recordedVersions(annotations: DataAnnotation[]): Set<string> {
+function recordedVersions(annotations: DataAnnotation[], tenant: string, service: ServiceConfig["type"]): Set<string> {
   const versions = new Set<string>();
   for (const annotation of annotations) {
+    if (annotation.annotationDetails.source !== annotationSource) {
+      if (!annotation.description) continue;
+      let raw: unknown;
+      try { raw = JSON.parse(annotation.description); }
+      catch (error) {
+        if (error instanceof SyntaxError) continue;
+        throw error;
+      }
+      const scope = descriptionScopeSchema.safeParse(raw);
+      if (!scope.success || scope.data.tenant !== tenant || scope.data.service !== serviceHealthNames[service]) continue;
+      const parsed = descriptionSchema.safeParse(raw);
+      if (!parsed.success) throw new IntegrationError("malformed-response", undefined, "annotation-description-schema");
+      versions.add(communicationVersion(parsed.data));
+      continue;
+    }
+    if (annotation.annotationDetails.tenant !== tenant ||
+        annotation.annotationDetails.service !== serviceHealthNames[service]) continue;
     for (const field of ["issueVersions", "messageVersions"]) {
       const text = annotation.annotationDetails[field];
       if (text === undefined) throw new IntegrationError("malformed-response", undefined, "annotation-version-schema");
@@ -187,12 +169,10 @@ export function createServiceAnnotationPublisher(
   const entityName = `${service.type}-service-health`;
   const entityUrl = `${healthModelBaseUrl(project, service.type)}/entities/${encodeURIComponent(entityName)}`;
   const actionUrl = (action: "getDataAnnotations" | "addDataAnnotation") => `${entityUrl}/${action}?api-version=2026-05-01-preview`;
-  const ownAnnotation = (annotation: DataAnnotation) => annotation.annotationDetails.source === annotationSource &&
-    annotation.annotationDetails.tenant === project.tenant.id && annotation.annotationDetails.service === serviceHealthNames[service.type];
   return async (snapshot, cycle) => {
     const deadline = AbortSignal.timeout(ANNOTATION_TIMEOUT_MS);
     const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
-    const metadata = { cycleId: cycle.cycleId, entityName, tenant: project.tenant.id, snapshotMinute: snapshotMinute(snapshot.collectedAt) };
+    const metadata = { cycleId: cycle.cycleId, entityName, tenant: project.tenant.id };
     const annotations: DataAnnotation[] = [];
     const visited = new Set<string>();
     let nextMarker: string | undefined;
@@ -205,27 +185,52 @@ export function createServiceAnnotationPublisher(
       }, signal);
       const result = await annotationJson(response, annotationPageSchema, signal);
       if (result.entityName !== entityName) throw new IntegrationError("malformed-response", undefined, "annotation-entity-mismatch");
-      annotations.push(...result.annotations.filter(ownAnnotation));
+      annotations.push(...result.annotations);
       if (result.nextMarker === undefined || result.nextMarker === null) break;
       if (visited.has(result.nextMarker) || page === PROVIDER_PAGE_LIMIT - 1) throw new ProviderCollectionError("pagination-budget");
       visited.add(result.nextMarker);
       nextMarker = result.nextMarker;
     }
-    const existing = annotations.find(annotation => annotation.annotationDetails.snapshotMinute === metadata.snapshotMinute);
-    if (existing) {
-      telemetry.emit("service-communications-snapshot-already-published", { ...metadata, annotationId: existing.annotationId });
-      return { state: "already-published", annotationId: existing.annotationId, snapshotMinute: metadata.snapshotMinute };
+    const previousVersions = recordedVersions(annotations, project.tenant.id, service.type);
+    const candidates: Record<FeedName, CommunicationSummary[]> = { issues: [], messages: [] };
+    for (const name of feedNames) {
+      const feed = snapshot[name];
+      if (feed.state === "complete") {
+        candidates[name] = feed.summary.summaries.filter(item => !previousVersions.has(communicationVersion(item)));
+      }
     }
-    const body = prepareCommunicationsAnnotation(project.tenant.id, service.type, snapshot, recordedVersions(annotations));
-    const response = await http.request(actionUrl("addDataAnnotation"), {
-      method: "POST", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }, signal, false);
-    const published = await annotationJson(response, annotationSchema, signal);
-    if (published.description !== body.description ||
-        Object.entries(body.annotationDetails).some(([name, value]) => published.annotationDetails[name] !== value)) {
-      throw new IntegrationError("malformed-response", undefined, "annotation-response-mismatch");
+    const selected: CommunicationSummary[] = [];
+    for (let index = 0; index < MAX_COMMUNICATION_SUMMARIES; index++) {
+      for (const name of feedNames) {
+        const item = candidates[name][index];
+        if (item) selected.push(item);
+      }
     }
-    telemetry.emit("service-communications-snapshot-published", { ...metadata, annotationId: published.annotationId });
-    return { state: "published", annotationId: published.annotationId, snapshotMinute: metadata.snapshotMinute };
+    if (!selected.length) {
+      return { state: feedNames.some(name => snapshot[name].state === "unavailable") ? "source-unavailable" : "no-new-changes" };
+    }
+    const published: PublishedCommunication[] = [];
+    try {
+      for (const item of selected) {
+        const body = prepareCommunicationsAnnotation(project.tenant.id, service.type, item);
+        const response = await http.request(actionUrl("addDataAnnotation"), {
+          method: "POST", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        }, signal, false);
+        const annotation = await annotationJson(response, annotationSchema, signal);
+        if (annotation.description !== body.description ||
+            Object.keys(annotation.annotationDetails).length !== 1 || annotation.annotationDetails.title !== body.annotationDetails.title) {
+          throw new IntegrationError("malformed-response", undefined, "annotation-response-mismatch");
+        }
+        const reference = { source: item.source, annotationId: annotation.annotationId };
+        published.push(reference);
+        telemetry.emit("service-communications-notice-published", { ...metadata, ...reference, id: item.id });
+      }
+    } catch (error) {
+      if (published.length) throw new AnnotationPublicationError(error, published);
+      throw error;
+    }
+    const omitted = candidates.issues.length + candidates.messages.length - selected.length;
+    if (omitted) telemetry.emit("service-communications-notices-omitted", { ...metadata, omitted });
+    return { state: "published", annotations: published, omitted };
   };
 }

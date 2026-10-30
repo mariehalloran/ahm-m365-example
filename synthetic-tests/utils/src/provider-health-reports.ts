@@ -11,7 +11,7 @@ import { activityFunctions, isPercentageActivity } from "./provider-catalog.js";
 import { categoryOf, IntegrationError } from "./http.js";
 import { ProviderCollectionError } from "./provider-collection.js";
 import {
-  createServiceAnnotationPublisher, type AnnotationPublication,
+  AnnotationPublicationError, createServiceAnnotationPublisher, type AnnotationPublication,
   type CommunicationFeed, type CommunicationRecord, type CommunicationsSnapshot,
 } from "./service-annotations.js";
 
@@ -223,13 +223,14 @@ export function createProviderReporter(
     try { annotation = await publishAnnotation(snapshot, cycle); }
     catch (error) {
       errors.push(error);
-      annotation = {
+      const cause = error instanceof AnnotationPublicationError ? error.cause : error;
+      annotation = error instanceof AnnotationPublicationError ? error.publication : {
         state: "failed", category: error instanceof ProviderCollectionError ? error.category : categoryOf(error),
         ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
       };
       telemetry.emit("service-communications-snapshot-failed", {
         cycleId: cycle.cycleId, entityName: `${service.type}-service-health`, ...annotation,
-        ...(error instanceof IntegrationError && error.detail ? { detail: error.detail } : {}),
+        ...(cause instanceof IntegrationError && cause.detail ? { detail: cause.detail } : {}),
       });
     }
     const overall = [

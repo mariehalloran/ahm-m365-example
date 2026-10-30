@@ -175,11 +175,12 @@ Exchange/Teams beta observations report directly to each product's single impact
 Service Health entity. OneDrive has no beta collector. Provider failures,
 counts and thresholds cannot change synthetic success or Experience rollup.
 One rejected source cannot erase sibling observations.
-The same reporting stage publishes minute-by-minute Data annotations on the
-existing Service Health entity: bounded recent source changes, explicit quiet
-snapshots or source unavailability. Full active counts are independent of the
-90-second update window. Annotation history provides bounded duplicate
-suppression, not a durable cursor or exactly-once guarantee.
+The same reporting stage publishes one Data annotation per new/updated notice on
+the existing Service Health entity: title-only Details and a bounded, pretty JSON
+Description. Quiet or unavailable feeds create no placeholder annotations; their
+state remains explicit in count-signal diagnostics. Full active counts refresh
+each minute independently of the 90-second update window. Annotation history
+provides bounded version suppression, not a durable cursor or exactly-once guarantee.
 Every enabled selected beta source creates `microsoft-activity-<function>` external signals on that
 existing entity through ingestion; Bicep does not predeclare them or add activity
 nodes. Without explicit thresholds, numeric activity measurements have `Unknown`

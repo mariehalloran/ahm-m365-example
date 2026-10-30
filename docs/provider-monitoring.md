@@ -163,13 +163,20 @@ outbound notification system is added.
 
 Every enabled selected function produces `microsoft-activity-<function>` on **`${service}-service-health`**, alongside the selected stable status/count reports, whether data is available or not. Signal names remain distinct and unchanged. With more than one tenant in the config each is published as `tenant-<tenant id>--<name>`, one set per tenant on the shared entity; with one tenant the names stay plain. Without a threshold an activity signal reports a fresh numeric measurement with **Unknown**, no evaluation rules, and `evaluated: false` context: display is not an evaluated success. Explicit `serviceActivity.thresholds.<function>` enables `LessThan` customer `degradedBelow` / `unhealthyBelow`, ordered unhealthy ≤ degraded; percentage thresholds cannot exceed 100. Counts require explicit thresholds before producing evaluated health. No count is divided into an invented availability percentage; no raw activity metric changes a synthetic score. A disabled or unselected function receives no new reports; OneDrive has stable health/messages only.
 
-## Minute-by-minute Data annotations
+## Notice-update Data annotations
 
-The existing provider reporting stage adds one snapshot per tenant/product/minute
-to **Data annotations on `${service}-service-health`**, including quiet minutes.
-No new process, container, entity or per-message signal is created. Signal
-`additionalContext` retains diagnostics and annotation-publication status; it is
-not the primary readable announcement list.
+The existing provider reporting stage adds **one Data annotation per new or updated
+notice** on `${service}-service-health`. Quiet polls create nothing: there are no
+"No newly observed changes" entries or source-unavailability placeholders. Counts
+and status still refresh every minute, including explicit failed-source diagnostics.
+No new process, container, entity or per-message signal is created.
+
+Each annotation's Details contains only `title`, using the actual notice title.
+Description is pretty-printed JSON with the tenant/product, source, ID, latest
+update excerpt, status or message category/severity, truncation flag and source URL.
+`lastUpdatedAt` is Microsoft's source-update time, not the annotation's own timestamp.
+The snapshot timestamp is not repeated; Azure Monitor Health Models supplies the
+annotation timestamp. Full counts and publication diagnostics remain in signals.
 
 Only source notices whose `lastModifiedDateTime` falls within the preceding
 90 seconds appear as recent changes. Keep `providerIntervalSeconds: 60`; longer
@@ -178,18 +185,21 @@ count. Latest issue excerpts are selected by post timestamp, not array order.
 Message notices prioritize action-required items, major changes, then recent
 updates; ended notices are excluded and missing end dates are retained.
 
-Recent annotation history suppresses same-minute retries and already-displayed
-ID/update-time versions in overlapping windows. Each feed displays at most three
-new versions, with a conservative **4096 UTF-8-byte description budget**. Context
-includes total recent items, already-recorded items, displayed/omitted counts,
-plain-text excerpts, truncation flags and authenticated Graph source URLs.
-Links are not a promise of rich HTML or clickable portal rendering.
+Recent annotation history suppresses already-displayed source/ID/update-time
+versions, including retries in the same minute. History reads both the new JSON
+format and the previous snapshot version markers during migration; existing old
+annotations are not removed. Each feed publishes at most three unseen versions
+per cycle, with a conservative **4096 UTF-8-byte budget per JSON description**.
+Excerpts are shortened without breaking JSON or dropping IDs/links. The count
+signals disclose omitted notices and references to confirmed published annotations.
+Source URLs require Graph authorization; clickable portal rendering is not promised.
 
-A quiet snapshot requires successful enabled sources; unavailable sources are
-explicitly marked instead. Annotation read/write failure is logged and retained
-in count-signal diagnostics without suppressing healthy sibling reports. Reads
-are paginated and bounded; incomplete history does not authorize an unchecked
-append. Annotation writes are not automatically retried after ambiguous failures.
+`annotation.state` distinguishes `no-new-changes` from `source-unavailable`.
+Read/write failure is logged and retained in count-signal diagnostics without
+suppressing healthy sibling reports. If a later append fails, diagnostics retain
+the references already confirmed; no further writes are attempted that cycle.
+Reads are paginated and bounded; incomplete history does not authorize an unchecked
+append. Writes are not automatically retried after ambiguous failures.
 Workers remain stateless: downtime leaves gaps, no missed minutes are backfilled,
 and concurrent revisions cannot provide an exactly-once guarantee.
 
