@@ -45,8 +45,8 @@ files.
 | C3 | Integrate summaries, signals and configuration | C2 | Existing suppressed entities show bounded data annotations and informational count/status signals; default-off per-service Message Center opt-in; disabled and messages-only gates work | Notice-only JSON revision deployed from `5214c49` |
 | C4 | Validate and checkpoint communications | C3 | Existing local checks pass; count scope, permissions, limits and remaining live gates documented | Initial feature `1410917`; entity-read fix `bd0f751`; notice-only JSON `5214c49` |
 | V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Accepted by user: live quiet/count/topology plus local formatting evidence; no natural update observed |
-| R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Complete: validated live inputs, typed handlers and structural client ports |
-| R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Planned |
+| R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Complete: `588dca7`, validated live inputs, typed handlers and structural client ports |
+| R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Complete: pure measurement mapping and injected ingestion sinks |
 | R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Planned |
 | R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Planned |
 | V1 | Complete local integration verification | R4 | Final checks, focused behavior comparisons, reviewed diff and local checkpoint history | Planned |
@@ -176,8 +176,8 @@ does not meet the acceptance gate.
 - Roadmap checkpoint: `61d673a`; feature checkpoint: `1410917`; baseline `f0a85cc`.
   Existing `typecheck`, `build`
   and `deploy -- --plan` passed before implementation; the plan reported no cloud
-  changes. This checkpoint implements communications only; no coding refactor
-  has begun.
+  changes. That checkpoint implemented communications only, before the coding
+  refactor began.
 - Final feature sources pass `typecheck`, `build` and `deploy -- --plan`
   (`cloudChanges: false`, three existing workers and four existing models).
   The affected worker Bicep compiles and lints successfully.
@@ -301,3 +301,15 @@ does not meet the acceptance gate.
   and wrong-journey handlers while accepting structural client fakes. All nine
   communications behavior groups still pass, including zero quiet annotations.
   No refactor rollout or new cloud mutation is authorized or performed.
+- R2 shares one pure journey/step/call-phase measurement mapper between direct
+  reports and observations. Direct settled-cycle aggregation stays separate from
+  rolling KQL; signal names, skipped-step semantics and event-ID inputs are
+  unchanged. Ingestion processing now takes upload/quarantine sinks; environment
+  validation, Azure clients and Event Hub registration remain in the adapter.
+- R2 passes `typecheck`, `build` and the no-cloud deployment plan. Against frozen
+  baseline `5214c49`, 36 reporting cases preserve both outputs exactly, including
+  multi-tenant/group signals, minimum samples, binary observations and call-phase
+  ordering. Twelve ingestion cases preserve object/string/Buffer handling, byte
+  limits, retry exhaustion, quarantine hashes/logs and failure propagation.
+  The processor imports with an empty environment; validation made no network
+  requests. Function packaging recursively includes all emitted modules.

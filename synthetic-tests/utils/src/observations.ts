@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { isReportedStep, probeServices, reportedResult } from "./contracts.js";
+import { probeServices, reportedResult } from "./contracts.js";
 import { executionLanes } from "./execution-lanes.js";
 import { resultContext } from "./groups.js";
 import type { ProjectConfig } from "./project-config.js";
 import type { CycleResults } from "./results.js";
 import type { ServiceConfig } from "./service-config.js";
+import { resultMeasurements } from "./measurements.js";
 
 const syntheticDimensions = z.object({
   service: z.string().min(1).max(80),
@@ -73,14 +74,13 @@ export function cycleObservations(project: ProjectConfig, service: ServiceConfig
       authenticationMethod: service.type === "teams" ? "managed-identity-bot" : service.graphAuthentication,
       testVersion: result.schemaVersion,
     };
-    const observe = (
-      kind: "journey" | "step" | "call-phase", step: string, success: boolean,
-      durationMs: number, timestamp: string, failureCategory?: string, detail?: string,
-    ): Observation => observationSchema.parse({
+    return resultMeasurements(result).map(({
+      kind, step, success, durationMs, observedAt, diagnosticCategory: failureCategory, detail,
+    }) => observationSchema.parse({
       eventId: createHash("sha256").update([
         project.tenant.id, service.type, cycle.cycleId, result.correlationId, result.testType, result.testId, kind, step,
       ].join("\0")).digest("hex"),
-      timestamp, category: "M365Synthetic",
+      timestamp: observedAt, category: "M365Synthetic",
       subject: `${service.type}.${definition.journey}${step ? `.${step}` : ""}`,
       period: period(lane.intervalSeconds), unit: "success", version: "1", value: success ? 1 : 0,
       dimensions: {
@@ -95,28 +95,6 @@ export function cycleObservations(project: ProjectConfig, service: ServiceConfig
           resultCodes: result.call.resultCodes,
         } : {}),
       },
-    });
-    const failed = result.steps.find(step => step.status === "failed");
-    const observations = [
-      observe("journey", "", result.success, result.durationMs, result.observedAt,
-        result.diagnosticCategory ?? undefined, failed?.status === "failed" ? failed.detail : undefined),
-      ...result.steps.flatMap(step => step.status === "skipped" || !isReportedStep(step.name) ? [] : [
-        observe("step", step.name, step.status === "succeeded", step.durationMs, step.observedAt,
-          step.status === "failed" ? step.diagnosticCategory : undefined,
-          step.status === "failed" ? step.detail : undefined),
-      ]),
-    ];
-    if (result.testType === "teams-call") {
-      for (const [phase, name] of [["connection", "wait-for-answer"], ["disconnection", "end-call"]] as const) {
-        const step = result.steps.find(step => step.name === name);
-        if (!step || step.status === "skipped") continue;
-        const placed = result.steps.find(step => step.name === "place-call");
-        const submission = phase === "connection" && placed && placed.status !== "skipped" ? placed.durationMs : 0;
-        observations.push(observe("call-phase", phase, step.status === "succeeded", step.durationMs + submission,
-          step.observedAt, step.status === "failed" ? step.diagnosticCategory : undefined,
-          step.status === "failed" ? step.detail : undefined));
-      }
-    }
-    return observations;
+    }));
   });
 }

@@ -1,6 +1,5 @@
 import {
-  journeyStepEntities, probeServices, reportedResult, resultSchema,
-  type DiagnosticCategory, type SyntheticResult, type Telemetry,
+  probeServices, reportedResult, resultSchema, type SyntheticResult, type Telemetry,
 } from "./contracts.js";
 import { groupSignalName, tenantSignalName } from "./groups.js";
 import {
@@ -10,6 +9,7 @@ import {
 import type { ProjectConfig } from "./project-config.js";
 import type { CyclePublisher, CycleResults } from "./results.js";
 import type { ServiceConfig } from "./service-config.js";
+import { resultMeasurements, type MeasurementSample } from "./measurements.js";
 
 export type { HealthReport } from "./health-report-client.js";
 export interface DirectReportCycle extends CycleResults {
@@ -22,12 +22,6 @@ export const teamsCallSignals = [
 ] as const;
 const journeySignals = ["observed-success-percentage", "observed-mean-duration"] as const;
 
-interface MeasurementSample {
-  success: boolean;
-  durationMs: number;
-  observedAt: string;
-  diagnosticCategory?: DiagnosticCategory;
-}
 interface EntitySamples {
   entityName: string;
   journey: string;
@@ -37,29 +31,19 @@ interface EntitySamples {
 }
 type ReportingGroup = { id: string; displayName: string };
 
-function collectEntitySamples(results: SyntheticResult[], level: "journey" | "all"): EntitySamples[] {
+function collectEntitySamples(results: SyntheticResult[], level: "journey" | "all" | "call-phase"): EntitySamples[] {
   const entities = new Map<string, EntitySamples>();
   const append = (scope: Omit<EntitySamples, "samples">, sample: MeasurementSample) => {
-    const entity = entities.get(scope.entityName) ?? { ...scope, samples: [] };
+    const key = `${scope.entityName}:${scope.kind}:${scope.step}`;
+    const entity = entities.get(key) ?? { ...scope, samples: [] };
     entity.samples.push(sample);
-    entities.set(scope.entityName, entity);
+    entities.set(key, entity);
   };
   for (const result of results) {
-    const journey = probeServices[result.testType];
-    append({ entityName: journey.entityName, journey: journey.journey, kind: "journey", step: "" }, {
-      success: result.success, durationMs: result.durationMs, observedAt: result.observedAt,
-      ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
-    });
-    if (level === "journey") continue;
-    for (const step of result.steps) {
-      if (step.status === "skipped") continue;
-      append({
-        entityName: `${journey.entityName}-${journeyStepEntities[result.testType]?.[step.name] ?? step.name}`,
-        journey: journey.journey, kind: "step", step: step.name,
-      }, {
-        success: step.status === "succeeded", durationMs: step.durationMs, observedAt: step.observedAt,
-        ...(step.status === "failed" ? { diagnosticCategory: step.diagnosticCategory } : {}),
-      });
+    for (const measurement of resultMeasurements(result)) {
+      if (level === "all" ? measurement.kind === "call-phase" : measurement.kind !== level) continue;
+      const { entityName, journey, kind, step, ...sample } = measurement;
+      append({ entityName, journey, kind, step }, sample);
     }
   }
   return [...entities.values()];
@@ -115,26 +99,14 @@ function measurementReports(
 }
 
 function callMeasurementReports(project: ProjectConfig, cycle: DirectReportCycle, results: SyntheticResult[]): HealthReport[] {
-  const calls = results.filter(result => result.testType === "teams-call");
+  const entities = collectEntitySamples(results, "call-phase");
   const phases = [
-    { step: "wait-for-answer", phase: "connection", signals: [teamsCallSignals[0], teamsCallSignals[1]] },
-    { step: "end-call", phase: "disconnection", signals: [teamsCallSignals[2], teamsCallSignals[3]] },
+    { name: "connection", signals: [teamsCallSignals[0], teamsCallSignals[1]] },
+    { name: "disconnection", signals: [teamsCallSignals[2], teamsCallSignals[3]] },
   ] as const;
   return phases.flatMap(phase => {
-    const samples = calls.flatMap(result => {
-      const step = result.steps.find(step => step.name === phase.step);
-      if (!step || step.status === "skipped") return [];
-      const placed = result.steps.find(step => step.name === "place-call");
-      const submissionMs = phase.step === "wait-for-answer" && placed && placed.status !== "skipped" ? placed.durationMs : 0;
-      return [{
-        success: step.status === "succeeded", durationMs: step.durationMs + submissionMs, observedAt: step.observedAt,
-        ...(step.status === "failed" ? { diagnosticCategory: step.diagnosticCategory } : {}),
-      }];
-    });
-    return measurementReports(project, cycle, {
-      entityName: "teams-call", journey: probeServices["teams-call"].journey,
-      kind: "call-phase", step: phase.phase, samples,
-    }, phase.signals);
+    const entity = entities.find(entity => entity.step === phase.name);
+    return entity ? measurementReports(project, cycle, entity, phase.signals) : [];
   });
 }
 

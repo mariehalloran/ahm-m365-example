@@ -140,6 +140,11 @@ Deliberate draft/file and private-series deletion, and call departure, are
 business actions. Timed-out attempts contribute failure rather than becoming
 Unknown; aggregate thresholds determine the resulting entity health.
 
+`measurements.ts` is the pure journey/step/call-phase interpreter shared by
+direct reports and observations. Direct reports aggregate settled-cycle samples;
+observations retain individual binary samples for rolling KQL aggregation.
+Signal names, entity aliases and observation event IDs remain transport-specific.
+
 `measureStep` records a bounded observation and rethrows the failure.
 Dependent actions are skipped; owned cleanup gets an independent ten-second
 signal. Runner settlement grace is twelve seconds. Other products default to a
@@ -210,6 +215,9 @@ On uses the shared [publisher](./src/observation-publisher.ts) and
 in private quarantine and submits valid batches to DCR ingestion. Only this enabled
 mode retains mailbox/UPN and reporting-group arrays in observations; Teams stays ungrouped. See
 [Log Analytics for administrators](../../docs/operations.md#log-analytics-for-administrators).
+The Function adapter owns environment validation, SDK clients and registration;
+its `processor.ts` accepts upload/quarantine sinks and imports without deployment
+settings or client construction.
 Provider diagnostics remain console output; provider supporting reports are direct
 and suppressed in either mode. No additional exporter or instrumentation switch exists.
 
