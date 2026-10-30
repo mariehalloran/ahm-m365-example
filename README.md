@@ -118,7 +118,7 @@ Teams targets stay ungrouped; workers stay centrally hosted.
    cycle's actual journey/executed-step results and pushes health reports directly
    to Azure Monitor Health Models. No Event Hub, ingestion Function, DCR or
    Log Analytics ingestion is used. With `true`, compact observations use the
-   shared [publisher](./synthetic-tests/utils/src/observation-publisher.ts),
+   shared [publisher](./synthetic-tests/utils/src/reporting/observation-publisher.ts),
    Event Hubs, optional Capture, and a managed-identity Function/DCR bridge.
 3. **Evaluate:** direct reports carry per-cycle percentages, mean durations and
    threshold-based states. The enabled Log Analytics mode instead uses rolling,

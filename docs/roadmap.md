@@ -47,8 +47,8 @@ files.
 | V2 | Complete authorized live acceptance | C4 and separate approvals | Real scoped feeds, fresh ingested summaries, useful presentation and unchanged rollup verified; remaining reliability limits stated | Accepted by user: live quiet/count/topology plus local formatting evidence; no natural update observed |
 | R1 | Strengthen resolved execution models | C4 and V2 | Journey-specific probe/dependency types replace invalid optional-field combinations without changing user config or result contracts | Complete: `588dca7`, validated live inputs, typed handlers and structural client ports |
 | R2 | Clarify reporting and ingestion boundaries | R1 | Shared pure measurement interpretation; transport-specific aggregation preserved; ingestion processing imports without constructing Azure clients | Complete: `fd4cf48`, pure measurement mapping and injected ingestion sinks |
-| R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Complete: scoped lane execution, injectable deadlines and owned-resource models |
-| R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Planned |
+| R3 | Simplify worker and journey lifecycles | R2 | Named orchestration and workflow functions; controllable time/deadline seams; existing scheduling, cancellation, cleanup and request bounds preserved | Complete: `0fd1ffd`, scoped lane execution, injectable deadlines and owned-resource models |
+| R4 | Organize shared modules | R3 | Responsibility-based folders with imports, packaging, commands and source fingerprints kept consistent | Complete: six focused folders, imports and deployment entry updated |
 | V1 | Complete local integration verification | R4 | Final checks, focused behavior comparisons, reviewed diff and local checkpoint history | Planned |
 
 ### Communications first
@@ -324,3 +324,18 @@ does not meet the acceptance gate.
   failures, independent bounded cleanup, hung-handler grace, publication bounds,
   aligned minutes without catch-up, shared initialization/lane scope, provider
   isolation from initialization failures, and explicit shutdown errors.
+- R4 moves 46 shared modules into configuration, execution, integrations,
+  reporting, providers and deployment folders using TypeScript's rename tooling.
+  Contracts, catalogue/projection and repository-path anchors remain at the
+  shared root. The npm deployment entry and source links use the new locations.
+- R4 verification finds all 75 TypeScript bodies unchanged except relative
+  import paths, and checks all 320 relative imports against the intended moves.
+  Emitted dependency closures resolve for every worker and the ingestion entry.
+  Existing recursive Docker copies, Function `dist` packaging, TypeScript includes
+  and source fingerprint coverage include the nested modules without new lists.
+  The relocated fingerprint function resolves the correct repository root.
+- Final organized sources pass `typecheck`, `build`, the no-cloud deployment plan
+  and negative type contracts, including partial OneDrive ownership rejection.
+  All R1/R2 baseline comparisons, eight lifecycle groups and nine communications
+  groups still pass. No dependencies, permissions, synthetic schedules, root
+  configuration or health-model topology changed during the refactor.

@@ -1,5 +1,5 @@
-import { runServiceCommand } from "../../utils/src/command.js";
-import { dispatchProbeHandlers } from "../../utils/src/probes.js";
+import { runServiceCommand } from "../../utils/src/execution/command.js";
+import { dispatchProbeHandlers } from "../../utils/src/execution/probes.js";
 import { exchangeDraftProbe } from "./draft-journey.js";
 import { exchangeProbe } from "./journey.js";
 import { exchangeProviders } from "./providers.js";

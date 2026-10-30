@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { GraphOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
+import type { GraphOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
 import { messageSelect, messagesSchema, ownedMessage } from "./mail-safety.js";
 
 const messageSchema = z.object({ id: z.string().min(1) });

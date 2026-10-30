@@ -1,14 +1,14 @@
 import { AzureCliCredential, type TokenCredential } from "@azure/identity";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServiceCredential } from "../../utils/src/auth.js";
-import { bindingKey, saveBindings } from "../../utils/src/bindings.js";
-import { ConfigurationError } from "../../utils/src/config.js";
+import { createServiceCredential } from "../../utils/src/integrations/auth.js";
+import { bindingKey, saveBindings } from "../../utils/src/configuration/bindings.js";
+import { ConfigurationError } from "../../utils/src/configuration/config.js";
 import { consoleTelemetry, type Telemetry } from "../../utils/src/contracts.js";
-import { GraphClient } from "../../utils/src/graph.js";
-import { categoryOf } from "../../utils/src/http.js";
+import { GraphClient } from "../../utils/src/integrations/graph.js";
+import { categoryOf } from "../../utils/src/integrations/http.js";
 import { canonicalProjectFile } from "../../utils/src/paths.js";
-import { readProjectDocument, selectTenant, type ProjectConfig } from "../../utils/src/project-config.js";
+import { readProjectDocument, selectTenant, type ProjectConfig } from "../../utils/src/configuration/project-config.js";
 import { setupOneDriveTargets, type FolderBinding, type SetupGraph } from "./setup.js";
 
 const scope = "https://graph.microsoft.com/.default";

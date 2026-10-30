@@ -1,11 +1,11 @@
-import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
+import { baseResult, type ProbeHandler } from "../../utils/src/execution/probes.js";
 import {
   cleanupStep,
   finishJourney,
   journeyFailure,
   measureStep,
-} from "../../utils/src/steps.js";
-import { categoryOf, IntegrationError } from "../../utils/src/http.js";
+} from "../../utils/src/execution/steps.js";
+import { categoryOf, IntegrationError } from "../../utils/src/integrations/http.js";
 import {
   callIdSchema,
   leaveCall,
@@ -14,10 +14,10 @@ import {
   verifyParticipants,
   waitForAnswer,
 } from "./call-steps.js";
-import { teamsCallingCallbackUrlSchema } from "../../utils/src/config.js";
-import type { GraphOperations } from "../../utils/src/graph.js";
+import { teamsCallingCallbackUrlSchema } from "../../utils/src/configuration/config.js";
+import type { GraphOperations } from "../../utils/src/integrations/graph.js";
 import type { SyntheticResult } from "../../utils/src/contracts.js";
-import { systemClock } from "../../utils/src/clock.js";
+import { systemClock } from "../../utils/src/execution/clock.js";
 import { z } from "zod";
 
 interface AuthenticatedCallLeg {

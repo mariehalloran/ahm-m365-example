@@ -6,6 +6,22 @@ execution lanes, measurements, generic observations and optional provider diagno
 Only journey metadata is imported by shared contracts, not service execution.
 No durable outbox, aggregation history, user-token cache or state service exists.
 
+## Source map
+
+Shared code lives under `utils/src/`:
+
+| Folder | Responsibility |
+| --- | --- |
+| `configuration/` | Root settings, generated bindings, live input models and reporting groups |
+| `execution/` | Worker commands, lanes, clocks, request permits and journey execution |
+| `integrations/` | Authentication, Graph/Bot clients, HTTP and calling callbacks |
+| `reporting/` | Pure measurements, observations, direct reports and transport clients |
+| `providers/` | Service Health, Message Center, annotations and beta activity |
+| `deployment/` | Preparation, rollout phases and logging-pipeline packaging |
+
+`contracts.ts`, `catalog.ts`/`catalog.json`, `catalog-projection.ts` and `paths.ts`
+remain at the shared root as the contract, metadata and repository-path anchors.
+
 ## Run
 
 From `synthetic-tests/`:
@@ -25,13 +41,14 @@ Every unique target of that tenant's service runs; Exchange/OneDrive
 [user groups](../../docs/monitoring-groups.md) add group-named journey signals and
 need no flag. Teams stays ungrouped. `--once` settles selected
 synthetic/provider lanes, not proof of successful service operations. Other service
-types are rejected. `npm run deploy` (`utils/src/deploy.ts`) is the single deployment
+types are rejected. `npm run deploy` (`utils/src/deployment/deploy.ts`) is the single deployment
 command; see [deployment](../../docs/deployment.md#deploy-with-one-command).
 
 ## Config
 
-`project-config.ts` reads the single root document. `bindings.ts` fills in the `.env`
-IDs, then `references.ts` (`expandReferences`) expands resource names to resource IDs and
+`configuration/project-config.ts` reads the single root document.
+`configuration/bindings.ts` fills in the `.env` IDs, then
+`configuration/references.ts` (`expandReferences`) expands resource names to resource IDs and
 applies the defaults ([names and defaults](../../docs/deployment.md#what-the-config-holds)).
 The expanded document is what deploy mounts into workers, and expanding it again changes
 nothing. `.env` supplies generated bindings, not generic process environment
@@ -88,7 +105,7 @@ provider catalogue. Runtime contracts derive from it; Bicep reads its generated
 `npm run deploy` reject stale projections.
 
 `contracts.ts` keeps configuration/simulation probe inputs separate from the
-journey-specific live variants in `resolved-probes.ts`. `createRuntimeConfig`
+journey-specific live variants in `configuration/resolved-probes.ts`. `createRuntimeConfig`
 validates required resources before returning a live configuration; narrowing its
 execution mode also narrows its probes. Handler maps bind each journey to the
 matching input type. Retained reply fixtures and OneDrive folder ownership still
@@ -149,7 +166,7 @@ Deliberate draft/file and private-series deletion, and call departure, are
 business actions. Timed-out attempts contribute failure rather than becoming
 Unknown; aggregate thresholds determine the resulting entity health.
 
-`measurements.ts` is the pure journey/step/call-phase interpreter shared by
+`reporting/measurements.ts` is the pure journey/step/call-phase interpreter shared by
 direct reports and observations. Direct reports aggregate settled-cycle samples;
 observations retain individual binary samples for rolling KQL aggregation.
 Signal names, entity aliases and observation event IDs remain transport-specific.
@@ -218,8 +235,8 @@ bounded category, optional value-free failure hints, executed/skipped actions an
 durations; never target addresses, message bodies, credentials or raw HTTP failures.
 `logAnalytics.enabled` is the only reporting-mode toggle. Off sends aggregated
 journey/action health reports directly from each container, with no logging pipeline.
-On uses the shared [publisher](./src/observation-publisher.ts) and
-[generic contract](./src/observations.ts), optional Capture, and the
+On uses the shared [publisher](./src/reporting/observation-publisher.ts) and
+[generic contract](./src/reporting/observations.ts), optional Capture, and the
 [Function](../ingestion/src/index.ts), which preserves invalid/exhausted records
 in private quarantine and submits valid batches to DCR ingestion. Only this enabled
 mode retains mailbox/UPN and reporting-group arrays in observations; Teams stays ungrouped. See

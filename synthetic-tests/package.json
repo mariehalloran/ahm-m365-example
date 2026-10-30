@@ -19,7 +19,7 @@
     "onedrive:setup": "tsx onedrive/src/setup-command.ts",
     "setup:ids": "pwsh -NoProfile -File setup/generate-ids.ps1",
     "setup:reply-seeds": "pwsh -NoProfile -File setup/provision-reply-seeds.ps1",
-    "deploy": "npm run catalog:check && tsx utils/src/deploy.ts"
+    "deploy": "npm run catalog:check && tsx utils/src/deployment/deploy.ts"
   },
   "dependencies": {
     "@azure/event-hubs": "^6.0.4",

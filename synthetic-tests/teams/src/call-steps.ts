@@ -1,8 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { GraphOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
-import { systemClock, type ExecutionClock } from "../../utils/src/clock.js";
+import type { GraphOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
+import { systemClock, type ExecutionClock } from "../../utils/src/execution/clock.js";
 
 export const callIdSchema = z.string().min(1).max(2048).refine(id =>
   id.trim() === id && id !== "." && id !== ".." && !/[\u0000-\u001f\u007f]/.test(id));

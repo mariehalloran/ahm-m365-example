@@ -1,8 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { graphNextPagePath, type GraphOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
-import { validateTeamsServiceUrl, type TeamsBotOperations } from "../../utils/src/teams.js";
+import { graphNextPagePath, type GraphOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
+import { validateTeamsServiceUrl, type TeamsBotOperations } from "../../utils/src/integrations/teams.js";
 
 const identifier = z.string().min(1).max(2048);
 const messageSchema = z.object({

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { observationSchema } from "../../utils/src/observations.js";
+import { observationSchema } from "../../utils/src/reporting/observations.js";
 
 export type IngestionRecord = { RawData: string };
 export interface IngestionContext {

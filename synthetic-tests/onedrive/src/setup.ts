@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
-import { ConfigurationError } from "../../utils/src/config.js";
+import { ConfigurationError } from "../../utils/src/configuration/config.js";
 import { maxOneDriveTargets, type DiagnosticCategory, type Telemetry } from "../../utils/src/contracts.js";
-import { graphNextPagePath, type GraphClient } from "../../utils/src/graph.js";
-import { categoryOf, IntegrationError } from "../../utils/src/http.js";
-import type { ProjectConfig } from "../../utils/src/project-config.js";
+import { graphNextPagePath, type GraphClient } from "../../utils/src/integrations/graph.js";
+import { categoryOf, IntegrationError } from "../../utils/src/integrations/http.js";
+import type { ProjectConfig } from "../../utils/src/configuration/project-config.js";
 
 type Target = ProjectConfig["services"]["onedrive"]["targets"][number];
 export type SetupGraph = Pick<GraphClient, "json" | "authenticate">;

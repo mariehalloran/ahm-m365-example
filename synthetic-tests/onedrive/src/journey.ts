@@ -1,9 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { IntegrationError } from "../../utils/src/http.js";
-import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/probes.js";
-import type { GraphFileOperations } from "../../utils/src/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
+import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/execution/probes.js";
+import type { GraphFileOperations } from "../../utils/src/integrations/graph.js";
 import type { SyntheticResult } from "../../utils/src/contracts.js";
-import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
+import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/execution/steps.js";
 import {
   createOwnedFolder, deleteOwnedFolder, downloadFile, findPriorVersion, listVersions,
   openAppFolder, payload, reopenOwnedFile, verifyBytes, writeFile, type FileAttempt, type Payload,

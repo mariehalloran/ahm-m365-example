@@ -1,11 +1,11 @@
-import { categoryOf } from "../../utils/src/http.js";
-import { baseResult, type ProbeHandler } from "../../utils/src/probes.js";
+import { categoryOf } from "../../utils/src/integrations/http.js";
+import { baseResult, type ProbeHandler } from "../../utils/src/execution/probes.js";
 import {
   cleanupStep,
   finishJourney,
   journeyFailure,
   measureStep,
-} from "../../utils/src/steps.js";
+} from "../../utils/src/execution/steps.js";
 import {
   authenticate,
   cleanup,

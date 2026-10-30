@@ -1,7 +1,7 @@
-import { runServiceCommand } from "../../utils/src/command.js";
+import { runServiceCommand } from "../../utils/src/execution/command.js";
 import { oneDriveProbe } from "./journey.js";
 import { oneDriveProviders } from "./providers.js";
-import { dispatchProbeHandlers } from "../../utils/src/probes.js";
+import { dispatchProbeHandlers } from "../../utils/src/execution/probes.js";
 
 await runServiceCommand("onedrive", dispatchProbeHandlers({
   "onedrive-roundtrip": oneDriveProbe,

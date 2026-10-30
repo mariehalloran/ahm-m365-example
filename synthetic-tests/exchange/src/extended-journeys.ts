@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { StepName, SyntheticResult } from "../../utils/src/contracts.js";
-import type { GraphOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
-import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/probes.js";
-import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/steps.js";
+import type { GraphOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
+import { baseResult, type ProbeContext, type ProbeHandler } from "../../utils/src/execution/probes.js";
+import { cleanupStep, finishJourney, journeyFailure, measureStep } from "../../utils/src/execution/steps.js";
 import { authenticate, createDraft, mailMarker, sendMessage, type MailAttempt } from "./steps.js";
 import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfDraft, selfMessage } from "./mail-safety.js";
 import { readReplySeed } from "./reply-seed.js";
-import type { LiveProbeFor } from "../../utils/src/resolved-probes.js";
+import type { LiveProbeFor } from "../../utils/src/configuration/resolved-probes.js";
 
 type ExtendedJourney = "exchange-attachment" | "exchange-reply" | "exchange-recurring-calendar";
 

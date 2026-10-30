@@ -1,5 +1,5 @@
-import { runServiceCommand } from "../../utils/src/command.js";
-import { dispatchProbeHandlers } from "../../utils/src/probes.js";
+import { runServiceCommand } from "../../utils/src/execution/command.js";
+import { dispatchProbeHandlers } from "../../utils/src/execution/probes.js";
 import { teamsConversationProbe } from "./conversation.js";
 import { teamsProviders } from "./providers.js";
 import { teamsCallProbe } from "./call.js";

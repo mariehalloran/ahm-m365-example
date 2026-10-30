@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { OneDriveProbe } from "../../utils/src/resolved-probes.js";
-import { graphNextPagePath, type GraphFileOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
+import type { OneDriveProbe } from "../../utils/src/configuration/resolved-probes.js";
+import { graphNextPagePath, type GraphFileOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
 
 const parentSchema = z.object({ id: z.string().min(1), driveId: z.string().min(1) });
 const itemSchema = z.object({

@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { Probe, Telemetry } from "../../utils/src/contracts.js";
-import type { GraphOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
+import type { GraphOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
 import { messageSchema, messageSelect, messagesSchema, ownedMessage, selfMessage } from "./mail-safety.js";
 
 type ReplyTarget = Pick<Probe, "id" | "mailbox" | "replySeed">;

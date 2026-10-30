@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { GraphOperations } from "../../utils/src/graph.js";
-import { IntegrationError } from "../../utils/src/http.js";
+import type { GraphOperations } from "../../utils/src/integrations/graph.js";
+import { IntegrationError } from "../../utils/src/integrations/http.js";
 import { mailMarker, type MailAttempt } from "./steps.js";
 
 const savedDraftSchema = z.object({
