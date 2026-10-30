@@ -143,12 +143,8 @@ export const createTeamsCallProbe =
             !probe.organizerUserId ||
             !probe.peerBotClientId ||
             "callUserId" in probe ||
-            !config.BOT_CLIENT_ID ||
-            !config.TEAMS_CALLING_PEER_CLIENT_ID ||
-            config.BOT_CLIENT_ID.toLowerCase() ===
-              config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
-            probe.peerBotClientId.toLowerCase() !==
-              config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
+            !probe.botClientId ||
+            probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase() ||
             !teamsCallingCallbackUrlSchema.safeParse(
               config.TEAMS_CALLING_CALLBACK_URL,
             ).success ||
@@ -300,7 +296,7 @@ export const createTeamsCallProbe =
               await verifyParticipants(
                 leg.graph!,
                 leg.id!,
-                [config.BOT_CLIENT_ID!, config.TEAMS_CALLING_PEER_CLIENT_ID!],
+                [probe.botClientId!, probe.peerBotClientId!],
                 executionSignal,
                 joinDeadline,
                 interval,

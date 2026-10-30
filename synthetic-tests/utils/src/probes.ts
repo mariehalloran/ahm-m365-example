@@ -13,8 +13,6 @@ export interface ProbeContext {
     EXCHANGE_CLEANUP_ENABLED?: "true" | "false";
     TEAMS_CALLING_CALLBACK_URL?: string | undefined;
     TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS?: number;
-    BOT_CLIENT_ID?: string | undefined;
-    TEAMS_CALLING_PEER_CLIENT_ID?: string | undefined;
   };
   signal: AbortSignal;
   graph?: GraphClient;
@@ -49,7 +47,10 @@ export function baseResult(probe: Probe, now: number): SyntheticResult {
     correlationId: randomUUID(),
     steps: [],
     diagnosticCategory: null,
-    diagnosticContext: { ...(probe.region ? { region: probe.region } : {}) },
+    diagnosticContext: {
+      ...(probe.region ? { region: probe.region } : {}),
+      ...(probe.botPairId ? { botPairId: probe.botPairId } : {}),
+    },
   };
 }
 

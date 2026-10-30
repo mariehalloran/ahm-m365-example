@@ -79,7 +79,7 @@ export function createTeamsReadbackGraph(env: NodeJS.ProcessEnv, clientId: strin
 }
 
 export function createLiveTeamsBot(
-  config: Config, env: NodeJS.ProcessEnv = process.env,
+  config: Config, env: NodeJS.ProcessEnv, botClientId: string,
   authentication: ServiceConfig["graphAuthentication"] = "managed-identity",
 ): TeamsBotClient {
   if (authentication !== "managed-identity" && authentication !== "certificate") {
@@ -91,14 +91,15 @@ export function createLiveTeamsBot(
     BOT_TENANT_ID: z.string().uuid(),
     BOT_CLIENT_ID: z.string().uuid(),
     observerTenant: z.string().uuid(),
-  }).safeParse({ ...env, observerTenant: env[observerTenantField] });
+  }).safeParse({ ...env, BOT_CLIENT_ID: botClientId, observerTenant: env[observerTenantField] });
   if (!parsed.success) {
     throw new ConfigurationError(`Live Teams access requires explicit bot settings and a Graph observer tenant: ${parsed.error.issues.map(issue => issue.path[0] === "observerTenant" ? observerTenantField : issue.path.join(".")).join(", ")}`);
   }
   const identity = parsed.data;
   const botTenant = identity.BOT_TENANT_ID.toLowerCase();
   if (identity.observerTenant.toLowerCase() !== botTenant ||
-      config.probes.some(probe => probeServices[probe.type].service === "teams" && probe.tenantId?.toLowerCase() !== botTenant)) {
+      config.probes.some(probe => probeServices[probe.type].service === "teams" && probe.tenantId?.toLowerCase() !== botTenant) ||
+      !config.probes.some(probe => probe.type === "teams-channel-message" && probe.botClientId?.toLowerCase() === botClientId.toLowerCase())) {
     throw new ConfigurationError("Teams targets, bot credentials, and Graph observer must use the same approved tenant");
   }
   return new TeamsBotClient(
@@ -118,23 +119,21 @@ function botCredential(
   return new ManagedIdentityCredential({ clientId: identity.BOT_CLIENT_ID });
 }
 
-export function createTeamsCallingGraph(config: Config, env: NodeJS.ProcessEnv = process.env, peer = false): GraphClient {
+export function createTeamsCallingGraph(config: Config, env: NodeJS.ProcessEnv, clientId: string): GraphClient {
   const parsed = z.object({
     BOT_TENANT_ID: z.string().uuid(), AZURE_TENANT_ID: z.string().uuid(),
-    BOT_CLIENT_ID: z.string().uuid(), TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid(),
-  }).safeParse(env);
+    clientId: z.string().uuid(),
+  }).safeParse({ ...env, clientId });
   if (!parsed.success || config.BOT_AUTHENTICATION !== "managed-identity" ||
       parsed.data.AZURE_TENANT_ID.toLowerCase() !== parsed.data.BOT_TENANT_ID.toLowerCase() ||
-      parsed.data.BOT_CLIENT_ID.toLowerCase() === parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
-      config.BOT_CLIENT_ID?.toLowerCase() !== parsed.data.BOT_CLIENT_ID.toLowerCase() ||
-      config.TEAMS_CALLING_PEER_CLIENT_ID?.toLowerCase() !== parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase()) {
-    throw new ConfigurationError("Meeting calling requires two distinct explicit managed identities and matching AZURE_TENANT_ID/BOT_TENANT_ID");
+      !config.probes.some(probe => probe.type === "teams-call" &&
+        [probe.botClientId?.toLowerCase(), probe.peerBotClientId?.toLowerCase()].includes(clientId.toLowerCase()))) {
+    throw new ConfigurationError("Meeting calling requires an explicitly selected pair identity and matching AZURE_TENANT_ID/BOT_TENANT_ID");
   }
   if (config.probes.some(probe => probe.type === "teams-call" &&
       (probe.tenantId?.toLowerCase() !== parsed.data.BOT_TENANT_ID.toLowerCase() ||
-       probe.peerBotClientId?.toLowerCase() !== parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase()))) {
+       !probe.botClientId || !probe.peerBotClientId || probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase()))) {
     throw new ConfigurationError("Teams meeting targets, peer bot and tenants must match their explicit environment allowlist");
   }
-  const clientId = peer ? parsed.data.TEAMS_CALLING_PEER_CLIENT_ID : parsed.data.BOT_CLIENT_ID;
   return new GraphClient(new ManagedIdentityCredential({ clientId }));
 }

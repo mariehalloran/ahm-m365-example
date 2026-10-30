@@ -13,15 +13,16 @@ import { accountTargetId } from "./account-identity.js";
 export type Bindings = NodeJS.Dict<string>;
 export type BindingField =
   | "REPLY_SEED_MESSAGE_ID" | "REPLY_SEED_CORRELATION_ID" | "CHANNEL_ID" | "DRIVE_ID" | "FOLDER_ID" | "USER_ID"
-  | "ORGANIZER_USER_ID" | "BOT_PEER_CLIENT_ID" | "CALLING_CALLBACK_URL";
+  | "ORGANIZER_USER_ID" | "BOT_CLIENT_ID" | "BOT_PEER_CLIENT_ID" | "CALLING_CALLBACK_URL";
 type BindingGroup = Partial<Record<BindingField, string>>;
-type ServiceBindings = Partial<Record<"service" | "targets" | "callTargets", BindingGroup[]>>;
+type ServiceBindings = Partial<Record<"service" | "targets" | "callTargets" | "botPairs", BindingGroup[]>>;
 
 // The fields each service takes from the bindings, for its own settings and for each list of targets. The keys of one group are set together or not at all.
 const serviceBindings: Record<string, ServiceBindings> = {
   exchange: { targets: [{ REPLY_SEED_MESSAGE_ID: "replySeed.messageId", REPLY_SEED_CORRELATION_ID: "replySeed.correlationId" }] },
   teams: {
-    service: [{ BOT_PEER_CLIENT_ID: "access.botPeerClientId" }, { CALLING_CALLBACK_URL: "execution.teamsCallingCallbackUrl" }],
+    service: [{ CALLING_CALLBACK_URL: "execution.teamsCallingCallbackUrl" }],
+    botPairs: [{ BOT_CLIENT_ID: "botClientId", BOT_PEER_CLIENT_ID: "botPeerClientId" }],
     targets: [{ CHANNEL_ID: "channelId" }],
     callTargets: [{ ORGANIZER_USER_ID: "organizerUserId" }],
   },
@@ -73,15 +74,17 @@ function bindService(
   const targets = name === "teams" ? records(service.targets)
     : Object.values(isRecord(service.targets) ? service.targets : {}).flatMap(group => records(at(group, "users")));
   const callTargets = records(service.callTargets);
+  const botPairs = records(service.botPairs);
   const targetId = (target: Record<string, unknown>) => {
     if (name === "teams") return target.id;
     const address = name === "exchange" ? target.mailbox : target.userPrincipalName;
     return typeof address === "string" ? accountTargetId(address) : undefined;
   };
-  rejectCollidingTargets(tenantAlias, [...targets.map(target => ({ id: targetId(target) })), ...callTargets]);
+  rejectCollidingTargets(tenantAlias, [{ id: name }, ...targets.map(target => ({ id: targetId(target) })), ...callTargets, ...botPairs]);
   bindFields(tenantAlias, name, service, fields.service, bindings);
   for (const target of targets) bindFields(tenantAlias, targetId(target), target, fields.targets, bindings);
   for (const target of callTargets) bindFields(tenantAlias, target.id, target, fields.callTargets, bindings);
+  for (const pair of botPairs) bindFields(tenantAlias, pair.id, pair, fields.botPairs, bindings);
 }
 
 function rejectCollidingTargets(tenantAlias: string, targets: Record<string, unknown>[]): void {

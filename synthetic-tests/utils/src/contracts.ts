@@ -76,6 +76,7 @@ export const resultSchema = z.object({
   steps: z.array(stepResultSchema).max(12).default([]),
   diagnosticCategory: z.enum(categories).nullable().default(null),
   diagnosticContext: z.object({
+    botPairId: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(30).optional(),
     region: z.string().max(80).optional(),
     testStage: z.enum(["simulated", "initialization", "authentication", "send", "poll", "delivery-confirmed", "download", "update", "read", "reply", "cleanup", "complete", "execution"]).optional(),
     cleanupSucceeded: z.boolean().optional(),
@@ -147,6 +148,8 @@ export const probeSchema = z.object({
   serviceUrl: z.string().url().optional(),
   meetingThreadId: z.string().min(1).max(300).regex(/^19:meeting_[^\s]+@thread\.v2$/).optional(),
   organizerUserId: z.string().uuid().optional(),
+  botPairId: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(30).optional(),
+  botClientId: z.string().uuid().optional(),
   peerBotClientId: z.string().uuid().optional(),
   region: z.string().max(80).optional(),
   scenario: z.enum(scenarios).optional(),

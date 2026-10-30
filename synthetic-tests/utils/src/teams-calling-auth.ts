@@ -61,16 +61,16 @@ async function boundedFetch(fetcher: typeof fetch, url: string | URL, init?: Req
 }
 
 export async function createTeamsCallingVerifier(
-  env: NodeJS.ProcessEnv, fetcher: typeof fetch = fetch, now: () => number = Date.now,
+  env: NodeJS.ProcessEnv, botClientIds: readonly string[], fetcher: typeof fetch = fetch, now: () => number = Date.now,
 ): Promise<(token: string) => Promise<CallingIdentity>> {
   const parsed = z.object({
-    BOT_CLIENT_ID: z.string().uuid(), BOT_TENANT_ID: z.string().uuid(),
-    TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid(),
-  }).safeParse(env);
-  if (!parsed.success || parsed.data.BOT_CLIENT_ID.toLowerCase() === parsed.data.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase()) {
-    throw new ConfigurationError("Calling callback requires BOT_TENANT_ID and two distinct explicit bot client IDs");
+    BOT_TENANT_ID: z.string().uuid(),
+    audiences: z.array(z.string().uuid()).min(2),
+  }).safeParse({ ...env, audiences: botClientIds });
+  if (!parsed.success || new Set(parsed.data.audiences.map(id => id.toLowerCase())).size !== botClientIds.length) {
+    throw new ConfigurationError("Calling callback requires BOT_TENANT_ID and distinct explicit client IDs for every selected bot pair");
   }
-  const audiences = [parsed.data.BOT_CLIENT_ID, parsed.data.TEAMS_CALLING_PEER_CLIENT_ID];
+  const audiences = parsed.data.audiences;
   let keys: ReturnType<typeof createRemoteJWKSet> | undefined;
   let refreshAt = 0;
   let refreshing: Promise<ReturnType<typeof createRemoteJWKSet>> | undefined;

@@ -17,10 +17,15 @@ export const applicationAccessSchema = z.object({
   m365CertificateRevision: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
   m365CertificateEnvironmentVariable: z.string().regex(/^[A-Z_][A-Z0-9_]{0,127}$/).optional(),
   m365CertificatePath: z.string().min(1).optional(),
+}).strict();
+export const teamsBotPairSchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(30),
+  botResourceId,
+  identityResourceId: managedIdentityResourceId,
+  botClientId: z.string().uuid().optional(),
+  botPeerResourceId: botResourceId,
+  botPeerManagedIdentityResourceId: managedIdentityResourceId,
   botPeerClientId: z.string().uuid().optional(),
-  botPeerManagedIdentityResourceId: managedIdentityResourceId.optional(),
-  botResourceId: botResourceId.optional(),
-  botPeerResourceId: botResourceId.optional(),
 }).strict();
 export const workerSettingsSchema = z.object({
   appName: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).min(2).max(32),

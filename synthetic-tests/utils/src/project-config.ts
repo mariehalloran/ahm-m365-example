@@ -6,10 +6,10 @@ import { executionLanes } from "./execution-lanes.js";
 import { resolveGroups, tenantGroups, userGroupTargets, type TenantGroup } from "./groups.js";
 import { expandReferences } from "./references.js";
 import {
-  parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema,
+  parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema, validateTeamsBotPairs,
   type ServiceConfig, type ServiceExecution,
 } from "./service-config.js";
-import { applicationAccessSchema, deploymentSettingsSchema, workerSettingsSchema } from "./deployment-config.js";
+import { applicationAccessSchema, deploymentSettingsSchema, teamsBotPairSchema, workerSettingsSchema } from "./deployment-config.js";
 import { canonicalProjectFile } from "./paths.js";
 
 export const serviceTypes = ["exchange", "teams", "onedrive"] as const;
@@ -60,6 +60,7 @@ const tenantServicesSchema = z.object({
   }).strict(),
   teams: z.object({
     ...selection,
+    botPairs: z.array(teamsBotPairSchema).max(1000).default([]),
     scenarios: scenarioSelection("teams"),
     targets: serviceTargetSchemas.teams,
     callTargets: teamsCallTargetsSchema,
@@ -143,6 +144,7 @@ function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
 function validateServiceSelection(services: ProjectConfig["services"], tenantId: string): void {
   const teams = services.teams;
   const onedrive = services.onedrive;
+  validateTeamsBotPairs(teams);
   if (new Set(services.exchange.targets.map(target => target.mailbox.toLowerCase())).size !== services.exchange.targets.length) {
     throw new ConfigurationError("Exchange targets must identify unique independent mailboxes");
   }
@@ -190,6 +192,10 @@ export function parseProjectDocument(raw: unknown): ProjectDocument {
   }
   const parsed = projectDocumentSchema.safeParse(document);
   if (!parsed.success) {
+    if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" &&
+        issue.keys.some(key => ["bot", "peerBot", "peerIdentity", "botResourceId", "botPeerResourceId", "botPeerManagedIdentityResourceId", "botPeerClientId"].includes(key)))) {
+      throw new ConfigurationError("Move service-wide Teams bot access into teams.botPairs: each named pair needs bot, identity, peerBot and peerIdentity; run npm run setup:ids to generate both client ID bindings");
+    }
     if (parsed.error.issues.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("groups"))) {
       throw new ConfigurationError("Move user groups into Exchange and OneDrive targets as keyed { userGroupName, users } entries; root groups and Teams user groups are not supported");
     }
@@ -248,11 +254,12 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     const cycleBudgetSeconds = service.type === "exchange" ? 59 : service.cycleTimeoutSeconds + 42;
     const lanes = executionLanes(service)
       .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]));
-    const largeCohort = selected.targets.length > 30 ||
-      (service.type === "teams" && project.services.teams.callTargets.length > 30);
+    const pairCount = service.type === "teams" ? project.services.teams.botPairs.length : 1;
+    const largeCohort = selected.targets.length * pairCount > 30 ||
+      (service.type === "teams" && project.services.teams.callTargets.length * pairCount > 30);
     if (service.type === "onedrive" || (largeCohort && service.type !== "exchange")) {
       for (const lane of lanes) {
-        const attempts = lane.journeys.filter(journey => (selected.scenarios as Record<string, boolean>)[journey])
+        const attempts = pairCount * lane.journeys.filter(journey => (selected.scenarios as Record<string, boolean>)[journey])
           .reduce((sum, journey) => sum + (service.type === "teams" && journey === "scheduled-meeting"
             ? project.services.teams.callTargets.length : selected.targets.length), 0);
         const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + 12);
@@ -273,7 +280,9 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     ...service, enabled, targets: selected.targets,
     serviceHealth: project.serviceHealth.enabled && service.serviceHealth,
     serviceActivity: { ...service.serviceActivity, enabled: project.serviceHealth.enabled && service.serviceActivity.enabled },
-    ...(service.type === "teams" ? { callTargets: project.services.teams.callTargets } : {}),
+    ...(service.type === "teams" ? {
+      botPairs: project.services.teams.botPairs, callTargets: project.services.teams.callTargets,
+    } : {}),
   });
 }
 

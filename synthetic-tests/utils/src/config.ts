@@ -61,8 +61,6 @@ const runtimeSettingsSchema = z.object({
   ENABLE_LIVE_M365: z.enum(["true", "false"]).default("false"),
   TEAMS_AUTHENTICATION: z.literal("bot").default("bot"),
   BOT_AUTHENTICATION: z.literal("managed-identity").default("managed-identity"),
-  BOT_CLIENT_ID: z.string().uuid().optional(),
-  TEAMS_CALLING_PEER_CLIENT_ID: z.string().uuid().optional(),
   TEAMS_CALLING_CALLBACK_URL: teamsCallingCallbackUrlSchema.optional(),
   TEAMS_CALLING_PORT: number(8080, 1024, 65535, true),
   TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: number(20, 1, 30, true),
@@ -119,11 +117,10 @@ export function createRuntimeConfig(
       if (!hasDedicatedResources) {
         throw new ConfigurationError(`Missing dedicated resources for probe ${probe.id}`);
       }
-      if (probe.type === "teams-call" && (
-          !config.BOT_CLIENT_ID || !config.TEAMS_CALLING_PEER_CLIENT_ID ||
-          config.BOT_CLIENT_ID.toLowerCase() === config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() ||
-          config.TEAMS_CALLING_PEER_CLIENT_ID.toLowerCase() !== probe.peerBotClientId?.toLowerCase())) {
-        throw new ConfigurationError("Teams peer journeys require two distinct explicit managed identities: BOT_CLIENT_ID and TEAMS_CALLING_PEER_CLIENT_ID matching root peerBotClientId");
+      if (service === "teams" && (!probe.botPairId || !probe.botClientId ||
+          (probe.type === "teams-call" && (!probe.peerBotClientId ||
+            probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase())))) {
+        throw new ConfigurationError("Live Teams journeys require a named bot pair with explicit distinct managed-identity client IDs; run npm run setup:ids");
       }
       if (probe.type === "teams-call" && config.PROBE_TIMEOUT_MS <
           config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS * 1000 + 5000) {

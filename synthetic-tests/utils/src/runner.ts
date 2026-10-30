@@ -2,21 +2,20 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
 import { exchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "./contracts.js";
 import type { GraphClient } from "./graph.js";
-import type { TeamsBotClient } from "./teams.js";
 import { categoryOf, IntegrationError, withAbort } from "./http.js";
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
-import { baseResult, simulate, type ProbeHandler } from "./probes.js";
+import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
 import type { CyclePublisher, CycleResults, ResultOutput } from "./results.js";
 
 const CLEANUP_GRACE_MS = 12_000;
+
+export type TeamsBotPairClients = Pick<ProbeContext, "teamsBot" | "teamsCalling" | "teamsCallingPeer">;
 
 export interface RunnerDependencies {
   results: ResultOutput;
   telemetry: Telemetry;
   graph?: GraphClient;
-  teamsBot?: TeamsBotClient;
-  teamsCalling?: GraphClient;
-  teamsCallingPeer?: GraphClient;
+  teamsBotPairs?: ReadonlyMap<string, TeamsBotPairClients>;
   shutdown?: () => Promise<void>;
   handler?: ProbeHandler;
   now?: () => number;
@@ -96,6 +95,10 @@ async function runSingleProbe(
     deadline = createCompletionDeadline(probeSignal, config, cycle.startedAt);
     const graph = liveExchange && probe.mailbox && dependencies.exchangeRequests && dependencies.graph?.forMailbox
       ? dependencies.graph.forMailbox(probe.mailbox, dependencies.exchangeRequests) : dependencies.graph;
+    const pair = probe.botPairId ? dependencies.teamsBotPairs?.get(probe.botPairId) : undefined;
+    if (config.EXECUTION_MODE === "live" && probeServices[probe.type].service === "teams" && !pair) {
+      throw new IntegrationError("configuration-failure");
+    }
 
     const rawResult = await Promise.race([
       handler(probe, {
@@ -109,9 +112,7 @@ async function runSingleProbe(
           clearTimeout(executionTimer);
         },
         ...(graph ? { graph } : {}),
-        ...(dependencies.teamsBot ? { teamsBot: dependencies.teamsBot } : {}),
-        ...(dependencies.teamsCalling ? { teamsCalling: dependencies.teamsCalling } : {}),
-        ...(dependencies.teamsCallingPeer ? { teamsCallingPeer: dependencies.teamsCallingPeer } : {}),
+        ...pair,
       }),
       deadline.promise,
     ]);

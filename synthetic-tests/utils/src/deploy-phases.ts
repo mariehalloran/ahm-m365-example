@@ -248,10 +248,10 @@ async function verifyWorker(run: DeploymentRun, hosting: Hosting, worker: Worker
 
 async function bindIdentities(run: DeploymentRun, hosting: Hosting, worker: Worker) {
   const selected = worker.project.services[worker.type];
-  const callsPeer = worker.service.mode === "live" && worker.type === "teams" && worker.project.services.teams.scenarios["scheduled-meeting"];
+  const teamsBots = worker.service.mode === "live" && worker.type === "teams";
   const ids = [
     ...(selected.worker?.identityResourceId ? [selected.worker.identityResourceId] : []),
-    ...(callsPeer ? [selected.access.botPeerManagedIdentityResourceId!] : []),
+    ...(teamsBots ? worker.project.services.teams.botPairs.flatMap(pair => [pair.identityResourceId, pair.botPeerManagedIdentityResourceId]) : []),
   ];
   for (const id of ids) {
     if (hosting.identities.has(id.toLowerCase())) continue;
@@ -271,20 +271,21 @@ async function bindIdentities(run: DeploymentRun, hosting: Hosting, worker: Work
 
 async function verifyTeamsBindings(run: DeploymentRun, hosting: Hosting, worker: Worker, app: AppSnapshot | undefined) {
   const teams = worker.project.services.teams;
-  const { access } = teams;
-  const bound = hosting.identities.get(worker.identityResourceId.toLowerCase());
-  const peer = access.botPeerManagedIdentityResourceId ? hosting.identities.get(access.botPeerManagedIdentityResourceId.toLowerCase()) : undefined;
-  if (!bound || (access.botPeerClientId && !equal(peer?.clientId, access.botPeerClientId))) {
-    throw new ConfigurationError("Actual Teams primary/peer identities do not match the approved client bindings");
-  }
   const calling = teams.scenarios["scheduled-meeting"];
   const ingress = app?.fqdn ?? (hosting.environmentDomain ? `${worker.appName}.${hosting.environmentDomain}` : undefined);
   if (calling && (!ingress || new URL(worker.service.teamsCallingCallbackUrl!).hostname.toLowerCase() !== ingress.toLowerCase())) {
     throw new ConfigurationError("Teams callback must use the existing execution owner's ingress hostname");
   }
   const callbackHost = calling ? ingress?.toLowerCase() : undefined;
-  await verifyBot(run, access.botResourceId, bound, hosting.tenantId, callbackHost);
-  if (calling) await verifyBot(run, access.botPeerResourceId, peer, hosting.tenantId, callbackHost);
+  for (const pair of teams.botPairs) {
+    const primary = hosting.identities.get(pair.identityResourceId.toLowerCase());
+    const peer = hosting.identities.get(pair.botPeerManagedIdentityResourceId.toLowerCase());
+    if (!equal(primary?.clientId, pair.botClientId) || !equal(peer?.clientId, pair.botPeerClientId)) {
+      throw new ConfigurationError(`Teams pair ${pair.id} identities do not match their approved client bindings`);
+    }
+    await verifyBot(run, pair.botResourceId, primary, hosting.tenantId, callbackHost);
+    await verifyBot(run, pair.botPeerResourceId, peer, hosting.tenantId, callbackHost);
+  }
 }
 
 async function verifyBot(run: DeploymentRun, botId: string | undefined, identity: Identity | undefined, tenantId: string,

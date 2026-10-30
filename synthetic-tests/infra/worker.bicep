@@ -28,6 +28,10 @@ var useTeamsBot = service == 'teams' && execution.mode == 'live' && hasTeamsMess
 var needsTeamsPeer = service == 'teams' && execution.mode == 'live' && (selection.scenarios[?'scheduled-meeting'] ?? false)
 var useTeamsCallback = needsTeamsPeer
 var useBotIdentity = useTeamsBot || needsTeamsPeer
+var botIdentityIds = useBotIdentity ? flatten(map(selection.botPairs, pair => [
+  pair.identityResourceId
+  pair.botPeerManagedIdentityResourceId
+])) : []
 var useProviderContext = (projectConfig.?serviceHealth.?enabled ?? false) && ((execution.?serviceHealth ?? false) || (execution.?serviceActivity.?enabled ?? false))
 var needsApplicationGraph = service != 'teams' || useTeamsBot || useProviderContext
 var useM365Certificate = execution.mode == 'live' && needsApplicationGraph && execution.graphAuthentication == 'certificate'
@@ -46,7 +50,7 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
     type: 'UserAssigned'
     userAssignedIdentities: union(
       { '${identityResourceId}': {} },
-      needsTeamsPeer ? { '${access.botPeerManagedIdentityResourceId}': {} } : {}
+      toObject(botIdentityIds, id => id, id => {})
     )
   }
   properties: {
@@ -87,9 +91,7 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
           ] : [{ name: 'M365_TENANT_ID', value: tenantId }],
           useBotIdentity ? [
             { name: 'BOT_TENANT_ID', value: tenantId }
-            { name: 'BOT_CLIENT_ID', value: identityClientId }
-          ] : [],
-          needsTeamsPeer ? [{ name: 'TEAMS_CALLING_PEER_CLIENT_ID', value: access.botPeerClientId }] : []
+          ] : []
         )
         resources: { cpu: workerSettings.cpu, memory: workerSettings.memory }
         probes: useTeamsCallback ? [

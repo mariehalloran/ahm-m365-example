@@ -92,12 +92,15 @@ async function reportInitializationFailure(
     errorType: error instanceof Error ? error.name : "unknown",
     ...(error instanceof ConfigurationError ? { message: error.message } : {}),
   });
-  const results = probes.map(probe => resultSchema.parse({
-    ...baseResult(probe, observedAt),
-    durationMs: Math.max(0, observedAt - startedAt),
-    diagnosticCategory: category,
-    diagnosticContext: { testStage: "initialization" },
-  }));
+  const results = probes.map(probe => {
+    const result = baseResult(probe, observedAt);
+    return resultSchema.parse({
+      ...result,
+      durationMs: Math.max(0, observedAt - startedAt),
+      diagnosticCategory: category,
+      diagnosticContext: { ...result.diagnosticContext, testStage: "initialization" },
+    });
+  });
   if (service.type === "exchange") {
     for (const group of capacityGroups ?? [{ id: "ungrouped", displayName: "Ungrouped", targetIds: probes.map(probe => probe.id) }]) {
       const count = probes.filter(probe => group.targetIds.includes(probe.id)).length;

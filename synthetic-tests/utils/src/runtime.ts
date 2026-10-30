@@ -1,7 +1,7 @@
 import { ConfigurationError, type Config } from "./config.js";
 import { probeServices, type Telemetry } from "./contracts.js";
-import type { RunnerDependencies } from "./runner.js";
-import type { ServiceConfig } from "./service-config.js";
+import type { RunnerDependencies, TeamsBotPairClients } from "./runner.js";
+import { serviceProbes, type ServiceConfig } from "./service-config.js";
 import { createFederatedGraphClient, createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "./auth.js";
 import { createTeamsCallingVerifier, type CallingIdentity } from "./teams-calling-auth.js";
 import { startTeamsCallingCallback } from "./teams-calling-callback.js";
@@ -32,8 +32,6 @@ export function serviceEnvironment(
     ...(access.m365CertificatePath ? { M365_CLIENT_CERTIFICATE_PATH: resolve(dirname(file), access.m365CertificatePath) } : {}),
     ...(service.type === "teams" ? {
       BOT_TENANT_ID: env.BOT_TENANT_ID ?? azureTenant,
-      BOT_CLIENT_ID: env.BOT_CLIENT_ID ?? azureClient,
-      TEAMS_CALLING_PEER_CLIENT_ID: bind("TEAMS_CALLING_PEER_CLIENT_ID", access.botPeerClientId),
     } : {}),
   };
 }
@@ -93,19 +91,16 @@ export async function serviceRuntime(
       target.restoreVersion === probe.restoreVersion))) {
     throw new ConfigurationError("OneDrive may access only the selected root-configured accounts, drives and folders");
   }
-  if (service.type === "teams" && config.probes.some(probe => probe.type === "teams-call" &&
-      !service.callTargets.some(target => target.id === probe.id &&
-        target.tenantId.toLowerCase() === probe.tenantId?.toLowerCase() &&
-        target.meetingThreadId === probe.meetingThreadId &&
-        target.organizerUserId.toLowerCase() === probe.organizerUserId?.toLowerCase() &&
-        target.peerBotClientId.toLowerCase() === probe.peerBotClientId?.toLowerCase()))) {
-    throw new ConfigurationError("Calls may join only the selected root-configured dedicated meetings and peer bots");
-  }
-  if (service.type === "teams" && config.probes.some(probe => probe.type === "teams-channel-message" &&
-      !service.targets.some(target => target.id === probe.id &&
-        target.tenantId?.toLowerCase() === probe.tenantId?.toLowerCase() &&
-        target.teamId === probe.teamId && target.channelId === probe.channelId && target.serviceUrl === probe.serviceUrl))) {
-    throw new ConfigurationError("Teams messages may access only the selected root-configured tenants, teams and channels");
+  if (service.type === "teams") {
+    const allowed = new Map(serviceProbes(service, { "channel-conversation": true, "scheduled-meeting": true })
+      .map(probe => [`${probe.type}:${probe.id}`, probe]));
+    const fields = ["tenantId", "teamId", "channelId", "serviceUrl", "meetingThreadId", "organizerUserId", "botPairId", "botClientId", "peerBotClientId"] as const;
+    if (config.probes.some(probe => {
+      const target = allowed.get(`${probe.type}:${probe.id}`);
+      return !target || fields.some(field => target[field] !== probe[field]);
+    })) {
+      throw new ConfigurationError("Teams journeys may use only the selected root-configured bot pairs, channels and dedicated meetings");
+    }
   }
   const messages = config.probes.some(probe => probe.type === "teams-channel-message");
   const dependencies: RunnerDependencies = {
@@ -118,17 +113,31 @@ export async function serviceRuntime(
         ? createTeamsReadbackGraph(env, service.teamsReadbackClientId)
         : createLiveGraphClient(env, service.graphAuthentication),
     } : {}),
-    ...(live && service.type === "teams" && messages ? {
-      teamsBot: createLiveTeamsBot(config, env, service.graphAuthentication),
-    } : {}),
   };
   const needsCalling = config.probes.some(probe => probe.type === "teams-call");
+  if (live && service.type === "teams") {
+    const clients = new Map<string, TeamsBotPairClients>();
+    for (const pair of service.botPairs) {
+      const sendsMessages = config.probes.some(probe => probe.botPairId === pair.id && probe.type === "teams-channel-message");
+      const joinsMeetings = config.probes.some(probe => probe.botPairId === pair.id && probe.type === "teams-call");
+      if (!sendsMessages && !joinsMeetings) continue;
+      if (!pair.botClientId || (joinsMeetings && !pair.botPeerClientId)) {
+        throw new ConfigurationError(`Teams pair ${pair.id} is missing its generated client IDs; run npm run setup:ids`);
+      }
+      clients.set(pair.id, {
+        ...(sendsMessages ? { teamsBot: createLiveTeamsBot(config, env, pair.botClientId, service.graphAuthentication) } : {}),
+        ...(joinsMeetings ? {
+          teamsCalling: createTeamsCallingGraph(config, env, pair.botClientId),
+          teamsCallingPeer: createTeamsCallingGraph(config, env, pair.botPeerClientId!),
+        } : {}),
+      });
+    }
+    dependencies.teamsBotPairs = clients;
+  }
   if (live && service.type === "teams" && needsCalling) {
-    const graph = createTeamsCallingGraph(config, env);
-    const peerGraph = createTeamsCallingGraph(config, env, true);
-    dependencies.teamsCalling = graph;
-    dependencies.teamsCallingPeer = peerGraph;
-    const verify = await createTeamsCallingVerifier(env);
+    const audiences = service.botPairs.filter(pair => config.probes.some(probe => probe.botPairId === pair.id && probe.type === "teams-call"))
+      .flatMap(pair => [pair.botClientId!, pair.botPeerClientId!]);
+    const verify = await createTeamsCallingVerifier(env, audiences);
     const server = await startTeamsCallingCallback({
       port: config.TEAMS_CALLING_PORT, verify,
       ...(options.onTeamsCallingNotification ? { onNotification: options.onTeamsCallingNotification } : {}),

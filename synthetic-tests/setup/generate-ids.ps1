@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Looks up and writes to .env the IDs that are only known once the one-time setup in docs/setup.md is done: the
-    Teams channel ID (creating the named channel if it does not exist yet), the second Teams bot's client ID, the
+    Teams channel ID (creating the named channel if it does not exist yet), both client IDs of each Teams bot pair, the
     Teams calling callback URL, the meeting organizer's user ID and each OneDrive account's user ID.
 
 .DESCRIPTION
@@ -39,11 +39,17 @@ if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
         Set-Binding $project.EnvFile $bindings (& $key $target.id 'CHANNEL_ID') $channel.id
     }
 
-    if ($teams.access.peerIdentity) {
-        $peerId = Resolve-ResourceId $teams.access.peerIdentity $subscription $resourceGroup 'Microsoft.ManagedIdentity' 'userAssignedIdentities'
-        $peer = az identity show --ids $peerId --only-show-errors -o json 2>$null | ConvertFrom-Json
-        if ($peer) { Set-Binding $project.EnvFile $bindings (& $key 'teams' 'BOT_PEER_CLIENT_ID') $peer.clientId }
-        else { Write-Warning "Managed identity $peerId does not exist yet; see docs/setup.md." }
+    foreach ($pair in $teams.botPairs) {
+        foreach ($identity in @(
+            @{ Resource = $pair.identity ?? $pair.identityResourceId; Field = 'BOT_CLIENT_ID' },
+            @{ Resource = $pair.peerIdentity ?? $pair.botPeerManagedIdentityResourceId; Field = 'BOT_PEER_CLIENT_ID' }
+        )) {
+            if (-not $identity.Resource) { throw "Bot pair $($pair.id) requires both identity and peerIdentity; see docs/setup.md." }
+            $identityId = Resolve-ResourceId $identity.Resource $subscription $resourceGroup 'Microsoft.ManagedIdentity' 'userAssignedIdentities'
+            $resolved = az identity show --ids $identityId --only-show-errors -o json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or -not $resolved.clientId) { throw "Unable to resolve managed identity $identityId; see docs/setup.md." }
+            Set-Binding $project.EnvFile $bindings (& $key $pair.id $identity.Field) $resolved.clientId
+        }
     }
     if ($teams.scenarios.'scheduled-meeting' -ne $false) {
         $foundation = $project.Document.deployment.foundation

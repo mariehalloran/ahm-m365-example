@@ -45,17 +45,11 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   const access = selected.access;
   const live = service.mode === "live";
   const calling = live && service.type === "teams" && project.services.teams.scenarios["scheduled-meeting"];
-  const peer = access.botPeerClientId || access.botPeerManagedIdentityResourceId;
-  if (peer && (service.type !== "teams" || !access.botPeerClientId || !access.botPeerManagedIdentityResourceId)) {
-    throw new ConfigurationError("Teams peer access requires both access.peerIdentity and its client ID (access.botPeerClientId, which npm run setup:ids writes to .env)");
+  if (calling && (service.teamsCallingPort !== 8080 || !service.teamsCallingCallbackUrl)) {
+    throw new ConfigurationError("Live Teams meetings require port 8080 and the existing worker's HTTPS callback");
   }
-  if (calling && (!peer || !access.botPeerResourceId || service.teamsCallingPort !== 8080 ||
-      !service.teamsCallingCallbackUrl || project.services.teams.callTargets.some(target =>
-        target.peerBotClientId.toLowerCase() !== access.botPeerClientId?.toLowerCase()))) {
-    throw new ConfigurationError("Live Teams meetings require port 8080, the existing HTTPS callback, approved matching peer identity and both bot references (access.bot and access.peerBot)");
-  }
-  if (live && service.type === "teams" && !access.botResourceId) {
-    throw new ConfigurationError("Live Teams requires access.bot for the existing approved bot endpoint/identity preflight");
+  if (live && service.type === "teams" && project.services.teams.botPairs.some(pair => !pair.botClientId || !pair.botPeerClientId)) {
+    throw new ConfigurationError("Live Teams requires generated client IDs for every botPairs identity; run npm run setup:ids");
   }
   const certificate = service.graphAuthentication === "certificate";
   const certificateFields = access.m365ClientId || access.m365TenantId || access.m365CertificateSource ||
@@ -81,8 +75,8 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
   const env = {
     ENABLE_LIVE_M365: "true", ENABLE_BETA_SERVICE_ACTIVITY: settings.enableBetaServiceActivity ? "true" : "false",
     AZURE_TENANT_ID: settings.azureTenantId, AZURE_CLIENT_ID: identity,
-    BOT_TENANT_ID: settings.azureTenantId, BOT_CLIENT_ID: identity,
-    M365_TENANT_ID: access.m365TenantId ?? settings.azureTenantId, TEAMS_CALLING_PEER_CLIENT_ID: access.botPeerClientId,
+    BOT_TENANT_ID: settings.azureTenantId,
+    M365_TENANT_ID: access.m365TenantId ?? settings.azureTenantId,
   };
   validateProjectTenantBinding(project.tenant, service, env);
   serviceSettings(service, env, selected.scenarios);
@@ -126,8 +120,8 @@ function deploymentWorkers(document: ProjectDocument, settings: DeploymentSettin
     throw new ConfigurationError("Worker appName values must be unique across tenant/service execution owners");
   }
   const bots = workers.filter(worker => worker.type === "teams").flatMap(worker =>
-    [worker.project.services.teams.access.botResourceId, worker.project.services.teams.access.botPeerResourceId].filter(Boolean));
-  if (new Set(bots.map(id => id!.toLowerCase())).size !== bots.length) {
+    worker.project.services.teams.botPairs.flatMap(pair => [pair.botResourceId, pair.botPeerResourceId]));
+  if (new Set(bots.map(id => id.toLowerCase())).size !== bots.length) {
     throw new ConfigurationError("Each approved Teams bot must have exactly one tenant/service callback owner");
   }
   return workers;

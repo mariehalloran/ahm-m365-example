@@ -12,8 +12,9 @@ const foundationReferences: Reference[] = [
   ["registry", "registryResourceId", "Microsoft.ContainerRegistry/registries"],
 ];
 const workerReferences: Reference[] = [["identity", "identityResourceId", managedIdentityType]];
-const teamsAccessReferences: Reference[] = [
+const teamsPairReferences: Reference[] = [
   ["bot", "botResourceId", botType],
+  ["identity", "identityResourceId", managedIdentityType],
   ["peerBot", "botPeerResourceId", botType],
   ["peerIdentity", "botPeerManagedIdentityResourceId", managedIdentityType],
 ];
@@ -68,15 +69,15 @@ function inheritProviderClientId(execution: unknown, providerClientId: unknown):
 
 function expandTeams(teams: unknown, tenantId: unknown, scope: Scope | undefined, where: string): void {
   if (!isRecord(teams)) return;
-  expandResourceReferences(teams.access, teamsAccessReferences, scope, `${where}.access`);
-  const peerBotClientId = at(teams, "access", "botPeerClientId");
+  for (const [index, pair] of records(teams.botPairs).entries()) {
+    expandResourceReferences(pair, teamsPairReferences, scope, `${where}.botPairs.${index}`);
+  }
   for (const target of records(teams.targets)) {
     defaultString(target, "tenantId", tenantId);
     defaultString(target, "serviceUrl", defaultTeamsServiceUrl);
   }
   for (const target of records(teams.callTargets)) {
     defaultString(target, "tenantId", tenantId);
-    defaultString(target, "peerBotClientId", peerBotClientId);
     delete target.organizer; // Read only by the setup script, which writes organizerUserId to .env.
   }
 }

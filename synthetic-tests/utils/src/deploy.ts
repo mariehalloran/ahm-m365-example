@@ -75,7 +75,9 @@ export function deploymentPlan(prepared: PreparedDeployment) {
     configurationStorageAccount: prepared.settings.configurationStorageAccount,
     workers: prepared.workers.map(worker => ({
       tenant: worker.tenant, service: worker.type, appName: worker.appName, identityResourceId: worker.identityResourceId,
-      targetCount: worker.service.targets.length + (worker.service.type === "teams" ? worker.service.callTargets.length : 0),
+      targetCount: worker.service.type === "teams"
+        ? worker.service.botPairs.length * (worker.service.targets.length + worker.service.callTargets.length) : worker.service.targets.length,
+      ...(worker.service.type === "teams" ? { botPairCount: worker.service.botPairs.length } : {}),
       mode: worker.service.mode,
     })),
     foundationMode: prepared.settings.foundation.mode, imageMode: prepared.settings.image.mode,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { exchangePollIntervalMilliseconds, maxServiceTargets, probeSchema, probeServices, scenarios, testTypes, type Probe } from "./contracts.js";
 import { ConfigurationError, createRuntimeConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "./provider-catalog.js";
+import { teamsBotPairSchema } from "./deployment-config.js";
 export { activityFunctions } from "./provider-catalog.js";
 
 export const serviceActivitySchema = z.object({
@@ -77,7 +78,7 @@ export const serviceTargetSchemas = {
 export const teamsCallTargetsSchema = z.array(target.extend({
   tenantId: z.string().uuid(),
   meetingThreadId: probeSchema.shape.meetingThreadId.unwrap(),
-  organizerUserId: z.string().uuid(), peerBotClientId: z.string().uuid(),
+  organizerUserId: z.string().uuid(),
 }).strict()).max(maxServiceTargets).default([]);
 const serviceSchema = z.discriminatedUnion("type", [
   z.object({
@@ -90,11 +91,31 @@ const serviceSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     ...common, type: z.literal("teams"),
+    botPairs: z.array(teamsBotPairSchema).max(maxServiceTargets).default([]),
     targets: serviceTargetSchemas.teams,
     callTargets: teamsCallTargetsSchema,
   }).strict(),
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
+
+export function validateTeamsBotPairs(service: Pick<Extract<ServiceConfig, { type: "teams" }>,
+  "enabled" | "botPairs" | "targets" | "callTargets">): void {
+  const { botPairs, targets, callTargets } = service;
+  if (service.enabled && botPairs.length === 0) throw new ConfigurationError("Enabled Teams requires at least one named botPairs entry");
+  const unique = (values: string[]) => new Set(values.map(value => value.toLowerCase())).size === values.length;
+  if (!unique(botPairs.map(pair => pair.id)) ||
+      !unique(botPairs.flatMap(pair => [pair.botResourceId, pair.botPeerResourceId])) ||
+      !unique(botPairs.flatMap(pair => [pair.identityResourceId, pair.botPeerManagedIdentityResourceId])) ||
+      !unique(botPairs.flatMap(pair => [pair.botClientId, pair.botPeerClientId].filter((id): id is string => id !== undefined)))) {
+    throw new ConfigurationError("Teams bot pair IDs, bot registrations and primary/peer identities must be distinct across all pairs");
+  }
+  if (Math.max(targets.length, callTargets.length) * botPairs.length > maxServiceTargets) {
+    throw new ConfigurationError(`Teams pair x target inventory must not exceed ${maxServiceTargets} attempts per journey`);
+  }
+  if (botPairs.some(pair => [...targets, ...callTargets].some(target => `${pair.id}--${target.id}`.length > 80))) {
+    throw new ConfigurationError("Teams pair and target IDs joined with -- must fit within 80 characters");
+  }
+}
 
 function validateProviderSettings(service: ServiceExecution): void {
   if (service.type === "exchange" && (service.intervalSeconds !== 60 ||
@@ -156,6 +177,7 @@ export function parseServiceConfig(raw: unknown): ServiceConfig {
   }
   const service = parsed.data;
   validateProviderSettings(service);
+  if (service.type === "teams") validateTeamsBotPairs(service);
   if (service.enabled && service.targets.length === 0 && (service.type !== "teams" || service.callTargets.length === 0)) {
     throw new ConfigurationError("Enabled service config requires at least one target");
   }
@@ -173,12 +195,18 @@ export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readon
   const selected = selectedScenarios
     ? supported.filter(type => selectedScenarios[probeServices[type].journey])
     : supported.slice(0, 1);
-  return selected.flatMap(type => (type === "teams-call" && service.type === "teams" ? service.callTargets : service.targets)
-    .map(item => {
+  return selected.flatMap(type => {
+    const targets = type === "teams-call" && service.type === "teams" ? service.callTargets : service.targets;
+    const probes = targets.map(item => {
       // Teams `channelName` is read only by the setup tooling; the strict probe schema must never receive it.
       const { channelName: _setupOnly, ...target } = item as typeof item & { channelName?: string };
       return { ...target, cohort: service.cohort, type };
-    }));
+    });
+    return service.type === "teams" ? service.botPairs.flatMap(pair => probes.map(probe => ({
+      ...probe, id: `${pair.id}--${probe.id}`, botPairId: pair.id, botClientId: pair.botClientId,
+      ...(type === "teams-call" ? { peerBotClientId: pair.botPeerClientId } : {}),
+    }))) : probes;
+  });
 }
 
 export function serviceSettings(

@@ -93,7 +93,10 @@
             { "name": "teams", "intervalSeconds": 120, "timeoutSeconds": 45, "journeys": ["channel-conversation", "scheduled-meeting"] }
           ]
         },
-        "access": { "bot": "bot-m365-consto", "peerBot": "ahm-m365-consto-peer", "peerIdentity": "uami-m365-experience-consto-teams-peer" },
+        "botPairs": [
+          { "id": "teams-pair-001", "bot": "bot-m365-consto", "identity": "uami-m365-experience-consto-teams", "peerBot": "ahm-m365-consto-peer", "peerIdentity": "uami-m365-experience-consto-teams-peer" },
+          { "id": "teams-pair-002", "bot": "bot-m365-consto-002", "identity": "uami-m365-consto-teams-002", "peerBot": "bot-m365-consto-peer-002", "peerIdentity": "uami-m365-consto-teams-peer-002" }
+        ],
         "worker": { "appName": "m365-ctbcoa-teams", "identity": "uami-m365-experience-consto-teams" },
         "scenarios": { "channel-conversation": true, "scheduled-meeting": true },
         "targets": [
