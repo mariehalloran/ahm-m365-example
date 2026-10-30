@@ -2,19 +2,29 @@
 
 This repository deploys Azure Monitor Health Models and Microsoft 365 synthetic workers from a single root configuration: `monitoring.config.json`.
 
-## Repository layout
+Azure Monitor Health Models helps administrators monitor Microsoft 365 in terms of completed tasks rather than isolated API responses. API-backed synthetic journeys provide success and latency signals, and the model connects business steps and journeys to Exchange, Teams, OneDrive, and the overall Microsoft 365 experience. This dependency-based view makes observed impact easier to trace and supports experience-level alerts, while Microsoft-reported Service Health remains separate supporting context.
 
-- `health-model/` - model topology and signal wiring
-- `synthetic-tests/` - Exchange, Teams, and OneDrive workers plus deployment command
-- `monitoring.config.json` - single user-owned config for services, targets, execution, and deployment
+![Exchange Experience health model showing Mail and Calendar journeys, business-step health, and separate Service Health context](./docs/images/exchange-health-model.png)
+
 
 ## Supported journeys
 
-| Service | Journeys |
-| --- | --- |
-| Exchange | `send-receive-mail`, `edit-reopen-draft`, `attachment-mail`, `reply-mail`, `recurring-calendar` |
-| Teams | `channel-conversation`, `scheduled-meeting` |
-| OneDrive | `user-drive-roundtrip`, `app-folder-lifecycle`, `document-versions` |
+| Service | Journey | What it tests | How it works |
+| --- | --- | --- | --- |
+| Exchange | `send-receive-mail` | Mail submission and Inbox delivery | Create a message, send it to the same mailbox, and poll its Inbox for the matching message. |
+| Exchange | `edit-reopen-draft` | Draft persistence and edits | Create and read a draft, edit it, reopen and verify the saved changes, then delete it. |
+| Exchange | `attachment-mail` | Attachment delivery and content integrity | Send an attachment to self, find the delivered message, download the attachment, and verify its content hash. |
+| Exchange | `reply-mail` | Reply delivery and conversation correlation | Reply to a pre-provisioned, received self-addressed message and verify the correlated reply in the same mailbox's Inbox. |
+| Exchange | `recurring-calendar` | Recurring calendar persistence and updates | Create a private recurring series without attendees, read an occurrence, update and verify the series and occurrence, then delete it. |
+| Teams | `channel-conversation` | Bot channel posts and threaded replies | Each pair's primary bot posts a root message and reply; Graph readback verifies both persisted authors and correlation markers. |
+| Teams | `scheduled-meeting` | Bot-only meeting connectivity and departure | Both bots join a dedicated, existing meeting, verify established calls, meeting metadata and both participant rosters, then leave and confirm disconnection. |
+| OneDrive | `user-drive-roundtrip` | File persistence and content integrity | Create an owned folder and file beneath the approved test folder, enumerate and download the file, verify its hash, then delete and verify removal. |
+| OneDrive | `app-folder-lifecycle` | App-folder data persistence and lifecycle | Create a cycle-owned folder in the app folder, write and read data, update and reread it, then delete the folder and verify removal. |
+| OneDrive | `document-versions` | Version history and prior content retrieval | Write and verify two revisions, enumerate versions, download and verify prior-version bytes, and optionally rewrite those bytes as current content before cleanup. |
+
+## Test accounts and bots
+
+Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts because mailboxes, calendars, and personal drives are user resources. This exercises real delivery and persistence rather than mocked API responses. The accounts are test targets, not worker sign-in credentials: hosted workers authenticate app-only using managed identities. Teams uses managed-identity bot pairs so channel and meeting journeys run unattended without human participants or interactive runtime sign-in. These checks cover API and bot behavior, not employee client interfaces or audio quality.
 
 ## Quick start
 
