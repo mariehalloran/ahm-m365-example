@@ -10,6 +10,7 @@ import type { ProjectConfig } from "../configuration/project-config.js";
 import type { CyclePublisher, CycleResults } from "./results.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
 import { resultMeasurements, type MeasurementSample } from "./measurements.js";
+import { EXCHANGE_PUBLICATION_TIMEOUT_MS, PUBLICATION_TIMEOUT_MS } from "../execution/budgets.js";
 
 export type { HealthReport } from "./health-report-client.js";
 export interface DirectReportCycle extends CycleResults {
@@ -31,6 +32,7 @@ interface EntitySamples {
 }
 type ReportingGroup = { id: string; displayName: string };
 
+/** Groups executed measurements without dropping inconclusive diagnostic records. */
 function collectEntitySamples(results: SyntheticResult[], level: "journey" | "all" | "call-phase"): EntitySamples[] {
   const entities = new Map<string, EntitySamples>();
   const append = (scope: Omit<EntitySamples, "samples">, sample: MeasurementSample) => {
@@ -49,14 +51,17 @@ function collectEntitySamples(results: SyntheticResult[], level: "journey" | "al
   return [...entities.values()];
 }
 
+/** Evaluates only conclusive samples; insufficient evidence explicitly replaces the signal with Unknown. */
 function measurementReports(
   project: ProjectConfig, cycle: DirectReportCycle, entity: EntitySamples,
   signals: readonly [string, string], group?: ReportingGroup,
 ): HealthReport[] {
   const { entityName, samples } = entity;
-  if (samples.length < project.healthModel.minimumSamples) return [];
+  if (!samples.length) return [];
   const policy = project.healthModel;
-  const succeeded = samples.filter(sample => sample.success).length;
+  const conclusive = samples.filter(sample => sample.success !== null);
+  const available = conclusive.length >= policy.minimumSamples;
+  const succeeded = conclusive.filter(sample => sample.success).length;
   const observedAt = samples.reduce((latest, sample) =>
     Date.parse(sample.observedAt) > Date.parse(latest.observedAt) ? sample : latest).observedAt;
   const context = {
@@ -64,13 +69,17 @@ function measurementReports(
     configSha256: cycle.configSha256?.slice(0, 64) ?? null,
     containerRevision: cycle.containerRevision?.slice(0, 128) ?? null,
     tenantAlias: project.tenant.id, journey: entity.journey, kind: entity.kind, step: entity.step,
-    groupId: group?.id ?? "", samples: samples.length, succeeded, observedAt,
-    diagnosticCategories: [...new Set(samples.flatMap(sample => sample.diagnosticCategory ? [sample.diagnosticCategory] : []))],
+    groupId: group?.id ?? "", samples: conclusive.length, attempts: samples.length,
+    inconclusive: samples.length - conclusive.length, minimumSamples: policy.minimumSamples, succeeded, observedAt,
+    diagnosticCategories: [...new Set(samples.flatMap(sample => [
+      ...(sample.diagnosticCategory ? [sample.diagnosticCategory] : []),
+      ...(sample.cleanupFailed ? ["cleanup-failure"] : []),
+    ]))],
     ...(group ? { groupName: group.displayName } : {}),
   };
-  const measurements: { signalName: string; unit: string; value: number; rules: EvaluationRules }[] = [
+  const measurements: { signalName: string; unit: string; value: number | undefined; rules: EvaluationRules }[] = [
     {
-      signalName: signals[0], unit: "Percent", value: 100 * succeeded / samples.length,
+      signalName: signals[0], unit: "Percent", value: available ? 100 * succeeded / conclusive.length : undefined,
       rules: {
         degradedRule: { operator: "LessThan", threshold: policy.successDegradedPercent },
         unhealthyRule: { operator: "LessThan", threshold: policy.successUnhealthyPercent },
@@ -78,7 +87,7 @@ function measurementReports(
     },
     {
       signalName: signals[1], unit: "Milliseconds",
-      value: samples.reduce((sum, sample) => sum + sample.durationMs, 0) / samples.length,
+      value: available ? conclusive.reduce((sum, sample) => sum + sample.durationMs, 0) / conclusive.length : undefined,
       rules: {
         degradedRule: { operator: "GreaterThan", threshold: policy.latencyDegradedMilliseconds },
         unhealthyRule: { operator: "GreaterThan", threshold: policy.latencyUnhealthyMilliseconds },
@@ -90,14 +99,15 @@ function measurementReports(
     body: {
       signalName: group ? groupSignalName(group.id, project.tenant.id, measurement.signalName)
         : project.multiTenant ? tenantSignalName(project.tenant.id, measurement.signalName) : measurement.signalName,
-      healthState: evaluateHealthState(measurement.value, measurement.rules),
+      healthState: measurement.value === undefined ? "Unknown" : evaluateHealthState(measurement.value, measurement.rules),
       expiresInMinutes: policy.signalWindowMinutes,
-      value: measurement.value, evaluationRules: measurement.rules,
+      ...(measurement.value === undefined ? {} : { value: measurement.value, evaluationRules: measurement.rules }),
       additionalContext: JSON.stringify({ ...context, unit: measurement.unit }),
     },
   }));
 }
 
+/** Reuses the same evidence rules for connection and departure phase signals. */
 function callMeasurementReports(project: ProjectConfig, cycle: DirectReportCycle, results: SyntheticResult[]): HealthReport[] {
   const entities = collectEntitySamples(results, "call-phase");
   const phases = [
@@ -110,6 +120,7 @@ function callMeasurementReports(project: ProjectConfig, cycle: DirectReportCycle
   });
 }
 
+/** Builds aggregate service, journey, step and configured reporting-group reports for one cycle. */
 export function directHealthReports(project: ProjectConfig, service: ServiceConfig, cycle: DirectReportCycle): HealthReport[] {
   if (!service.enabled) return [];
   const results = cycle.results.map(raw => reportedResult(resultSchema.parse(raw)));
@@ -129,13 +140,14 @@ export function directHealthReports(project: ProjectConfig, service: ServiceConf
   return reports;
 }
 
+/** Publishes direct reports within the service's independently bounded publication window. */
 export function createDirectHealthReporter(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
   options: HealthReportClientOptions = {},
 ): CyclePublisher {
   const publish = createHealthReportPublisher(project, service, telemetry, env, options);
   return async cycle => {
-    const deadline = AbortSignal.timeout(service.type === "exchange" ? 12000 : 30000);
+    const deadline = AbortSignal.timeout(service.type === "exchange" ? EXCHANGE_PUBLICATION_TIMEOUT_MS : PUBLICATION_TIMEOUT_MS);
     const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
     const reports = directHealthReports(project, service, {
       ...cycle,

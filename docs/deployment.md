@@ -203,7 +203,7 @@ which sets `ENABLE_BETA_SERVICE_ACTIVITY=true`.
 
 ## Deployment status and order
 
-**Single-user Exchange conversion:** the five-journey, aligned-minute source
+**Single-user Exchange conversion:** the five-journey, aligned-two-minute source
 change is not deployed or live-accepted by this implementation task. Historical
 tenant evidence below predates that conversion and does not establish self-reply
 fixture validity, current cohort capacity or current health ingestion. Re-provision
@@ -446,13 +446,20 @@ existing approved environment and identities when `deployment.foundation.mode` i
 
 Only scheduled Teams meetings need public HTTPS callback ingress. Background
 journey execution is not a long-lived ingress request. Lanes run independently
-with bounded execution and cleanup; a timeout is a failed attempt, while
-unexecuted dependent steps are not extra failed requests.
+with bounded execution and cleanup. The checked-in Exchange cadence is two
+minutes, and both Exchange and Teams allow 60 seconds per complete journey.
+Genuine journey deadline expiry is a failed attempt; worker cancellations and
+cleanup-only failures report Unknown. Unexecuted dependent steps are not extra
+failed requests, and confirmed business-step evidence is preserved.
+Exchange reserves 12 seconds for cleanup settlement and 12 for publication inside
+a 119-second slot envelope; actual cleanup remains independently bounded to ten
+seconds. Graceful shutdown permits bounded reporting, but cannot extend the hard
+slot deadline. These source changes have not been deployed or live-accepted.
 
 `logAnalytics.enabled` controls the entire log path, not just an exporter.
 Off reports directly from containers and does not use a logging pipeline.
 On uses Event Hubs, the managed-identity Function/DCR bridge and pay-as-you-go workspace,
-with optional Capture and the five administrator saved searches. See
+with optional Capture and the six administrator saved searches. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 Microsoft-reported provider data
 remains separate, suppressed Service Health context; see

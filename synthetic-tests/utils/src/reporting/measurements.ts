@@ -1,13 +1,15 @@
 import {
-  isReportedStep, journeyStepEntities, probeServices,
+  isInconclusiveCategory, isReportedStep, journeyStepEntities, probeServices,
   type DiagnosticCategory, type StepResult, type SyntheticResult,
 } from "../contracts.js";
 
 export interface MeasurementSample {
-  success: boolean;
+  success: boolean | null;
   durationMs: number;
   observedAt: string;
   diagnosticCategory?: DiagnosticCategory;
+  cleanupFailed?: boolean;
+  cleanupFailure?: SyntheticResult["diagnosticContext"]["cleanupFailure"];
   detail?: string;
 }
 export interface SyntheticMeasurement extends MeasurementSample {
@@ -17,11 +19,13 @@ export interface SyntheticMeasurement extends MeasurementSample {
   step: string;
 }
 
+/** Retains executed-step evidence without assigning a binary sample to an inconclusive action. */
 function stepSample(
   step: Exclude<StepResult, { status: "skipped" }>, durationMs = step.durationMs,
 ): MeasurementSample {
   return {
-    success: step.status === "succeeded", durationMs, observedAt: step.observedAt,
+    success: step.status === "succeeded" ? true : isInconclusiveCategory(step.diagnosticCategory) ? null : false,
+    durationMs, observedAt: step.observedAt,
     ...(step.status === "failed" ? {
       diagnosticCategory: step.diagnosticCategory,
       ...(step.detail !== undefined ? { detail: step.detail } : {}),
@@ -29,15 +33,21 @@ function stepSample(
   };
 }
 
+/** Projects the journey and only executed business actions, including observed call phases. */
 export function resultMeasurements(result: SyntheticResult): SyntheticMeasurement[] {
   const journey = probeServices[result.testType];
   const steps = result.steps.filter(step => isReportedStep(step.name));
   const failed = steps.find(step => step.status === "failed");
   const measurements: SyntheticMeasurement[] = [{
     entityName: journey.entityName, journey: journey.journey, kind: "journey", step: "",
-    success: result.success, durationMs: result.durationMs, observedAt: result.observedAt,
+    success: isInconclusiveCategory(result.diagnosticCategory) ? null : result.success,
+    durationMs: result.durationMs, observedAt: result.observedAt,
     ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
-    ...(failed?.detail !== undefined ? { detail: failed.detail } : {}),
+    ...(result.diagnosticContext.cleanupSucceeded === false ? { cleanupFailed: true } : {}),
+    ...(result.diagnosticContext.cleanupFailure ? { cleanupFailure: result.diagnosticContext.cleanupFailure } : {}),
+    ...(failed?.detail !== undefined ? { detail: failed.detail }
+      : result.diagnosticCategory === "cleanup-failure" && result.diagnosticContext.cleanupFailure?.detail
+        ? { detail: result.diagnosticContext.cleanupFailure.detail } : {}),
   }];
   for (const step of steps) {
     if (step.status === "skipped") continue;

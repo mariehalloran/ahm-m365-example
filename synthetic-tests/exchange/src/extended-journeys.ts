@@ -645,7 +645,7 @@ function createExtendedJourneyProbe(
 ): ProbeHandler<ExtendedJourney> {
   return async (probe, context) => {
     const startedAt = Date.now();
-    const result = baseResult(probe, startedAt);
+    const result = context.result ?? baseResult(probe, startedAt);
     const mailbox = probe.mailbox;
     const attempt: ExtendedJourneyAttempt = {
       probe,

@@ -35,6 +35,13 @@ Health models are generated from the single root config (`monitoring.config.json
 - `false`: containers publish direct aggregate health reports per cycle.
 - `true`: containers publish observations; model queries evaluate rolling windows from Log Analytics.
 
+Worker cancellations and cleanup-only failures have no numeric sample in either
+mode. Success and latency use conclusive observations; an all-Unknown cohort
+evaluates Unknown. A genuine service failure is not hidden by a later cleanup error.
+`minimumSamples` counts conclusive evidence only. Queries deduplicate before
+excluding inconclusive records, including legacy zero-valued cancellation/cleanup
+rows; the `inconclusive-by-group` saved search retains their diagnostics.
+
 ## Group signals
 
 - Exchange and OneDrive groups are defined under each service `targets` object.

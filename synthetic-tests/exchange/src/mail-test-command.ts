@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createLiveGraphClient } from "../../utils/src/integrations/auth.js";
 import { bindingKey, bindingsFile, saveBindings } from "../../utils/src/configuration/bindings.js";
 import { ConfigurationError, filterRuntimeProbes } from "../../utils/src/configuration/config.js";
-import { exchangeJourneyMilliseconds, type Telemetry } from "../../utils/src/contracts.js";
+import type { Telemetry } from "../../utils/src/contracts.js";
 import { executionLanes } from "../../utils/src/execution/execution-lanes.js";
 import { categoryOf, IntegrationError } from "../../utils/src/integrations/http.js";
 import {
@@ -14,7 +14,8 @@ import {
   serviceExecution,
   type ProjectConfig,
 } from "../../utils/src/configuration/project-config.js";
-import { createResultOutput } from "../../utils/src/reporting/results.js";
+import { createResultOutput, outcomeOf } from "../../utils/src/reporting/results.js";
+import { resultContext } from "../../utils/src/configuration/groups.js";
 import { runCycle } from "../../utils/src/execution/runner.js";
 import {
   serviceEnvironment,
@@ -221,7 +222,7 @@ export async function main(argv: string[]) {
         "exchange-attachment": exchangeAttachmentProbe,
         "exchange-reply": exchangeReplyProbe,
       });
-      const results = createResultOutput(telemetry);
+      const results = createResultOutput(telemetry, result => resultContext(project, result));
 
       for (let sample = 1; sample <= samples; sample++) {
         for (const type of ["exchange-attachment", "exchange-reply"] as const) {
@@ -230,12 +231,9 @@ export async function main(argv: string[]) {
             continue;
           }
 
-          // The deadline the worker applies: the journey's lane timeout, never above the journey's own cap.
+          // Use the same complete-journey deadline as the service worker, not a per-step cap.
           const matchingLane = lanes.find((lane) => lane.journeys.includes(journey))!;
-          const deadlineMs = Math.min(
-            matchingLane.timeoutSeconds * 1000,
-            exchangeJourneyMilliseconds(type),
-          );
+          const deadlineMs = matchingLane.timeoutSeconds * 1000;
 
           for (const target of selected.targets) {
             controller.signal.throwIfAborted();
@@ -268,14 +266,16 @@ export async function main(argv: string[]) {
             );
 
             const result = cycle.results[0]!;
-            if (!result.success) {
+            const outcome = outcomeOf(result);
+            if (outcome !== "success") {
               failed = true;
             }
             telemetry.emit("exchange-mail-test-measured", {
               targetId: target.id,
               journey,
               sample,
-              success: result.success,
+              outcome,
+              success: outcome === "unknown" ? null : result.success,
               durationMs: result.durationMs,
               deadlineMs,
               category: result.diagnosticCategory,

@@ -20,7 +20,7 @@ import {
 export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, context) => {
   const { signal, telemetry } = context;
   const startedAt = Date.now();
-  const result = baseResult(probe, startedAt);
+  const result = context.result ?? baseResult(probe, startedAt);
   const attempt: MailAttempt = {
     mailbox: probe.mailbox,
     correlationId: result.correlationId,
@@ -67,8 +67,6 @@ export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, 
       result,
       "delete-draft",
       () => deleteDraft(graph, attempt, draftId, signal),
-      Date.now,
-      () => "cleanup-failure",
     );
 
     result.success = true;

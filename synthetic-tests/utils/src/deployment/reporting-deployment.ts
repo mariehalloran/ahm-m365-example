@@ -167,6 +167,7 @@ async function observationWorkspace(run: DeploymentRun): Promise<string> {
   return workspace.customerId;
 }
 
+/** Verifies fresh target-scoped ingestion while distinguishing Unknown diagnostics from service failures. */
 export async function verifyObservations(run: DeploymentRun, service: string, since: string): Promise<void> {
   const workers = run.prepared.workers.filter(worker => worker.type === service && worker.service.mode === "live");
   if (!workers.length) {
@@ -180,13 +181,14 @@ export async function verifyObservations(run: DeploymentRun, service: string, si
   if (!expected.size) throw new ConfigurationError("Observation verification requires selected live journey targets");
   const workspace = await observationWorkspace(run);
   const snapshot = runtimeConfiguration(run);
-  const query = `M365Synthetic_CL | where Timestamp >= datetime(${since}) and Timestamp <= now() and Category == 'M365Synthetic' and Mode == 'live' and Kind == 'journey' | where Service == '${service}' and tostring(Dimensions.configSha256) == '${snapshot.sha256}' | summarize Records=count(), Failures=countif(Value == 0) by TenantAlias,TestAccountId,Journey`;
+  const query = `M365Synthetic_CL | where Timestamp >= datetime(${since}) and Timestamp <= now() and Category == 'M365Synthetic' and Mode == 'live' and Kind == 'journey' | where Service == '${service}' and tostring(Dimensions.configSha256) == '${snapshot.sha256}' | summarize arg_max(Timestamp, *) by EventId | summarize Records=count(), Failures=countif(Value == 0 and FailureCategory !in ('cancelled', 'cleanup-failure')), Unknown=countif(isnull(Value) or FailureCategory in ('cancelled', 'cleanup-failure')) by TenantAlias,TestAccountId,Journey`;
   run.phase = "verify-observation-ingestion";
   const deadline = run.now() + 480000;
   while (run.now() < deadline) {
     const rows = z.array(z.object({
       TenantAlias: z.string(), TestAccountId: z.string(), Journey: z.string(),
       Records: z.coerce.number().int().nonnegative(), Failures: z.coerce.number().int().nonnegative(),
+      Unknown: z.coerce.number().int().nonnegative(),
     })).parse(await azJson<unknown>(run, run.phase, [
       "monitor", "log-analytics", "query", "--workspace", workspace,
       "--analytics-query", query, ...run.subscription,
@@ -197,6 +199,7 @@ export async function verifyObservations(run: DeploymentRun, service: string, si
         event: "observation-ingestion-verified", service, expectedPairs: expected.size, Pairs: observed.size,
         Records: rows.reduce((sum, row) => sum + row.Records, 0),
         Failures: rows.reduce((sum, row) => sum + row.Failures, 0),
+        Unknown: rows.reduce((sum, row) => sum + row.Unknown, 0),
       });
       return;
     }
@@ -205,6 +208,7 @@ export async function verifyObservations(run: DeploymentRun, service: string, si
   throw new ConfigurationError(`Fresh ${service} observations did not reach Log Analytics before the ingestion deadline`);
 }
 
+/** Accepts an explicitly published Unknown as fresh evidence, never as a numeric success/failure sample. */
 export async function verifyDirectReports(run: DeploymentRun, service: string, since: string): Promise<void> {
   if (run.prepared.document.logAnalytics.enabled) throw new ConfigurationError("Direct-report verification requires Log Analytics off");
   const workers = run.prepared.workers.filter(worker => worker.type === service && worker.service.mode === "live");
@@ -228,7 +232,7 @@ export async function verifyDirectReports(run: DeploymentRun, service: string, s
           group: group.id, samples: selected.filter(probe => group.targetIds.includes(probe.id)).length,
         })),
       ];
-      for (const scope of scopes.filter(scope => scope.samples >= worker.project.healthModel.minimumSamples)) {
+      for (const scope of scopes.filter(scope => scope.samples > 0)) {
         for (const metric of ["observed-success-percentage", "observed-mean-duration"]) {
           const signal = scope.group ? groupSignalName(scope.group, worker.tenant, metric)
             : worker.project.multiTenant ? tenantSignalName(worker.tenant, metric) : metric;
@@ -237,12 +241,12 @@ export async function verifyDirectReports(run: DeploymentRun, service: string, s
       }
     }
   }
-  if (!expected.size) throw new ConfigurationError("Direct-report minimumSamples excludes every selected live journey scope");
+  if (!expected.size) throw new ConfigurationError("Direct-report verification requires selected live journey targets");
   const statusSchema = z.object({
     name: z.string(),
     status: z.object({
       reportedAt: z.string().optional(), additionalContext: z.string().optional(),
-      value: z.number().optional(), healthState: z.string().optional(),
+      value: z.number().nullish(), healthState: z.string().optional(),
     }).optional(),
   });
   const responseSchema = z.object({ value: z.array(z.object({
@@ -273,9 +277,14 @@ export async function verifyDirectReports(run: DeploymentRun, service: string, s
         if (!scope || !status?.additionalContext || !status.reportedAt || Date.parse(status.reportedAt) < Date.parse(since)) continue;
         const context = z.object({
           configSha256: z.string().optional(), containerRevision: z.string().optional(), samples: z.number().optional(),
+          attempts: z.number().optional(),
         }).parse(JSON.parse(status.additionalContext));
+        const available = (context.samples ?? 0) >= workers[0]!.project.healthModel.minimumSamples;
+        const known = available && typeof status.value === "number" &&
+          ["Healthy", "Degraded", "Unhealthy"].includes(status.healthState ?? "");
+        const unknown = !available && status.value == null && status.healthState === "Unknown";
         if (context.configSha256 === snapshot.sha256 && context.containerRevision === scope.revision &&
-            context.samples !== undefined && context.samples >= scope.samples && status.value !== undefined) observed.add(key);
+            (context.attempts ?? context.samples ?? 0) >= scope.samples && (known || unknown)) observed.add(key);
       }
     }
     if ([...expected.keys()].every(key => observed.has(key))) {

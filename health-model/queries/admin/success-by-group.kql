@@ -1,13 +1,16 @@
 M365Synthetic_CL
 | where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
-| where Kind == 'journey' and Value in (0.0, 1.0)
+| where Kind == 'journey'
 | summarize arg_max(Timestamp, *) by EventId
+| extend Conclusive = Value in (0.0, 1.0) and FailureCategory !in ('cancelled', 'cleanup-failure')
+| extend ConclusiveDurationMs = iff(Conclusive, DurationMs, real(null))
 | extend Groups = iff(array_length(GroupIds) > 0, GroupIds, dynamic(['']))
 | mv-expand with_itemindex=GroupIndex GroupId = Groups to typeof(string)
 | extend Group = iff(isempty(GroupId), '(no group)', tostring(GroupNames[GroupIndex]))
-| summarize Attempts = count(), Succeeded = countif(Value == 1), MeanDurationMs = avg(DurationMs),
-    P95DurationMs = percentile(DurationMs, 95)
+| summarize Attempts = countif(Conclusive), Unknown = countif(Conclusive == false),
+    Succeeded = countif(Conclusive and Value == 1), MeanDurationMs = avg(ConclusiveDurationMs),
+    P95DurationMs = percentile(ConclusiveDurationMs, 95)
     by TenantAlias, Group, GroupId, Service, Journey
-| project TenantAlias, Group, GroupId, Service, Journey, Attempts, Failures = Attempts - Succeeded,
-    SuccessPercent = round(100.0 * Succeeded / Attempts, 1), MeanDurationMs, P95DurationMs
+| project TenantAlias, Group, GroupId, Service, Journey, Attempts, Unknown, Failures = Attempts - Succeeded,
+    SuccessPercent = iff(Attempts > 0, round(100.0 * Succeeded / Attempts, 1), real(null)), MeanDurationMs, P95DurationMs
 | order by Group asc, SuccessPercent asc

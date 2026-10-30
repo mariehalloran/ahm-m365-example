@@ -1,0 +1,14 @@
+M365Synthetic_CL
+| where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
+| where Kind in ('journey', 'step', 'call-phase')
+| summarize arg_max(Timestamp, *) by EventId
+| where isnull(Value) or FailureCategory in ('cancelled', 'cleanup-failure')
+| extend Groups = iff(array_length(GroupIds) > 0, GroupIds, dynamic(['']))
+| mv-expand with_itemindex=GroupIndex GroupId = Groups to typeof(string)
+| project TimeGenerated,
+    Group = iff(isempty(GroupId), '(no group)', tostring(GroupNames[GroupIndex])),
+    User = coalesce(SyntheticUser, TestAccountId, '(n/a)'),
+    TenantAlias, Service, Journey, Step, Kind, Region, ExecutionRegion,
+    Outcome = 'Unknown', Diagnostic = FailureCategory, Detail = ErrorMessage,
+    HttpStatus, Target = TestAccountId, DurationMs, CorrelationId, RunId
+| order by TimeGenerated desc

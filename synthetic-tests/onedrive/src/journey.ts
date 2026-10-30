@@ -83,10 +83,11 @@ async function runVersionHistory(
   });
 }
 
+/** Completes the selected OneDrive workflow before entering its independent cleanup window. */
 export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfolder" | "onedrive-versions"> = async (probe, context) => {
   const { signal, telemetry, now = Date.now } = context;
   const startedAt = now();
-  const result = baseResult(probe, startedAt);
+  const result = context.result ?? baseResult(probe, startedAt);
   const appFolder = probe.type === "onedrive-appfolder";
   const attempt: FileAttempt = {
     probe, correlationId: result.correlationId, driveId: probe.driveId ?? "", parentId: probe.folderId ?? "",
@@ -122,6 +123,7 @@ export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfol
   } catch (error) {
     journeyFailure(result, error, telemetry);
   } finally {
+    context.executionComplete?.();
     await cleanupStep(result, attempt.mutationAttempted,
       cleanupSignal => {
         if (!context.graph) throw new IntegrationError("collector-failure");

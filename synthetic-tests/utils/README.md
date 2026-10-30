@@ -26,6 +26,14 @@ This package provides the common runtime, config loading, reporting, deployment 
 - `logAnalytics.enabled: false` -> publish direct service and journey health reports.
 - `logAnalytics.enabled: true` -> publish observations for model query evaluation windows.
 
+In both modes, worker cancellations and cleanup-only failures report Unknown
+without a numeric success/failure sample. They retain diagnostics but do not enter
+success-rate or service-latency denominators. Conclusive business-step evidence
+is preserved, and an all-Unknown cohort evaluates Unknown.
+Console results use `outcome: "unknown"` and `success: null`; observations retain
+`value: null` and `dimensions.outcome: "unknown"`. Direct Unknown reports omit
+`value` and evaluation rules. `minimumSamples` counts only conclusive evidence.
+
 ## Deployment model
 
 `src/deployment/` builds deterministic stages from root config:

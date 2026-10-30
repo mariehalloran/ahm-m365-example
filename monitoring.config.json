@@ -46,7 +46,7 @@
       "exchange": {
         "enabled": true,
         "execution": {
-          "mode": "live", "intervalSeconds": 60, "timeoutSeconds": 30, "cohort": "exchange-global",
+          "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 60, "cohort": "exchange-global",
           "maxConcurrentRequests": 32, "maxConcurrentRequestsPerMailbox": 2,
           "serviceHealth": true,
           "serviceMessages": true, "providerIntervalSeconds": 60,
@@ -90,7 +90,7 @@
       "teams": {
         "enabled": true,
         "execution": {
-          "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 45, "cohort": "teams-global",
+          "mode": "live", "intervalSeconds": 120, "timeoutSeconds": 60, "cohort": "teams-global",
           "serviceHealth": true,
           "serviceMessages": true, "providerIntervalSeconds": 60,
           "serviceActivity": {
@@ -106,7 +106,7 @@
           "teamsCleanupEnabled": false,
           "teamsReadbackClientId": "417d47e9-6ef3-40de-a8af-ac15b5438d54",
           "executionLanes": [
-            { "name": "teams", "intervalSeconds": 120, "timeoutSeconds": 45, "journeys": ["channel-conversation", "scheduled-meeting"] }
+            { "name": "teams", "intervalSeconds": 120, "timeoutSeconds": 60, "journeys": ["channel-conversation", "scheduled-meeting"] }
           ]
         },
         "botPairs": [

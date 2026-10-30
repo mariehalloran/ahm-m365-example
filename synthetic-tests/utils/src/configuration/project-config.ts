@@ -11,6 +11,7 @@ import {
 } from "./service-config.js";
 import { applicationAccessSchema, deploymentSettingsSchema, teamsBotPairSchema, workerSettingsSchema } from "./deployment-config.js";
 import { canonicalProjectFile } from "../paths.js";
+import { EXCHANGE_SLOT_MARGIN_MS } from "../execution/budgets.js";
 
 export const serviceTypes = ["exchange", "teams", "onedrive"] as const;
 type ServiceJourney<S extends ServiceConfig["type"]> =
@@ -244,6 +245,7 @@ export function serviceExecution(project: ProjectConfig, type: ServiceConfig["ty
   return applyProjectConfig(project, parseServiceExecution({ ...project.services[type].execution, type }));
 }
 
+/** Combines selected targets with validated lane, capacity and signal-freshness budgets. */
 export function applyProjectConfig(project: ProjectConfig, service: ServiceExecution): ServiceConfig {
   const selected = project.services[service.type];
   const enabled = selected.enabled && Object.values(selected.scenarios).some(Boolean);
@@ -251,7 +253,8 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     if (project.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
-    const cycleBudgetSeconds = service.type === "exchange" ? 59 : service.cycleTimeoutSeconds + 42;
+    const cycleBudgetSeconds = service.type === "exchange"
+      ? service.intervalSeconds - EXCHANGE_SLOT_MARGIN_MS / 1000 : service.cycleTimeoutSeconds + 42;
     const lanes = executionLanes(service)
       .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]));
     const pairCount = service.type === "teams" ? project.services.teams.botPairs.length : 1;

@@ -16,6 +16,7 @@ import {
   type ChannelReplyAttempt,
 } from "./steps.js";
 
+/** Completes the root/reply conversation under one execution deadline, then performs bounded internal cleanup. */
 export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = async (probe, context) => {
   const { config, signal, telemetry, now = Date.now } = context;
   const startedAt = now();
@@ -24,7 +25,7 @@ export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = asy
     signal,
     AbortSignal.timeout(config.PROBE_TIMEOUT_MS),
   ]);
-  const result = baseResult(probe, startedAt);
+  const result = context.result ?? baseResult(probe, startedAt);
   const attempt: ChannelReplyAttempt = {
     serviceUrl: probe.serviceUrl,
     tenantId: probe.tenantId,
@@ -35,10 +36,13 @@ export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = asy
     mutationAttempted: false,
     replyMutationAttempted: false,
   };
+  /** Does not relabel an observed service failure just because cancellation happens later. */
   const classify = (error: unknown) => {
-    if (signal.aborted) return "cancelled";
-    if (executionSignal.aborted) return "delivery-timeout";
     const category = categoryOf(error);
+    if (category === "cancelled") {
+      if (signal.aborted) return categoryOf(signal.reason) === "delivery-timeout" ? "delivery-timeout" : "cancelled";
+      return executionSignal.aborted ? "delivery-timeout" : "cancelled";
+    }
     return category === "graph-unavailable"
       ? result.diagnosticContext.testStage === "send"
         ? "send-failure"
@@ -137,6 +141,7 @@ export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = asy
   } catch (error) {
     journeyFailure(result, error, telemetry);
   } finally {
+    context.executionComplete?.();
     await cleanupStep(
       result,
       attempt.mutationAttempted,

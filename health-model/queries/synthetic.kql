@@ -6,8 +6,9 @@ M365Synthetic_CL
 | where Kind == '__KIND__' and Step == '__STEP__'
 | where TenantAlias == '__TENANT__'
 | where '__GROUP__' == '' or set_has_element(GroupIds, '__GROUP__')
-| where Value in (0.0, 1.0) and isnotnull(DurationMs) and DurationMs >= 0
 | summarize arg_max(Timestamp, *) by EventId
+| where FailureCategory !in ('cancelled', 'cleanup-failure')
+| where Value in (0.0, 1.0) and isnotnull(DurationMs) and DurationMs >= 0
 | summarize Samples = count(), Value = __AGGREGATION__
 | where Samples >= __MINIMUM__ and isnotnull(Value)
 | project Value

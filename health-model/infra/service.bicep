@@ -77,6 +77,7 @@ var rootChildPositions = concat(
     journey => journeyPositions[indexOf(service.journeys, journey)]
   )
 )
+// The query deduplicates first, excludes inconclusive/legacy cancellation samples and returns no value below minimumSamples.
 var observationQuery = loadTextContent('../queries/synthetic.kql')
 var signalScopes = concat(
   map(tenantScopes, scope => { tenant: scope.id, group: '', journeys: scope.journeys }),

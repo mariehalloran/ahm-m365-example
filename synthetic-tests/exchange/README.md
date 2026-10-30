@@ -39,10 +39,10 @@ npm run exchange:mail-test -- --tenant <alias>
 
 ## Scheduling notes
 
-- Cycles align to minute boundaries.
-- Journey deadlines are split into two windows:
-  - first check at 15 seconds
-  - hard deadline at 30 seconds
+- Cycles align to two-minute boundaries and run every selected journey for every mailbox.
+- Each complete journey has a 60-second execution deadline shared by its steps; the latency degradation threshold stays at 15 seconds.
+- Cleanup has an independent 10-second budget. Worker cancellations and cleanup-only failures report Unknown; genuine service failures and journey deadline expiry remain failures.
+- Cleanup settlement allows 12 seconds and publication another 12, inside a 119-second slot envelope. Capacity diagnostics use `exchange-cycle-capacity`.
 
 ## Diagnostics
 

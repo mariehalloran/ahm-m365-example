@@ -1,7 +1,8 @@
 M365Synthetic_CL
 | where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
-| where Kind in ('journey', 'step') and Value == 0
+| where Kind in ('journey', 'step')
 | summarize arg_max(Timestamp, *) by EventId
+| where Value == 0 and FailureCategory !in ('cancelled', 'cleanup-failure')
 | extend Groups = iff(array_length(GroupIds) > 0, GroupIds, dynamic(['']))
 | mv-expand with_itemindex=GroupIndex GroupId = Groups to typeof(string)
 | project TimeGenerated,

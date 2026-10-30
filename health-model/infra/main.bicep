@@ -58,6 +58,11 @@ var adminSearches = [
     query: loadTextContent('../queries/admin/impacted-users-by-group.kql')
   }
   {
+    name: 'inconclusive-by-group'
+    displayName: 'Unknown synthetic outcomes by group and user'
+    query: loadTextContent('../queries/admin/inconclusive-by-group.kql')
+  }
+  {
     name: 'success-by-group'
     displayName: 'Success rate by group and journey'
     query: loadTextContent('../queries/admin/success-by-group.kql')

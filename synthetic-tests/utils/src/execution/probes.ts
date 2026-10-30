@@ -24,6 +24,8 @@ export interface ProbeContext {
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   executionComplete?: () => void;
+  // Mutable evidence remains available if cancellation outlasts the handler's settlement budget.
+  result?: SyntheticResult;
 }
 export type ProbeHandler<Type extends TestType = TestType> =
   (probe: LiveProbeFor<Type>, context: ProbeContext) => Promise<SyntheticResult>;

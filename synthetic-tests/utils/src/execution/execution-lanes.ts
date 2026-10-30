@@ -1,23 +1,29 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { probeServices, testTypes, type Telemetry } from "../contracts.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
+import { EXCHANGE_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS } from "./budgets.js";
 
 export interface ExecutionLane {
   name: string;
   intervalSeconds: number;
   timeoutSeconds: number;
   journeys: string[];
-  alignToMinute?: boolean;
+  alignToInterval?: boolean;
 }
 
+/** Keeps all Exchange journeys on one aligned two-minute lane and other service/provider lanes independent. */
 export function executionLanes(service: Pick<ServiceConfig, "type" | "intervalSeconds" | "timeoutSeconds" | "executionLanes">): ExecutionLane[] {
   const journeys = testTypes.filter(type => probeServices[type].service === service.type).map(type => probeServices[type].journey);
   if (service.type !== "exchange") {
     return service.executionLanes ?? [{ name: service.type, intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys }];
   }
-  return [{ name: "exchange", intervalSeconds: 60, timeoutSeconds: 30, journeys, alignToMinute: true }];
+  return [{
+    name: "exchange", intervalSeconds: EXCHANGE_INTERVAL_SECONDS, timeoutSeconds: JOURNEY_TIMEOUT_SECONDS,
+    journeys, alignToInterval: true,
+  }];
 }
 
+/** Awaits each lane's batch before its next slot, skipping missed slots instead of catching up. */
 export async function runExecutionLanes(
   lanes: ExecutionLane[], execute: (lane: ExecutionLane) => Promise<void>,
   options: {
@@ -30,7 +36,7 @@ export async function runExecutionLanes(
   const origin = now();
   const outcomes = await Promise.allSettled(lanes.map(async lane => {
     const interval = lane.intervalSeconds * 1000;
-    const laneOrigin = lane.alignToMinute && !options.once ? Math.ceil(origin / interval) * interval : origin;
+    const laneOrigin = lane.alignToInterval && !options.once ? Math.ceil(origin / interval) * interval : origin;
     if (laneOrigin > now()) {
       try { await sleep(laneOrigin - now(), options.signal); }
       catch (error) { if (!options.signal.aborted) throw error; }
@@ -38,7 +44,7 @@ export async function runExecutionLanes(
     let slot = 0;
     let lastStartedSlot = -1;
     while (!options.signal.aborted) {
-      if (lane.alignToMinute && !options.once) {
+      if (lane.alignToInterval && !options.once) {
         slot = Math.max(slot, Math.floor((now() - laneOrigin) / interval));
         if (slot <= lastStartedSlot || now() < laneOrigin + slot * interval) {
           const nextSlot = Math.max(slot, lastStartedSlot + 1);

@@ -12,6 +12,11 @@ export const categories = [
 ] as const;
 export type DiagnosticCategory = (typeof categories)[number];
 
+/** Identifies worker/cleanup outcomes that cannot establish service success or failure. */
+export function isInconclusiveCategory(category: DiagnosticCategory | null | undefined): boolean {
+  return category === "cancelled" || category === "cleanup-failure";
+}
+
 export const maxServiceTargets = 1000;
 export const maxOneDriveTargets = maxServiceTargets;
 export const serviceProbeLimits = Object.fromEntries(
@@ -19,10 +24,6 @@ export const serviceProbeLimits = Object.fromEntries(
     service, testTypes.filter(type => probeServices[type].service === service).length * maxServiceTargets,
   ]),
 ) as Record<"exchange" | "teams" | "onedrive", number>;
-// SELF-REPLY has a separate 30-second execution deadline; its latency degradation threshold remains 15 seconds.
-export function exchangeJourneyMilliseconds(testType: TestType): number {
-  return testType === "exchange-reply" ? 30000 : 15000;
-}
 // Exchange journeys wait on several mailbox/calendar propagation delays inside their deadline, so they poll
 // finely; a 2-second interval alone costs about a second per wait and left calendar journeys at the cap.
 export const exchangePollIntervalMilliseconds = 500;
@@ -80,6 +81,11 @@ export const resultSchema = z.object({
     region: z.string().max(80).optional(),
     testStage: z.enum(["simulated", "initialization", "authentication", "send", "poll", "delivery-confirmed", "download", "update", "read", "reply", "cleanup", "complete", "execution"]).optional(),
     cleanupSucceeded: z.boolean().optional(),
+    cleanupFailure: z.object({
+      category: z.enum(categories),
+      httpStatus: z.number().int().min(100).max(599).optional(),
+      detail: z.string().max(maxStepDetailLength).optional(),
+    }).strict().optional(),
     authenticationDurationMs: z.number().finite().nonnegative().optional(),
     httpStatus: z.number().int().min(100).max(599).optional(),
   }).strict().default({}),
@@ -105,7 +111,7 @@ export const resultSchema = z.object({
   }
   if (value.deliveryDurationMs !== undefined &&
       (value.testType !== "exchange-mail-flow" || value.deliveryDurationMs > value.durationMs ||
-       (!value.success && value.diagnosticCategory !== "cleanup-failure"))) {
+       (!value.success && !isInconclusiveCategory(value.diagnosticCategory)))) {
     ctx.addIssue({ code: "custom", message: "Invalid delivery duration" });
   }
   if (value.sendDurationMs !== undefined &&
@@ -116,14 +122,15 @@ export const resultSchema = z.object({
   }
   if (value.publicationDurationMs !== undefined &&
       (probeServices[value.testType].service !== "teams" || value.publicationDurationMs > value.durationMs ||
-       (!value.success && value.diagnosticCategory !== "cleanup-failure"))) {
+       (!value.success && !isInconclusiveCategory(value.diagnosticCategory)))) {
     ctx.addIssue({ code: "custom", message: "Invalid publication duration" });
   }
 });
 export type SyntheticResult = z.infer<typeof resultSchema>;
 
+/** Removes internal action measurements while retaining cleanup diagnostics on the journey. */
 export function reportedResult(result: SyntheticResult): SyntheticResult {
-  const { authenticationDurationMs, cleanupSucceeded, ...diagnosticContext } = result.diagnosticContext;
+  const { authenticationDurationMs, ...diagnosticContext } = result.diagnosticContext;
   if (diagnosticContext.testStage === "authentication" || diagnosticContext.testStage === "cleanup") {
     diagnosticContext.testStage = "execution";
   }

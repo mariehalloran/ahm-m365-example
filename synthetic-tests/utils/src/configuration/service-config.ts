@@ -3,6 +3,9 @@ import { exchangePollIntervalMilliseconds, maxServiceTargets, probeSchema, probe
 import { ConfigurationError, createRuntimeConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "../providers/provider-catalog.js";
 import { teamsBotPairSchema } from "./deployment-config.js";
+import {
+  CLEANUP_GRACE_MS, EXCHANGE_INTERVAL_SECONDS, EXCHANGE_PUBLICATION_TIMEOUT_MS, EXCHANGE_SLOT_MARGIN_MS, JOURNEY_TIMEOUT_SECONDS,
+} from "../execution/budgets.js";
 export { activityFunctions } from "../providers/provider-catalog.js";
 
 export const serviceActivitySchema = z.object({
@@ -122,10 +125,16 @@ export function validateTeamsBotPairs(service: Pick<Extract<ServiceConfig, { typ
   }
 }
 
+/** Validates service-owned execution deadlines and independent provider selections. */
 function validateProviderSettings(service: ServiceExecution): void {
-  if (service.type === "exchange" && (service.intervalSeconds !== 60 ||
-      service.executionLanes && (service.executionLanes.length !== 1 || service.executionLanes[0]!.intervalSeconds !== 60))) {
-    throw new ConfigurationError("Exchange requires one aligned 60-second lane for every supported journey");
+  if (service.type === "exchange" && (service.intervalSeconds !== EXCHANGE_INTERVAL_SECONDS ||
+      service.executionLanes && (service.executionLanes.length !== 1 ||
+        service.executionLanes[0]!.intervalSeconds !== EXCHANGE_INTERVAL_SECONDS))) {
+    throw new ConfigurationError("Exchange requires one aligned 120-second lane for every supported journey");
+  }
+  if (service.type !== "onedrive" && (service.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS ||
+      service.executionLanes?.some(lane => lane.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS))) {
+    throw new ConfigurationError("Every Exchange and Teams journey requires one 60-second complete-journey execution deadline");
   }
   if (service.type === "onedrive" && (service.serviceActivity.enabled ||
       service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
@@ -214,6 +223,7 @@ export function serviceProbes(service: ServiceConfig, selectedScenarios?: Readon
   });
 }
 
+/** Derives runtime budgets without borrowing time from cleanup or report publication. */
 export function serviceSettings(
   service: ServiceConfig, env: NodeJS.ProcessEnv = process.env, selectedScenarios?: Readonly<Record<string, boolean>>,
 ): Config {
@@ -236,7 +246,9 @@ export function serviceSettings(
     MAX_CONCURRENT_PROBES: service.maxConcurrentProbes,
     EXCHANGE_MAX_CONCURRENT_REQUESTS: service.maxConcurrentRequests,
     EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: service.maxConcurrentRequestsPerMailbox,
-    CYCLE_TIMEOUT_MS: service.type === "exchange" ? 30000 : service.cycleTimeoutSeconds * 1000,
+    CYCLE_TIMEOUT_MS: service.type === "exchange"
+      ? service.intervalSeconds * 1000 - EXCHANGE_SLOT_MARGIN_MS - CLEANUP_GRACE_MS - EXCHANGE_PUBLICATION_TIMEOUT_MS
+      : service.cycleTimeoutSeconds * 1000,
     probes: serviceProbes(service, selectedScenarios),
   }, env);
 }

@@ -1,8 +1,8 @@
-import { reportedResult, resultSchema, type SyntheticResult, type Telemetry } from "../contracts.js";
+import { isInconclusiveCategory, reportedResult, resultSchema, type SyntheticResult, type Telemetry } from "../contracts.js";
 import { providerLog, type ProviderDiagnostic } from "../providers/provider-diagnostics.js";
 
 export type ExecutionMode = "simulation" | "live";
-export type Outcome = "success" | "failure" | "unexecutable";
+export type Outcome = "success" | "failure" | "unknown";
 export interface CycleResults { cycleId: string; results: SyntheticResult[]; signal?: AbortSignal }
 export type CyclePublisher = (cycle: CycleResults) => Promise<void>;
 export interface ResultContext {
@@ -16,19 +16,24 @@ export interface ResultOutput {
   recordDiagnostic(record: ProviderDiagnostic): void;
 }
 
+/** Distinguishes observed service failures from worker/cleanup outcomes with no binary sample. */
 export function outcomeOf(result: SyntheticResult): Outcome {
-  if (result.success) return "success";
-  return [
-    "authentication-failure", "permission-failure", "collector-failure", "configuration-failure",
-    "malformed-response", "graph-throttling", "cancelled",
-  ].includes(result.diagnosticCategory ?? "") ? "unexecutable" : "failure";
+  if (isInconclusiveCategory(result.diagnosticCategory)) return "unknown";
+  return result.success ? "success" : "failure";
 }
 
-export function createResultOutput(output: Telemetry): ResultOutput {
+/** Emits explicit no-sample console results, retaining target/group context when available. */
+export function createResultOutput(
+  output: Telemetry, contextOf?: (result: SyntheticResult) => ResultContext,
+): ResultOutput {
   return {
     record(raw, mode) {
       const result = reportedResult(resultSchema.parse(raw));
-      output.emit("synthetic-result", { mode, outcome: outcomeOf(result), result });
+      const outcome = outcomeOf(result);
+      output.emit("synthetic-result", {
+        mode, outcome, result: { ...result, success: outcome === "unknown" ? null : result.success },
+        ...(contextOf ? { context: contextOf(result) } : {}),
+      });
     },
     recordDiagnostic(record) {
       output.emit("provider-diagnostic", providerLog(record));

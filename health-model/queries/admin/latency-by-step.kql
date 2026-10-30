@@ -2,6 +2,7 @@ M365Synthetic_CL
 | where TimeGenerated > ago(24h) and Category == 'M365Synthetic' and Mode == 'live'
 | where Kind == 'step' and isnotnull(DurationMs)
 | summarize arg_max(Timestamp, *) by EventId
+| where Value in (0.0, 1.0) and FailureCategory !in ('cancelled', 'cleanup-failure')
 | summarize Samples = count(), Failures = countif(Value == 0),
     MeanDurationMs = avg(DurationMs), P95DurationMs = percentile(DurationMs, 95),
     MaxDurationMs = max(DurationMs)

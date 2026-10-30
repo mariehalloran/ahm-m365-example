@@ -9,7 +9,7 @@ source
     Period = tostring(parsed.period),
     Unit = tostring(parsed.unit),
     Version = tostring(parsed.version),
-    Value = todouble(parsed.value),
+    Value = iff(tostring(parsed.dimensions.failureCategory) in ('cancelled', 'cleanup-failure'), real(null), todouble(parsed.value)),
     Service = tostring(parsed.dimensions.service),
     Journey = tostring(parsed.dimensions.journey),
     Step = tostring(parsed.dimensions.step),

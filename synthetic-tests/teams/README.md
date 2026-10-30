@@ -31,7 +31,9 @@ npm run teams -- --tenant <alias> --once
 ## Runtime behavior
 
 - Each cycle executes configured scenarios for each target/group lane.
-- Call and conversation steps enforce per-step timeout and cancellation boundaries.
+- Each complete call or conversation journey has a 60-second execution deadline shared by its steps.
+- Worker cancellations and cleanup-only failures report Unknown, without hiding genuine service failures or successful business steps.
+- Cancelled call phases have no numeric sample; internal cancellation teardown does not invent a business departure measurement.
 - Results include step timing and call/conversation operation status.
 
 ## Diagnostics

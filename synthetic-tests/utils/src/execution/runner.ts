@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../configuration/config.js";
-import { exchangeJourneyMilliseconds, probeServices, resultSchema, type Probe, type SyntheticResult, type Telemetry } from "../contracts.js";
+import {
+  isInconclusiveCategory, probeServices, resultSchema, type DiagnosticCategory, type Probe, type SyntheticResult, type Telemetry,
+} from "../contracts.js";
 import type { GraphFileOperations } from "../integrations/graph.js";
 import { categoryOf, IntegrationError, withAbort } from "../integrations/http.js";
 import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-permits.js";
 import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
 import type { CyclePublisher, CycleResults, ResultOutput } from "../reporting/results.js";
-
-const CLEANUP_GRACE_MS = 12_000;
+import {
+  CLEANUP_GRACE_MS, EXCHANGE_INTERVAL_SECONDS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_TIMEOUT_SECONDS, PUBLICATION_TIMEOUT_MS,
+} from "./budgets.js";
 
 export type TeamsBotPairClients = Pick<ProbeContext, "teamsBot" | "teamsCalling" | "teamsCallingPeer">;
 
@@ -23,6 +26,8 @@ export interface RunnerDependencies {
   now?: () => number;
   sleep?: ProbeContext["sleep"];
   publishResults?: CyclePublisher;
+  // A hard slot deadline still bounds publication; worker shutdown leaves its independent report grace.
+  publicationSignal?: AbortSignal;
   exchangeRequests?: GraphRequestPermits;
   capacityGroups?: { id: string; displayName: string; targetIds: string[] }[];
 }
@@ -35,11 +40,13 @@ interface CycleContext {
   startedAttempts: Set<string>;
 }
 
+/** Schedules a cancellable execution or settlement deadline. */
 function schedule(milliseconds: number, action: () => void): () => void {
   const timer = setTimeout(action, milliseconds);
   return () => clearTimeout(timer);
 }
 
+/** Bounds handler settlement separately from business execution, including cleanup after cancellation. */
 function createCompletionDeadline(
   signal: AbortSignal, config: Pick<Config, "PROBE_TIMEOUT_MS" | "CYCLE_TIMEOUT_MS">, cycleStartedAt: number,
 ) {
@@ -70,6 +77,29 @@ function createCompletionDeadline(
   };
 }
 
+/** Preserves observed service failures and business steps when execution or settlement is interrupted. */
+function interruptedResult(
+  result: SyntheticResult, category: DiagnosticCategory, observedAt: number, durationMs: number,
+): SyntheticResult {
+  const failed = result.steps.find(step => step.status === "failed" && !isInconclusiveCategory(step.diagnosticCategory));
+  const primaryFailure = !result.success && result.diagnosticCategory && !isInconclusiveCategory(result.diagnosticCategory)
+    ? result.diagnosticCategory : undefined;
+  const diagnosticCategory = primaryFailure ?? (failed?.status === "failed" ? failed.diagnosticCategory : category);
+  const { deliveryDurationMs, publicationDurationMs, ...evidence } = result;
+  return {
+    ...evidence, success: false, diagnosticCategory,
+    observedAt: new Date(observedAt).toISOString(), durationMs,
+    // Only expiry of this journey's execution deadline can turn an interrupted action into a timeout sample.
+    steps: result.steps.map(step => category === "delivery-timeout" && step.status === "failed" && step.diagnosticCategory === "cancelled"
+      ? { ...step, diagnosticCategory: "delivery-timeout" } : step),
+    ...(isInconclusiveCategory(diagnosticCategory) ? {
+      ...(deliveryDurationMs === undefined ? {} : { deliveryDurationMs }),
+      ...(publicationDurationMs === undefined ? {} : { publicationDurationMs }),
+    } : {}),
+  };
+}
+
+/** Runs one complete journey, distinguishing its execution deadline from enclosing worker cancellation. */
 async function runSingleProbe<P extends Probe>(
   probe: P,
   config: Config,
@@ -78,18 +108,20 @@ async function runSingleProbe<P extends Probe>(
   handler: ((probe: P, context: ProbeContext) => Promise<SyntheticResult>) | undefined,
 ): Promise<SyntheticResult> {
   const liveExchange = config.EXECUTION_MODE === "live" && probeServices[probe.type].service === "exchange";
-  if (liveExchange) {
-    config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, exchangeJourneyMilliseconds(probe.type)) };
+  const liveTimedJourney = config.EXECUTION_MODE === "live" && probeServices[probe.type].service !== "onedrive";
+  if (liveTimedJourney) {
+    config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, JOURNEY_TIMEOUT_SECONDS * 1000) };
   }
   const { telemetry } = dependencies;
   const now = dependencies.now ?? Date.now;
+  const attemptStartedAt = now();
+  const evidence = baseResult(probe, attemptStartedAt);
   const execution = new AbortController();
-  const cancelExecution = schedule(config.PROBE_TIMEOUT_MS, () => execution.abort());
+  const cancelExecution = schedule(config.PROBE_TIMEOUT_MS, () => execution.abort(new IntegrationError("delivery-timeout")));
   const probeSignal = AbortSignal.any([
     cycle.signal,
     execution.signal,
   ]);
-  const attemptStartedAt = now();
   let executionFinishedAt: number | undefined;
   let cancelledDuringExecution = false;
 
@@ -113,6 +145,7 @@ async function runSingleProbe<P extends Probe>(
         signal: probeSignal,
         telemetry,
         now,
+        result: evidence,
         ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
         executionComplete: () => {
           cancelledDuringExecution ||= probeSignal.aborted;
@@ -124,25 +157,18 @@ async function runSingleProbe<P extends Probe>(
       }),
       deadline.promise,
     ]);
-    if (liveExchange && (executionFinishedAt ?? now()) - attemptStartedAt >= config.PROBE_TIMEOUT_MS) {
-      cancelledDuringExecution = true;
-      execution.abort();
-    }
-    if (cycle.externalSignal?.aborted || (executionFinishedAt === undefined ? probeSignal.aborted : cancelledDuringExecution)) {
-      // A handler may finish cleanup after cancellation, but cannot turn a deadline into success.
-      const timedOut = resultSchema.safeParse(rawResult);
-      if (timedOut.success) {
-        const { deliveryDurationMs: _delivery, publicationDurationMs: _publication, ...observed } = timedOut.data;
-        return resultSchema.parse({
-          ...observed, success: false, diagnosticCategory: cycle.externalSignal?.aborted ? "cancelled" : "delivery-timeout",
-          durationMs: Math.max(0, now() - attemptStartedAt),
-        });
-      }
-      throw new IntegrationError("delivery-timeout");
-    }
     const parsedResult = resultSchema.safeParse(rawResult);
     if (!parsedResult.success) {
       throw new IntegrationError("malformed-response");
+    }
+    const cancelled = cycle.externalSignal?.aborted ||
+      (executionFinishedAt === undefined ? probeSignal.aborted : cancelledDuringExecution);
+    const expired = liveTimedJourney && (executionFinishedAt ?? now()) - attemptStartedAt >= config.PROBE_TIMEOUT_MS;
+    if (cancelled || expired) {
+      const category = cancelled
+        ? categoryOf(probeSignal.reason) === "delivery-timeout" ? "delivery-timeout" : "cancelled"
+        : "delivery-timeout";
+      return resultSchema.parse(interruptedResult(parsedResult.data, category, now(), Math.max(0, now() - attemptStartedAt)));
     }
 
     if (config.EXECUTION_MODE === "live") {
@@ -153,12 +179,17 @@ async function runSingleProbe<P extends Probe>(
     }
     return parsedResult.data;
   } catch (error) {
-    const result = baseResult(probe, now());
-    result.durationMs = Math.max(0, now() - attemptStartedAt);
-    result.diagnosticCategory = cycle.externalSignal?.aborted ? "cancelled"
-      : probeSignal.aborted ? "delivery-timeout" : categoryOf(error);
-    result.diagnosticContext.testStage = "execution";
-    telemetry.emit("probe-execution-failed", {
+    const observedCategory = categoryOf(error);
+    const category = isInconclusiveCategory(observedCategory) && probeSignal.aborted
+      ? categoryOf(probeSignal.reason) === "delivery-timeout" ? "delivery-timeout" : "cancelled"
+      : observedCategory;
+    const durationMs = Math.max(0, now() - attemptStartedAt);
+    const partial = resultSchema.safeParse(interruptedResult(evidence, category, now(), durationMs));
+    const result = partial.success ? partial.data : {
+      ...baseResult(probe, now()), durationMs, diagnosticCategory: category,
+    };
+    result.diagnosticContext.testStage ??= "execution";
+    telemetry.emit(isInconclusiveCategory(result.diagnosticCategory) ? "probe-execution-inconclusive" : "probe-execution-failed", {
       cycleId: cycle.cycleId,
       testId: probe.id,
       category: result.diagnosticCategory,
@@ -170,6 +201,7 @@ async function runSingleProbe<P extends Probe>(
   }
 }
 
+/** Starts concurrent Exchange journeys under shared request permits and bounded other-service workers. */
 async function executeProbes(
   config: Config, dependencies: RunnerDependencies, cycle: CycleContext, stopOtherProbes: AbortController,
 ) {
@@ -213,6 +245,7 @@ async function executeProbes(
   return { results, telemetryErrors };
 }
 
+/** Publishes settled results independently of the execution deadline, within a bounded report window. */
 async function publishCycleResults(
   config: Config, dependencies: RunnerDependencies, cycle: CycleResults,
   telemetryErrors: unknown[],
@@ -225,13 +258,14 @@ async function publishCycleResults(
   }
   if (cycle.results.length) {
     const exchange = config.probes.every(probe => probeServices[probe.type].service === "exchange");
-    const deadline = AbortSignal.timeout(exchange ? 12000 : 30000);
+    const deadline = AbortSignal.timeout(exchange ? EXCHANGE_PUBLICATION_TIMEOUT_MS : PUBLICATION_TIMEOUT_MS);
     const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
     await withAbort(signal, async () => dependencies.publishResults?.({ ...cycle, signal }));
   }
   if (telemetryErrors.length) throw telemetryErrors[0];
 }
 
+/** Reports runner capacity separately from Exchange availability for each configured user group. */
 function reportExchangeCapacity(
   config: Config, dependencies: RunnerDependencies, cycle: CycleContext, results: SyntheticResult[],
   before: Map<string, PermitMeasurements>,
@@ -253,18 +287,21 @@ function reportExchangeCapacity(
         waitMs: sum.waitMs + (current?.waitMs ?? 0) - (prior?.waitMs ?? 0),
       };
     }, { requests: 0, waitedRequests: 0, waitMs: 0 });
-    dependencies.telemetry.emit("exchange-minute-capacity", {
+    dependencies.telemetry.emit("exchange-cycle-capacity", {
       cycleId: cycle.cycleId, groupId: group.id, group: group.displayName,
+      intervalSeconds: EXCHANGE_INTERVAL_SECONDS, executionTimeoutMs: config.PROBE_TIMEOUT_MS,
       expectedAttempts: probes.length,
       startedAttempts: probes.filter(probe => cycle.startedAttempts.has(`${probe.type}:${probe.id}`)).length,
       completedAttempts: settled.length,
       timedOutAttempts: settled.filter(result => result.diagnosticCategory === "delivery-timeout").length,
+      inconclusiveAttempts: settled.filter(result => isInconclusiveCategory(result.diagnosticCategory)).length,
       graphRequests: permits.requests, permitWaitRequests: permits.waitedRequests, permitWaitMs: permits.waitMs,
       interpretation: "runner-capacity-not-exchange-availability",
     });
   }
 }
 
+/** Settles one nonoverlapping service batch, then publishes in the selected reporting mode. */
 export async function runCycle(
   config: Config,
   dependencies: RunnerDependencies,
@@ -283,7 +320,7 @@ export async function runCycle(
   const cycleStartedAt = performance.now();
   const stopOtherProbes = new AbortController();
   const deadline = new AbortController();
-  const cancelCycle = schedule(config.CYCLE_TIMEOUT_MS, () => deadline.abort());
+  const cancelCycle = schedule(config.CYCLE_TIMEOUT_MS, () => deadline.abort(new IntegrationError("cancelled")));
   const cancellationSignals = [
     stopOtherProbes.signal,
     deadline.signal,
@@ -308,7 +345,7 @@ export async function runCycle(
 
     stage = "reporting";
     await publishCycleResults(config, dependencies, {
-      cycleId, results, ...(externalSignal ? { signal: externalSignal } : {}),
+      cycleId, results, ...(dependencies.publicationSignal ? { signal: dependencies.publicationSignal } : {}),
     }, telemetryErrors);
     telemetry.emit("service-execution-completed", {
       cycleId,

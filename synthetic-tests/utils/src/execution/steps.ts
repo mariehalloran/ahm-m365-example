@@ -1,7 +1,8 @@
 import {
-  maxStepDetailLength, probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
+  isInconclusiveCategory, maxStepDetailLength, probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
 } from "../contracts.js";
-import { categoryOf, IntegrationError } from "../integrations/http.js";
+import { categoryOf, IntegrationError, withAbort } from "../integrations/http.js";
+import { CLEANUP_TIMEOUT_MS } from "./budgets.js";
 
 /**
  * Runs one probe step and records step timing and diagnostics on the result object.
@@ -32,14 +33,17 @@ export async function measureStep<T>(
 }
 
 /**
- * Marks a probe result failed from a caught journey error and emits failure telemetry.
+ * Retains genuine service failures ahead of later inconclusive errors and emits the observed outcome.
  */
 export function journeyFailure(result: SyntheticResult, error: unknown, telemetry: Telemetry): void {
-  const failed = result.steps.find(step => step.status === "failed");
+  const failures = result.steps.filter(step => step.status === "failed");
+  const failed = failures.find(step => !isInconclusiveCategory(step.diagnosticCategory)) ?? failures[0];
+  const previous = result.diagnosticCategory;
   result.success = false;
-  result.diagnosticCategory = failed?.status === "failed" ? failed.diagnosticCategory : categoryOf(error);
+  result.diagnosticCategory = failed && !isInconclusiveCategory(failed.diagnosticCategory) ? failed.diagnosticCategory
+    : previous && !isInconclusiveCategory(previous) ? previous : failed?.diagnosticCategory ?? categoryOf(error);
   if (error instanceof IntegrationError && error.status) result.diagnosticContext.httpStatus = error.status;
-  telemetry.emit("probe-stage-failed", {
+  telemetry.emit(isInconclusiveCategory(result.diagnosticCategory) ? "probe-stage-inconclusive" : "probe-stage-failed", {
     testId: result.testId, correlationId: result.correlationId,
     step: failed?.name, category: result.diagnosticCategory,
     ...(error instanceof IntegrationError && error.detail ? { detail: error.detail } : {}),
@@ -68,12 +72,21 @@ export async function cleanupStep(
   }
   try {
     // Cleanup has its own budget, independent of the cancelled journey.
-    await measureStep(result, "cleanup", () => operation(AbortSignal.timeout(10000)), now, () => "cleanup-failure");
+    const signal = AbortSignal.timeout(CLEANUP_TIMEOUT_MS);
+    await measureStep(result, "cleanup", () => withAbort(signal, () => operation(signal)), now, () => "cleanup-failure");
     result.diagnosticContext.cleanupSucceeded = true;
-  } catch {
+  } catch (error) {
     result.diagnosticContext.cleanupSucceeded = false;
+    result.diagnosticContext.cleanupFailure = {
+      category: categoryOf(error),
+      ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
+      ...(error instanceof IntegrationError && error.detail ? { detail: error.detail.slice(0, maxStepDetailLength) } : {}),
+    };
     telemetry.emit("probe-cleanup-failed", {
       testId: result.testId, correlationId: result.correlationId, category: "cleanup-failure",
+      cause: categoryOf(error),
+      ...(error instanceof IntegrationError && error.status !== undefined ? { httpStatus: error.status } : {}),
+      ...(error instanceof IntegrationError && error.detail ? { detail: error.detail } : {}),
     });
     if (result.success) {
       result.success = false;

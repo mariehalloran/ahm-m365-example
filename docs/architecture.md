@@ -52,7 +52,7 @@ compute services; the existing Teams worker hosts their shared calling callback.
 
 ```mermaid
 flowchart TB
-    attempt["Completed attempt<br/>success 1 or 0 + measured duration<br/>executed business-step results"]
+    attempt["Completed attempt<br/>conclusive success 1/0 + measured duration<br/>Unknown for worker cancellation or cleanup-only failure"]
     attempt --> toggle{"logAnalytics.enabled"}
     toggle -->|"false"| aggregate["Worker aggregates the settled cycle"]
     aggregate -->|"ingestHealthReport<br/>state + measurements + TTL"| journey["Journey and business-step signals"]
@@ -79,8 +79,9 @@ Authentication and compensating cleanup stay internal, while deliberate
 deletion/call departure remain measured business steps.
 
 Provider permissions, complete signal inventory and no-data semantics are in
-[provider monitoring](./provider-monitoring.md). Timeouts are failed synthetic
-attempts, not provider Unknown observations.
+[provider monitoring](./provider-monitoring.md). Genuine journey deadline expiry
+is a failed synthetic attempt. Worker cancellation and cleanup-only failure
+instead produce Unknown, without erasing conclusive business-step evidence.
 
 ## 3. How Log Analytics works
 
@@ -99,12 +100,16 @@ flowchart LR
     trigger --> ai["Application Insights diagnostics<br/>same Log Analytics workspace"]
 ```
 
-`Value` is binary synthetic success; `Kind` separates journeys, steps and call
-phases so queries do not combine unlike samples. `Timestamp` is observation time;
+`Value` is binary success for conclusive observations; worker cancellations and
+cleanup-only failures retain explicit JSON `value: null` diagnostics. Direct
+Unknown reports omit the measured value. Health queries exclude these
+inconclusive observations from success and latency calculations. `Kind` separates
+journeys, steps and call phases so queries do not combine unlike samples.
+`Timestamp` is observation time;
 ingestion time alone does not establish fresh execution. Tenant, test target,
 user/group and pair dimensions support investigation without a per-target model.
 The [administrator guide](./operations.md#log-analytics-for-administrators) links the
-five saved searches and describes the table.
+six saved searches and describes the table.
 
 The Function processes accepted observations; it does not execute probes.
 Delivery/replay can duplicate records: model queries deduplicate event IDs, but

@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { GraphOperations } from "../../utils/src/integrations/graph.js";
-import { IntegrationError } from "../../utils/src/integrations/http.js";
+import { categoryOf, IntegrationError } from "../../utils/src/integrations/http.js";
 
 export const callIdSchema = z.string().min(1).max(2048).refine(id =>
   id.trim() === id && id !== "." && id !== ".." && !/[\u0000-\u001f\u007f]/.test(id));
@@ -42,25 +42,32 @@ export async function verifyCallEstablished(
   }
 }
 
+/** Preserves the independent answer deadline without confusing its expiry with parent cancellation. */
 export async function waitForAnswer(
   graph: GraphOperations, id: string, signal: AbortSignal, deadline: number,
   pollIntervalMs: number, now: () => number = Date.now, sleep = pause, onState?: StateObserver,
 ): Promise<void> {
   const bounded = AbortSignal.timeout(Math.max(1, deadline - now()));
+  const parentSignal = signal;
   signal = AbortSignal.any([signal, bounded]);
-  while (now() < deadline) {
-    signal.throwIfAborted();
-    const call = await readOwnedCall(graph, id, signal, onState);
-    signal.throwIfAborted();
-    if (["terminating", "terminated"].includes(call.state) || (call.resultCode !== undefined && call.resultCode >= 400)) {
-      throw new IntegrationError("read-failure");
+  try {
+    while (now() < deadline) {
+      signal.throwIfAborted();
+      const call = await readOwnedCall(graph, id, signal, onState);
+      signal.throwIfAborted();
+      if (["terminating", "terminated"].includes(call.state) || (call.resultCode !== undefined && call.resultCode >= 400)) {
+        throw new IntegrationError("read-failure");
+      }
+      if (now() >= deadline) throw new IntegrationError("delivery-timeout");
+      if (call.state === "established") return;
+      const remaining = deadline - now();
+      if (remaining > 0) await sleep(Math.min(pollIntervalMs, remaining), signal);
     }
-    if (now() >= deadline) throw new IntegrationError("delivery-timeout");
-    if (call.state === "established") return;
-    const remaining = deadline - now();
-    if (remaining > 0) await sleep(Math.min(pollIntervalMs, remaining), signal);
+    throw new IntegrationError("delivery-timeout");
+  } catch (error) {
+    if (!parentSignal.aborted && bounded.aborted && categoryOf(error) === "cancelled") throw new IntegrationError("delivery-timeout");
+    throw error;
   }
-  throw new IntegrationError("delivery-timeout");
 }
 
 const rosterSchema = z.object({
@@ -74,33 +81,41 @@ const rosterSchema = z.object({
   "@odata.nextLink": z.unknown().optional(),
 });
 
+/** Bounds roster confirmation by the shared join deadline, retaining genuine read failures. */
 export async function verifyParticipants(
   graph: GraphOperations, id: string, expected: readonly [string, string], signal: AbortSignal,
   deadline: number, pollIntervalMs: number, now: () => number = Date.now, sleep = pause,
 ): Promise<void> {
-  signal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - now()))]);
-  while (now() < deadline) {
-    signal.throwIfAborted();
-    const roster = await graph.json(`${callPath(id)}/participants`, rosterSchema, signal, "GET",
-      undefined, true, "v1.0", 131072);
-    signal.throwIfAborted();
-    // A partial or unbounded roster is not evidence that both bots joined this meeting.
-    if (roster["@odata.nextLink"] != null) throw new IntegrationError("read-failure");
-    const identities = new Map<string, Set<string>>();
-    for (const participant of roster.value) {
-      const application = participant.info.identity.application?.id.toLowerCase();
-      if (!application || participant.isInLobby !== false) continue;
-      const participants = identities.get(application) ?? new Set<string>();
-      participants.add(participant.id);
-      identities.set(application, participants);
+  const parentSignal = signal;
+  const bounded = AbortSignal.timeout(Math.max(1, deadline - now()));
+  signal = AbortSignal.any([signal, bounded]);
+  try {
+    while (now() < deadline) {
+      signal.throwIfAborted();
+      const roster = await graph.json(`${callPath(id)}/participants`, rosterSchema, signal, "GET",
+        undefined, true, "v1.0", 131072);
+      signal.throwIfAborted();
+      // A partial or unbounded roster is not evidence that both bots joined this meeting.
+      if (roster["@odata.nextLink"] != null) throw new IntegrationError("read-failure");
+      const identities = new Map<string, Set<string>>();
+      for (const participant of roster.value) {
+        const application = participant.info.identity.application?.id.toLowerCase();
+        if (!application || participant.isInLobby !== false) continue;
+        const participants = identities.get(application) ?? new Set<string>();
+        participants.add(participant.id);
+        identities.set(application, participants);
+      }
+      const [primary, peer] = expected.map(id => identities.get(id.toLowerCase()));
+      if (now() < deadline && primary?.size && peer?.size &&
+          [...primary].some(id => !peer.has(id))) return;
+      const remaining = deadline - now();
+      if (remaining > 0) await sleep(Math.min(pollIntervalMs, remaining), signal);
     }
-    const [primary, peer] = expected.map(id => identities.get(id.toLowerCase()));
-    if (now() < deadline && primary?.size && peer?.size &&
-        [...primary].some(id => !peer.has(id))) return;
-    const remaining = deadline - now();
-    if (remaining > 0) await sleep(Math.min(pollIntervalMs, remaining), signal);
+    throw new IntegrationError("delivery-timeout");
+  } catch (error) {
+    if (!parentSignal.aborted && bounded.aborted && categoryOf(error) === "cancelled") throw new IntegrationError("delivery-timeout");
+    throw error;
   }
-  throw new IntegrationError("delivery-timeout");
 }
 
 const meetingCallSchema = z.object({

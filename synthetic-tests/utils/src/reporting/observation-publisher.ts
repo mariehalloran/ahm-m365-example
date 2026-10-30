@@ -8,7 +8,9 @@ import { cycleObservations } from "./observations.js";
 import type { ProjectConfig } from "../configuration/project-config.js";
 import type { CyclePublisher } from "./results.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
+import { EXCHANGE_PUBLICATION_TIMEOUT_MS, PUBLICATION_TIMEOUT_MS } from "../execution/budgets.js";
 
+/** Publishes diagnostic and measured observations together without dropping no-sample outcomes. */
 export function createObservationPublisher(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
 ): { publish: CyclePublisher; close: () => Promise<void> } {
@@ -41,7 +43,8 @@ export function createObservationPublisher(
         telemetry.emit("observation-preview", { cycleId: cycle.cycleId, observationCount: observations.length });
         return;
       }
-      const signal = cycle.signal ?? AbortSignal.timeout(service.type === "exchange" ? 12000 : 30000);
+      const deadline = AbortSignal.timeout(service.type === "exchange" ? EXCHANGE_PUBLICATION_TIMEOUT_MS : PUBLICATION_TIMEOUT_MS);
+      const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
       try {
         let batch = await withAbort(signal, () => client!.createBatch({ abortSignal: signal }));
         for (const observation of observations) {

@@ -18,9 +18,10 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 ## Scheduling and shutdown
 
-- Exchange continuous execution waits for an aligned wall-clock minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts/minute. `--once` is an immediate single-cycle diagnostic. Other products/provider lanes retain their independent cadences and immediate first run.
-- Live Exchange execution deadlines are 30 seconds for explicit SELF-REPLY (`reply-mail`), 15 seconds for the other four journeys. Timeouts contribute success 0, not Unknown; bounded cleanup can finish afterward. Model queries apply the configured thresholds to these observations. Latency degradation remains 15000 ms; slower successful replies contribute to latency degradation. Actual Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
-- The Exchange minute bounds execution/settlement to 42 seconds and publication to 12; late starts reduce the remaining budget. `exchange-minute-capacity` emits expected/started/completed/timed-out attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
+- Exchange continuous execution waits for an aligned two-minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts every two minutes. `--once` is an immediate single-cycle diagnostic. Other products/provider lanes retain their independent cadences and immediate first run.
+- Live Exchange and Teams journeys have a 60-second execution deadline for the entire journey, not each step. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. OneDrive retains its 120-second deadline. Latency degradation remains 15000 ms, independently of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
+- Exchange allows 12 seconds for cleanup settlement and 12 for publication inside a 119-second slot envelope (one second before the next boundary). Normal worst case is 84 seconds: 60 execution + 12 settlement + 12 publication. Initialization and late starts reduce the enclosing cycle's maximum 95-second execution budget, not the selected per-journey deadline.
+- `exchange-cycle-capacity` emits expected/started/completed/timed-out/inconclusive attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
@@ -78,8 +79,9 @@ Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for
 The single root `logAnalytics.enabled` toggle selects the reporting path:
 
 - **Off:** each container aggregates observed current-cycle results into direct
-  health reports. Both success percentage and mean duration use actual attempts;
-  skipped/internal actions contribute no sample. Reports expire after
+  health reports. Both success percentage and mean duration use conclusive attempts;
+  worker cancellations and cleanup-only failures report Unknown without a numeric
+  sample, and skipped/internal actions contribute no sample. Reports expire after
   `healthModel.signalWindowMinutes`. There is no Event Hub, ingestion Function,
   DCR ingestion or Log Analytics query dependency in this mode.
 - **On:** the observation pipeline described below retains per-attempt history and
@@ -100,8 +102,10 @@ Simulation prints counts only and does not publish cloud health.
 Health Models queries the table, deduplicates `EventId`, separates journey and step
 records, and applies root-configured thresholds over `signalWindowMinutes`. The
 `minimumSamples` gate and no-data queries produce Unknown rather than fabricated
-Healthy. Success is `100 * successful attempts / attempts`; latency includes failed
-executed attempts. Skipped/internal actions emit no success/failure sample. Defaults
+Healthy. Success is `100 * successful conclusive attempts / conclusive attempts`;
+latency includes conclusive failed attempts but excludes worker cancellations and
+cleanup-only failures. An all-Unknown cohort stays Unknown. Skipped/internal
+actions emit no success/failure sample. Defaults
 remain below 99%/95% success or above 15/60 seconds mean duration.
 
 Each observation retains tenant, account, journey, step, duration, failure category,
@@ -116,12 +120,13 @@ and `service-cycle-failed`. The Function logs `observations-ingested`,
 `observation-ingestion-failed` and `observations-quarantined`. API acceptance does
 not prove model propagation or notification delivery.
 
-Initialization failures publish unsuccessful journey observations when Azure
-publication is usable; unexecuted steps are not invented. Workers retry on their
+Initialization failures retain journey diagnostics when Azure publication is
+usable; cancellations are Unknown, while genuine authentication/configuration
+failures remain failed. Unexecuted steps are not invented. Workers retry on their
 cadence. Unsafe schemas or unusable Azure publication credentials can prevent
 observations and require independent platform/freshness detection.
 
-Incomplete cycles log `observations-skipped-incomplete-cycle`. Workers retain no
+Incomplete cycles log `service-cycle-incomplete` and still publish settled results. Workers retain no
 cross-cycle result/outbox state, so a crash before Event Hub acceptance can lose
 observations. After acceptance, Event Hub retention and Capture support replay;
 replay must retain original `EventId` values. This is not an exactly-once guarantee.
@@ -133,13 +138,24 @@ sequence numbers. Ordinary redeployments keep the existing group/checkpoints.
 New groups start from the earliest retained event; old checkpoint and archive data
 is not deleted.
 
-Each attempt contributes one binary success observation (1 or 0); executed business actions contribute their own success/duration observations. Failed prerequisites block later actions without invented samples. Token acquisition and cleanup remain internal and unreported as steps. Cleanup still runs after mutation using an independent ten-second budget. Cleanup failure preserves earlier successful action observations but makes overall success zero.
+Each conclusive attempt contributes one binary success observation (1 or 0).
+Worker cancellations and cleanup-only failures retain diagnostic observations
+with `value: null` and `dimensions.outcome: "unknown"`, and do not enter success
+or latency denominators. Console results use `outcome: "unknown"` and `success: null`;
+direct Unknown reports omit `value` and evaluation rules. `minimumSamples` counts
+only conclusive samples in both modes.
+Executed business actions retain their own conclusive success/duration
+observations; failed prerequisites block later actions without invented samples.
+Token acquisition and cleanup remain internal and unreported as steps. Cleanup
+still runs after mutation using an independent ten-second budget. Cleanup-only
+failure makes the journey Unknown without erasing confirmed business steps; an
+earlier genuine service failure remains a failed journey even if cleanup also fails.
 
 [Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics)
 apply to raw observations. Log Analytics can now calculate percentiles and weighted
 cross-cycle statistics from individual attempts rather than precomputed means.
 In enabled logging mode, the independent freshness alert uses two service intervals plus three minutes
-(5 minutes Exchange, 7 Teams, 13 OneDrive with the checked-in cadences). It shares
+(7 minutes Exchange, 7 Teams, 13 OneDrive with the checked-in cadences). It shares
 the workspace dependency and does not detect every workspace/region/notification outage.
 That rule is retired when logging is turned off. Direct report expiry becomes
 Unknown rather than guaranteed Unhealthy; independent stopped/stalled-worker and
@@ -155,8 +171,8 @@ worker/report-freshness monitoring or prove notification delivery.
 ## Log Analytics for administrators
 
 Only with `logAnalytics.enabled: true`, `npm run deploy` creates or reuses `law-<model>`, `appi-<model>` and the
-`M365Synthetic_CL` Analytics table. Five saved searches in **M365 Synthetic Monitoring**
-cover failures, affected users/groups, success rate, step latency and ingestion volume.
+`M365Synthetic_CL` Analytics table. Six saved searches in **M365 Synthetic Monitoring**
+cover failures, affected users/groups, inconclusive outcomes, success rate, step latency and ingestion volume.
 Their KQL is in [`health-model/queries/admin/`](../health-model/queries/admin/).
 Administrators need Log Analytics Reader. Data remains pay-as-you-go, with 30-day
 queryable retention; Capture retention is separately configured at root.
@@ -165,7 +181,8 @@ queryable retention; Capture retention is separately configured at root.
 | --- | --- | --- |
 | Synthetic failures by group and user | `failures-by-group.kql` | Failed journey/step observations with group, user, error, correlation and kind |
 | Impacted users by group | `impacted-users-by-group.kql` | `Group`, `User`, `Failures`, `Journeys`, `Errors`, `FirstFailure`, `LastFailure`: most affected first |
-| Success rate by group and journey | `success-by-group.kql` | Deduplicated journey attempts, success percentage and latency percentiles |
+| Unknown synthetic outcomes by group and user | `inconclusive-by-group.kql` | No-sample diagnostics with group, user, category, detail and correlation |
+| Success rate by group and journey | `success-by-group.kql` | Deduplicated conclusive attempts, Unknown count, success percentage and latency percentiles |
 | Latency and failures by journey step | `latency-by-step.kql` | Step mean, P95/max duration and failures |
 | Observation ingestion volume and duplicates | `ingestion-volume.kql` | Records, unique event IDs and billed GB by service/kind |
 
@@ -174,6 +191,9 @@ The table preserves the generic envelope (`Timestamp`, `Category`, `Subject`,
 `Period`, `Unit`, `Version`, `Value`) and dimensions. `Kind` distinguishes journey,
 executed step and measured Teams call phase; do not combine them into one failure-rate
 denominator. Always deduplicate `EventId` before health or reliability aggregation.
+Worker cancellation and cleanup-only diagnostics remain queryable but are not
+failed service operations. Health and administrator queries also exclude legacy
+zero-valued rows with those inconclusive categories from failure rates and latency.
 The following legacy attribute names correspond to the normalized columns:
 
 | Attribute | Meaning |
@@ -219,8 +239,8 @@ See the [strict schema, limits, diagnostics and first-party references](../synth
 ## Timing, retries, and cleanup
 
 - A cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 170); size target lists and report TTL accordingly.
-- By default three probes execute concurrently **per lane** (`maxConcurrentProbes`, configurable 1-20; default Exchange has two lanes). Runtime Graph requests time out at fifteen seconds, and safe operations retry within a bounded budget. Administrator bulk setup uses a separate bounded request/retry budget.
-- Configured probe timeouts cancel work and count as failure/0/Unhealthy. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. An internal cycle deadline yields failure results for queued attempts; external shutdown does not start queued work.
+- By default three probes execute concurrently **per lane** for Teams and OneDrive (`maxConcurrentProbes`, configurable 1-20). Exchange starts all selected attempts together and limits actual HTTP requests instead. Runtime Graph requests have a separate bounded request/retry budget. Administrator bulk setup uses its own request/retry budget.
+- Genuine expiry of a journey's execution deadline is a failed attempt. Enclosing worker/cycle cancellation and cleanup-only failure are Unknown. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. External shutdown does not start queued work.
 - Draft creation/send are not retried after ambiguous responses. Reads/idempotent deletes can retry; long Retry-After requests fail explicitly rather than retry too soon.
 - `durationMs` is total attempt time **through cleanup**, distinct from confirmed delivery time.
 - Exchange `sendDurationMs` measures the Graph draft-send request until response/error, excluding draft creation, polling, and cleanup. Failed sends retain timing; no attempted send means no send sample.
@@ -230,7 +250,7 @@ See the [strict schema, limits, diagnostics and first-party references](../synth
 - Cleanup uses only known IDs or exact unguessable correlation subjects/paths. Never purge by date, mailbox, or library.
 - A delivery arriving after cleanup can leave an artifact. Agree on an ownership-checked review/retention process before scale-out.
 - An ambiguous Teams creation response can leave an activity without a cleanup ID. This is reported as cleanup failure; the owner must reconcile it before repeatedly running the test.
-- Cleanup failures are explicit; confirmed delivery can coexist with failed cleanup. Do not erase the delivery measurement or pretend overall success.
+- Cleanup failures are explicit; confirmed delivery can coexist with failed cleanup. Preserve the delivery evidence and report the cleanup-only journey outcome as Unknown, not success or a service failure.
 
 ## Privacy, retention, and costs
 
@@ -245,7 +265,7 @@ Synthetic content is fixed boilerplate or a generated correlation ID. Protect de
 
 Do not enable HTTP-body/token logging, disable TLS validation, or export business content.
 Health observations are unsampled and compact; no record is added for every retry,
-poll or SDK operation. One target every minute produces about 43,200 journey observations
+poll or SDK operation. One journey/target every two minutes produces about 21,600 journey observations
 per thirty-day month plus executed business steps. Capture adds a separate hourly
 charge when enabled. Use the ingestion-volume saved search before scaling.
 
@@ -261,7 +281,7 @@ charge when enabled. Use the ingestion-volume saved search before scaling.
 
 Container Apps is a reasonable default for these lightweight API tests, not an assurance that the complete monitoring system is production-ready. The small single-region proof of concept does not meet an enterprise availability commitment.
 
-Agree on a detection target before production, for example “page when no Exchange result has been observed for five minutes.” Include execution time, report acceptance/model propagation, notification delivery, planned maintenance, and measured worst cases in that target. A one-minute schedule or hosting SLA does not guarantee one-minute detection.
+Agree on a detection target before production, for example “page when no Exchange result has been observed for seven minutes.” Include execution time, report acceptance/model propagation, notification delivery, planned maintenance, and measured worst cases in that target. A configured schedule or hosting SLA does not guarantee the same detection latency.
 
 Independent monitoring must cover:
 

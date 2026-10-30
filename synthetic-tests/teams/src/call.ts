@@ -46,6 +46,7 @@ export type TeamsCallConnectedHook = (
   call: ConnectedTeamsCall,
 ) => Promise<void>;
 
+/** Executes a complete two-bot meeting journey within one deadline, with independent emergency cleanup. */
 export const createTeamsCallProbe =
   (onConnected?: TeamsCallConnectedHook): ProbeHandler<"teams-call"> =>
   async (probe, context) => {
@@ -56,7 +57,7 @@ export const createTeamsCallProbe =
       signal,
       AbortSignal.timeout(config.PROBE_TIMEOUT_MS),
     ]);
-    const result = baseResult(probe, startedAt);
+    const result = context.result ?? baseResult(probe, startedAt);
     const call: NonNullable<SyntheticResult["call"]> = { resultCodes: [] };
     result.call = call;
     const legs: OwnedCallLeg[] = [];
@@ -116,12 +117,13 @@ export const createTeamsCallProbe =
             ...(resultSubcode !== undefined ? { resultSubcode } : {}),
           });
       };
-    const classify = (error: unknown) =>
-      signal.aborted
-        ? "cancelled"
-        : executionSignal.aborted || categoryOf(error) === "cancelled"
-          ? "delivery-timeout"
-          : categoryOf(error);
+    /** Keeps worker aborts inconclusive and observed Graph failures conclusive. */
+    const classify = (error: unknown) => {
+      const category = categoryOf(error);
+      if (category !== "cancelled") return category;
+      if (signal.aborted) return categoryOf(signal.reason) === "delivery-timeout" ? "delivery-timeout" : "cancelled";
+      return executionSignal.aborted ? "delivery-timeout" : "cancelled";
+    };
     const interval = Math.min(config.POLL_INTERVAL_MS, 250);
     try {
       result.diagnosticContext.testStage = "authentication";
@@ -358,7 +360,8 @@ export const createTeamsCallProbe =
           category: result.diagnosticCategory,
         });
     } finally {
-      const disconnect = async (budgetMs: number) => {
+      /** Verifies departure of owned legs using the business or cleanup caller's remaining budget. */
+      const disconnect = async (disconnectSignal: AbortSignal, disconnectDeadline: number) => {
         const attempts = await Promise.allSettled(
           legs
             .filter((leg) => !leg.disconnected)
@@ -366,8 +369,8 @@ export const createTeamsCallProbe =
               await leaveCall(
                 leg.graph,
                 leg.id,
-                AbortSignal.timeout(budgetMs),
-                now() + budgetMs - 100,
+                disconnectSignal,
+                disconnectDeadline,
                 interval,
                 now,
                 context.sleep,
@@ -390,22 +393,26 @@ export const createTeamsCallProbe =
         );
         if (failed?.status === "rejected") throw failed.reason;
       };
-      // Both owned legs get independent bounded teardown, even after cancellation or a failed peer join.
-      if (legs.length) {
+      // Only an executed business departure is a step; cancellation teardown belongs to internal cleanup.
+      if (legs.length && !executionSignal.aborted && now() < deadline) {
         phase = "end";
         try {
-          await measureStep(result, "end-call", () => disconnect(4000), now);
+          await measureStep(result, "end-call", () => disconnect(
+            AbortSignal.any([executionSignal, AbortSignal.timeout(4000)]),
+            Math.min(deadline, now() + 3900),
+          ), now, classify);
         } catch (error) {
           journeyFailure(result, error, telemetry);
         }
       }
+      context.executionComplete?.();
       phase = "cleanup";
       await cleanupStep(
         result,
         mutationAttempted &&
           (unknownCreation || legs.some((leg) => !leg.disconnected)),
-        async () => {
-          await disconnect(5000);
+        async cleanupSignal => {
+          await disconnect(AbortSignal.any([cleanupSignal, AbortSignal.timeout(5000)]), now() + 4900);
           if (unknownCreation) throw new IntegrationError("cleanup-failure");
         },
         telemetry,

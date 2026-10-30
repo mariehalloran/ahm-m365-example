@@ -23,12 +23,8 @@ import {
 function classifyMailFlowError(
   error: unknown,
   result: SyntheticResult,
-  sent: boolean,
 ): DiagnosticCategory {
   const category = categoryOf(error);
-  if (category === "cancelled" && sent) {
-    return "delivery-timeout";
-  }
   if (category === "graph-unavailable") {
     if (result.diagnosticContext.testStage === "send") {
       return "send-failure";
@@ -45,20 +41,19 @@ function classifyMailFlowError(
 export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, context) => {
   const { config, signal, telemetry } = context;
   const startedAt = Date.now();
-  const result = baseResult(probe, startedAt);
+  const result = context.result ?? baseResult(probe, startedAt);
   const attempt: MailAttempt = {
     mailbox: probe.mailbox,
     correlationId: result.correlationId,
     ownedMessageIds: new Set(),
     mutationAttempted: false,
   };
-  let sent = false;
 
   /**
    * Maps step failures to the mail-flow diagnostic category for the current stage.
    */
   function classify(error: unknown): DiagnosticCategory {
-    return classifyMailFlowError(error, result, sent);
+    return classifyMailFlowError(error, result);
   }
 
   try {
@@ -96,8 +91,6 @@ export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, c
     } finally {
       result.sendDurationMs = Math.max(0, Date.now() - sendStarted);
     }
-    sent = true;
-
     result.diagnosticContext.testStage = "poll";
     await measureStep(
       result,
