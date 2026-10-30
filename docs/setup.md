@@ -106,7 +106,7 @@ See [what the config holds](./deployment.md#what-the-config-holds) for each fiel
 The root `logAnalytics.enabled` toggle selects direct container health reports
 (`false`) or the optional Event Hub/Function/DCR/Log Analytics pipeline (`true`).
 Pipeline resource names are required only when enabled; Capture is optional within
-that mode. The checked-in setting is off. Both modes use private configuration
+that mode. Select the active mode explicitly. Both modes use private configuration
 storage named by `deployment.configurationStorageAccount`; that store is not a log
 pipeline. No additional Microsoft 365 permissions are needed for either Azure reporting path.
 Reference existing Azure Monitor action groups with `healthModel.alertActionGroupIds`;

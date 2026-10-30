@@ -15,7 +15,7 @@
     "latencyUnhealthyMilliseconds": 60000
   },
   "logAnalytics": {
-    "enabled": false,
+    "enabled": true,
     "eventHubNamespace": "evhns-m365-consto",
     "eventHubName": "m365-synthetic",
     "functionStorageAccount": "stm365constoingest",

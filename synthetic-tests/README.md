@@ -80,7 +80,7 @@ It names things and holds only the few IDs you must supply, never secrets
 
 All supported scenarios default to enabled; obsolete service/scenario keys are
 rejected rather than silently migrated. Log Analytics and provider context default
-off in the schema; the checked-in tenant uses direct reporting with provider context enabled.
+off in the schema; select their active values explicitly in the root configuration.
 There is no root `groups` list. Shared users keep the same target ID and settings
 in each group and execute once per selected journey; generated IDs remain outside
 the user target objects.

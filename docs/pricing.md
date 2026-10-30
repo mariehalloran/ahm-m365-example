@@ -2,7 +2,8 @@
 
 The single `logAnalytics.enabled` toggle in
 [monitoring.config.json](../monitoring.config.json) selects the reporting mode.
-It is currently **false**: containers push aggregated health reports directly.
+Set it to **false** for direct container health reports, or **true** for the
+observation pipeline and KQL-backed model health.
 
 These are **planning estimates, not an invoice or a service quote**. They use
 October 2026 USD Central US list-price assumptions, 730 hours/month, and the

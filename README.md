@@ -58,8 +58,8 @@ tenant. Each tenant/service worker has its own Container App and managed identit
 and reads a hash-verified private Blob snapshot generated from the same root config. The
 [shared runtime](./synthetic-tests/utils/README.md), including scheduling,
 measurement and reporting, runs inside each worker. The single root
-`logAnalytics.enabled` toggle selects direct container health reports (`false`,
-the checked-in setting) or the optional observation pipeline (`true`).
+`logAnalytics.enabled` toggle selects direct container health reports (`false`)
+or the optional observation pipeline (`true`).
 [Exchange and OneDrive user groups](./docs/monitoring-groups.md) add named signal
 aggregation groups to their journey entities, not extra models or entity branches.
 Teams targets stay ungrouped; workers stay centrally hosted.
