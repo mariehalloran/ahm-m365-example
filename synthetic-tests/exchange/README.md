@@ -14,7 +14,7 @@ This service validates mailbox and calendar flows through Microsoft Graph using 
 
 ## Required setup
 
-1. Follow [Exchange permissions and setup](../../docs/exchange-permissions.md) and configure dedicated mailbox targets in root `monitoring.config.json`.
+1. Follow [Exchange permissions and setup](../../docs/exchange-permissions.md) and configure dedicated mailbox targets in root [monitoring.config.json](../../monitoring.config.json).
 2. Run ID resolution:
    ```sh
    npm run setup:ids
@@ -24,7 +24,10 @@ This service validates mailbox and calendar flows through Microsoft Graph using 
    npm run setup:reply-seeds
    ```
 
-## Run locally
+## Run one cycle
+
+Run from [synthetic-tests/](../) on a host with the configured managed identity
+for live execution.
 
 ```sh
 npm run exchange -- --once
@@ -50,7 +53,7 @@ Journey output includes:
 
 - step status and latency
 - Graph request failures with operation labels
-- message, draft, or event IDs used during cleanup
+- correlation IDs and sanitized cleanup-failure diagnostics, without message content
 
 ## Related docs
 

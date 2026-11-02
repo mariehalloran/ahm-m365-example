@@ -86,7 +86,7 @@ export function reportingGroups(document: ProjectDocument) {
 
 // The account a result exercised: the independent Exchange mailbox or the OneDrive owner.
 // Teams participants are bots, not users.
-function resultAccounts(services: ProjectConfig["services"], result: SyntheticResult): Pick<ResultContext, "user" | "peer"> {
+function resultAccounts(services: ProjectConfig["services"], result: SyntheticResult): Pick<ResultContext, "user" | "peer" | "target"> {
   switch (probeServices[result.testType].service) {
     case "exchange": {
       const target = services.exchange.targets.find(target => target.id === result.testId);
@@ -95,6 +95,12 @@ function resultAccounts(services: ProjectConfig["services"], result: SyntheticRe
     case "onedrive": {
       const user = services.onedrive.targets.find(target => target.id === result.testId)?.userPrincipalName;
       return user ? { user } : {};
+    }
+    case "sharepoint": {
+      const selected = services.sharepoint.targets.find(target => target.id === result.testId);
+      if (!selected) return {};
+      const { siteUrl, libraryName, folderName, listName } = selected;
+      return { target: { siteUrl, libraryName, folderName, listName } };
     }
     case "teams": return {};
   }

@@ -109,7 +109,7 @@ export function createRuntimeConfig(
   const parsedProbes = z.array(probeSchema).min(1).max(Object.values(serviceProbeLimits).reduce((sum, limit) => sum + limit, 0)).safeParse(rawProbes);
   if (!parsedProbes.success) throw new ConfigurationError(`Invalid PROBES_JSON fields: ${parsedProbes.error.issues.map(issue => issue.path.join(".")).join(", ")}`);
   const probes = parsedProbes.data;
-  if (["exchange", "teams", "onedrive"].some(service =>
+  if (Object.keys(serviceProbeLimits).some(service =>
     probes.filter(probe => probeServices[probe.type].service === service).length >
       serviceProbeLimits[service as keyof typeof serviceProbeLimits])) {
     throw new ConfigurationError("Invalid PROBES_JSON: service probe inventory exceeded");

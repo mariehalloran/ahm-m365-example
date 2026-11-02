@@ -89,6 +89,12 @@ function validateAccess(worker: DeploymentWorker, settings: DeploymentSettings):
       project.services.onedrive.targets.some(target => !target.driveId || !target.folderId)) {
     throw new ConfigurationError("Live OneDrive selected-folder journeys require approved driveId/folderId bindings; run npm run onedrive:setup (it writes them to .env)");
   }
+  if (service.type === "sharepoint" && service.targets.some(target => !target.siteId ||
+      ((project.services.sharepoint.scenarios["document-library-roundtrip"] || project.services.sharepoint.scenarios["document-versions"]) &&
+        (!target.driveId || !target.folderId)) ||
+      (project.services.sharepoint.scenarios["list-item-lifecycle"] && !target.listId))) {
+    throw new ConfigurationError("Live SharePoint requires discovered site/library/folder/list bindings; complete manual selected-site consent and run npm run setup:ids -- -SharePointOnly (it writes IDs to .env)");
+  }
 }
 
 function deploymentWorker(document: ProjectDocument, project: ProjectConfig, type: ServiceConfig["type"]): DeploymentWorker {

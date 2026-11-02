@@ -3,8 +3,14 @@
 These diagrams describe the implemented resources, not a proposed platform.
 The [root configuration](../monitoring.config.json) selects services, targets,
 bot pairs, cadences, models and the single `logAnalytics.enabled` reporting toggle.
-The checked-in configuration uses one tenant, three workers, two Teams bot pairs,
+The checked-in configuration selects one tenant, four workers, two Teams bot pairs,
 Log Analytics and Event Hubs Capture.
+SharePoint Online selects an approved site/library/test-folder/list and its own
+worker/model. It adds no user group, bot identity or per-target model. Worker
+access and live rollout require separate verification.
+Every selected synthetic journey uses a 240-second deadline and 300-second
+cadence, with cleanup/reporting inside a 299-second whole-cycle envelope.
+Provider lanes remain independent (60 seconds in the checked-in profile).
 
 ## 1. Actual services and their interactions
 
@@ -19,10 +25,12 @@ flowchart LR
         exchange["Exchange worker<br/>one replica"]
         teams["Teams worker<br/>one replica - all bot pairs"]
         onedrive["OneDrive worker<br/>one replica"]
+        sharepoint["SharePoint worker<br/>only when enabled"]:::optional
     end
     entra["Microsoft Entra ID<br/>explicit managed identities<br/>provider/readback federation"] -.-> workers
     exchange <-->|"mail and calendar APIs"| graph["Microsoft Graph"]
     onedrive <-->|"drive and file APIs"| graph
+    sharepoint <-->|"selected-site documents and list items"| graph
     teams <-->|"readback and meeting calls"| graph
     teams <-->|"bot posts and replies"| connector["Azure Bot Service F0 registrations<br/>Teams Bot Connector"]
     graph -->|"authenticated call notifications"| teams
@@ -35,6 +43,7 @@ flowchart LR
     logs -->|"KQL - logging on"| models["Azure Monitor Health Models"]
     workers -->|"synthetic reports - logging off<br/>provider reports - either mode"| models
     models --> actions["Azure Monitor action groups<br/>operator-owned receivers"]
+    classDef optional stroke-dasharray: 5 5
 ```
 
 The configuration storage account also hosts Capture/quarantine containers when
@@ -47,6 +56,10 @@ Each service's provider lane runs inside its existing container, independently o
 synthetic journeys. More accounts or bot pairs do not create more workers or
 models. Teams bot registrations are identities/channel registrations, not extra
 compute services; the existing Teams worker hosts their shared calling callback.
+SharePoint location choices derive stable target keys; read-only ID discovery
+uses the selected managed identity and writes existing bindings to the same
+gitignored `.env`. Administrators prepare resources and grant Selected-site
+write access separately; see [SharePoint permissions](./sharepoint-permissions.md).
 
 ## 2. How the health model gets data
 
@@ -75,6 +88,9 @@ Exchange additionally groups journeys under Mail and Calendar. User-defined
 Exchange/OneDrive groups are signal aggregation groups **within journey entities**,
 not extra tenant/group models. Teams pairs contribute attempts to the same
 journey entities; `Dimensions.botPairId` distinguishes their log records.
+SharePoint contributes three document/list journeys and 13 business-step children
+without reporting groups. Its location dimensions identify the configured
+site/library/folder/list, not personal OneDrive users.
 Authentication and compensating cleanup stay internal, while deliberate
 deletion/call departure remain measured business steps.
 
@@ -108,6 +124,8 @@ journeys, steps and call phases so queries do not combine unlike samples.
 `Timestamp` is observation time;
 ingestion time alone does not establish fresh execution. Tenant, test target,
 user/group and pair dimensions support investigation without a per-target model.
+SharePoint also retains `Dimensions.siteUrl`, `libraryName`, `folderName` and
+`listName`; its `SyntheticUser` and group arrays remain empty.
 The [administrator guide](./operations.md#log-analytics-for-administrators) links the
 six saved searches and describes the table.
 

@@ -12,8 +12,9 @@ import {
 import { applicationAccessSchema, deploymentSettingsSchema, teamsBotPairSchema, workerSettingsSchema } from "./deployment-config.js";
 import { canonicalProjectFile } from "../paths.js";
 import { CLEANUP_GRACE_MS, PUBLICATION_TIMEOUT_MS, SLOT_MARGIN_MS } from "../execution/budgets.js";
+import { sharePointTargetId } from "./sharepoint-target.js";
 
-export const serviceTypes = ["exchange", "teams", "onedrive"] as const;
+export const serviceTypes = ["exchange", "teams", "onedrive", "sharepoint"] as const;
 type ServiceJourney<S extends ServiceConfig["type"]> =
   Extract<(typeof probeServices)[keyof typeof probeServices], { service: S }>["journey"];
 function scenarioSelection<S extends ServiceConfig["type"]>(service: S) {
@@ -79,6 +80,15 @@ const tenantServicesSchema = z.object({
       targetTimeoutSeconds: z.number().int().min(30).max(3600).default(300),
     }).strict().optional(),
   }).strict(),
+  sharepoint: z.object({
+    ...selection,
+    scenarios: scenarioSelection("sharepoint"),
+    targets: serviceTargetSchemas.sharepoint,
+  }).strict().default({
+    enabled: false,
+    execution: { mode: "live", intervalSeconds: 300, timeoutSeconds: 240, cohort: "sharepoint-global" },
+    targets: [],
+  }),
 }).strict();
 const logAnalyticsResourcesSchema = z.object({
   eventHubNamespace: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$/),
@@ -129,6 +139,9 @@ function runtimeServices(services: TenantInventory["services"]): ProjectServices
     exchange: { ...services.exchange, targets: userGroupTargets(services.exchange.targets) },
     teams: services.teams,
     onedrive: { ...services.onedrive, targets: userGroupTargets(services.onedrive.targets) },
+    sharepoint: { ...services.sharepoint, targets: services.sharepoint.targets.map(target => ({
+      ...target, id: sharePointTargetId(target),
+    })) },
   };
 }
 
@@ -145,6 +158,9 @@ function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
 function validateServiceSelection(services: ProjectConfig["services"], tenantId: string): void {
   const teams = services.teams;
   const onedrive = services.onedrive;
+  if (Object.values(services.sharepoint.access).some(value => value !== undefined)) {
+    throw new ConfigurationError("SharePoint uses the explicitly selected managed identity, not certificate or secret access references");
+  }
   validateTeamsBotPairs(teams);
   if (new Set(services.exchange.targets.map(target => target.mailbox.toLowerCase())).size !== services.exchange.targets.length) {
     throw new ConfigurationError("Exchange targets must identify unique independent mailboxes");
@@ -263,7 +279,7 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
             ? project.services.teams.callTargets.length : selected.targets.length), 0);
         const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + CLEANUP_GRACE_MS / 1000);
         if (service.cycleTimeoutSeconds < required) {
-          const label = service.type === "onedrive" ? "OneDrive" : "Teams";
+          const label = service.type === "onedrive" ? "OneDrive" : service.type === "sharepoint" ? "SharePoint" : "Teams";
           throw new ConfigurationError(`${label} lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase concurrency within its limit or reduce the cohort to fit the 300-second cadence`);
         }
         if (service.cycleTimeoutSeconds * 1000 + CLEANUP_GRACE_MS + PUBLICATION_TIMEOUT_MS >

@@ -68,6 +68,13 @@ command's own client IDs ([OneDrive setup](./onedrive-setup.md#plan-apply-and-re
 each call target's organizer user ID (from its `organizer`, the organizer's user principal
 name, which only that command reads), both client IDs of each bot pair and the Teams calling
 callback URL. It writes them to `.env` ([keys](#generated-ids-in-env)).
+For SharePoint, configure actual site URL/library/folder/list names in ungrouped
+`targets[]`; the `-SharePointOnly` path discovers all four IDs as the selected
+managed identity. The active profile selects one approved SharePoint target;
+approved provisioning outputs bootstrap its private bindings, and post-deployment
+discovery/live acceptance must use its selected worker UAMI. With the deployed
+immutable config Blob, the compiled discovery command verifies all four IDs and
+does not write `.env`.
 
 ## Set up Microsoft 365
 
@@ -79,6 +86,9 @@ values from that access — never a new grant — and are safe to automate:
 - `npm run setup:ids` looks up or creates the Teams channel, both client IDs of each pair, the
   Teams calling callback URL, call targets' organizer user IDs and OneDrive accounts' user
   IDs.
+  With `-SharePointOnly [-Tenant <alias>]`, it instead discovers existing
+  SharePoint site/library/folder/list IDs as the worker managed identity, without
+  Azure CLI sign-in or resource/permission creation.
 - `npm run setup:reply-seeds` provisions the retained SELF-REPLY message each `reply-mail`
   mailbox answers (only when that scenario is selected).
 
@@ -103,6 +113,7 @@ deploy fails and names the conflict when the config sets one to a different valu
 | Teams service (`<TARGET>` is `TEAMS`) | `CALLING_CALLBACK_URL` | `execution.teamsCallingCallbackUrl` | `npm run setup:ids`, from the foundation's environment |
 | OneDrive target | `USER_ID` | `userId` | `npm run setup:ids`, from `userPrincipalName` |
 | OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup` |
+| SharePoint target | `SITE_ID`, `DRIVE_ID`, `FOLDER_ID`, `LIST_ID` | `siteId`, `driveId`, `folderId`, `listId` | `npm run setup:ids -- -SharePointOnly` |
 
 `<TENANT>` is the tenant alias, uppercased with non-alphanumeric characters replaced by `_`.
 For Exchange and OneDrive, `<TARGET>` is `ACCOUNT_<SHA256>`, derived automatically from the
@@ -110,6 +121,12 @@ trimmed, lowercased mailbox address or UPN; the hexadecimal digest is uppercased
 keys. No manually assigned account `id` is required or accepted. Moving an account between
 groups does not change its bindings; changing its address requires regenerating or
 explicitly migrating its bindings.
+
+SharePoint uses `SHAREPOINT_<SHA256>` derived from normalized site URL,
+library/folder/list names. No manually assigned target `id` is accepted.
+Changing location choices requires rediscovery; old bindings do not silently
+authorize another location. Discovery verifies the site's URL, library membership,
+existing direct-child folder and ordinary list. It creates none of them.
 
 Teams retains configured target IDs, uppercased with non-alphanumeric characters
 replaced by `_`; for example, `CONSTO__TEAMS_PROBE_002__CHANNEL_ID`
@@ -205,8 +222,8 @@ Live Microsoft 365 execution is off until all of these hold:
 - The live worker names an existing, administrator-approved identity in
   `worker.identity` (deployment never grants Microsoft 365 access), uses
   managed-identity health-report authentication and has the bindings its journeys
-  need: Teams bot references, Exchange reply seeds and OneDrive user, drive and
-  folder IDs (the generated ones come from [`.env`](#generated-ids-in-env)).
+  need: Teams bot references, Exchange reply seeds, OneDrive user/drive/folder
+  IDs and SharePoint site/drive/folder/list IDs (the generated ones come from [`.env`](#generated-ids-in-env)).
   Deployment rejects it otherwise.
 
 Beta provider collection also needs `deployment.enableBetaServiceActivity: true`,
@@ -214,8 +231,19 @@ which sets `ENABLE_BETA_SERVICE_ACTIVITY=true`.
 
 ## Deployment status and order
 
-**Current timing policy:** every selected Exchange, Teams and OneDrive journey has a
+**Current timing policy:** every selected Exchange, Teams, OneDrive and SharePoint journey has a
 240-second execution deadline and 300-second cadence; Exchange remains aligned.
+
+**SharePoint source implementation:** document roundtrip/integrity,
+prior-version bytes and list-item lifecycle are implemented.
+The checked-in selection enables one approved Team-backed site and dedicated
+library-folder/list fixtures with an explicitly selected worker UAMI. Resource
+IDs remain in `.env`, not root configuration. Administrative fixture/grant
+metadata does not establish worker access: after the canonical deployment,
+complete read-only discovery as that worker identity against its immutable
+configuration, and verify deployed journeys, cleanup and ingestion.
+This integration performs no Azure/Graph mutations or live deployment.
+
 These source/config changes are not deployed or live-accepted by this implementation task. Historical
 tenant evidence below predates that conversion and does not establish self-reply
 fixture validity, current cohort capacity or current health ingestion. Re-provision
@@ -255,8 +283,9 @@ prepare and deploy commands, which the single `npm run deploy` command supersede
 
 The current scope comes from the root config and
 [shared catalogue](../synthetic-tests/utils/src/catalog.ts), not the historical
-deployment counts below. There are no planned journey branches. SharePoint's
-health model and root reference are deleted, and its old worker has no active revision.
+deployment counts below. There are no planned journey branches. The earlier
+SharePoint prototype was retired; the implemented document/list journeys now
+select a catalog-driven model and independent worker only when explicitly enabled.
 
 The dated deployment evidence below predates the independent attachment/reply
 split; source changes alone do not update the running workers or live model.
@@ -389,13 +418,17 @@ worker image before applying that root field to the legacy workers.
 From the repository root, with the existing package dependencies restored:
 
 ```sh
-npm --prefix synthetic-tests test
+npm --prefix synthetic-tests run catalog:check
 npm --prefix synthetic-tests run typecheck
 npm --prefix synthetic-tests run build
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s health-model/tests
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s synthetic-tests/infra/tests
+npm --prefix synthetic-tests run deploy -- --plan
+az bicep build --file health-model/infra/main.bicep --stdout > /dev/null
+az bicep build --file health-model/infra/observation-alerts.bicep --stdout > /dev/null
+az bicep build --file synthetic-tests/infra/main.bicep --stdout > /dev/null
 ```
 
+There is no maintained test suite or additional test-tool dependency. Focused
+offline assertions may inject fake transports; they do not prove live access.
 A service in `simulation` mode is labeled and does not ingest cloud health, send messages,
 join calls or mutate files. A `live` service run locally needs `ENABLE_LIVE_M365=true` and
 real access.
@@ -411,6 +444,7 @@ The [root configuration](../monitoring.config.json) is the only file you maintai
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins, above |
 | `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (service access bindings), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
 | `tenants[].services.exchange.targets`, `….onedrive.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
+| `tenants[].services.sharepoint.targets` | Ungrouped actual site URL/library/folder/list names, optional region; no users, arbitrary target IDs or per-target models |
 
 It holds names, choices and the few [IDs only you can supply](#what-the-config-holds),
 never secrets. Model and worker deployment use this same file. Each worker downloads
@@ -439,6 +473,10 @@ authorization for Microsoft 365 access and health reporting.
   dedicated folders; app-folder operations separately use
   `Files.ReadWrite.AppFolder`. See [OneDrive permissions](./onedrive-permissions.md)
   and [bulk setup](./onedrive-setup.md).
+- **SharePoint:** application `Sites.Selected` plus administrator-approved `write`
+  on the designated test site; same-tenant explicit managed identity only.
+  Site/library/folder/list provisioning and consent remain manual. See
+  [SharePoint permissions](./sharepoint-permissions.md).
 - **Reporting:** workers have private configuration-reader and service-model report
   roles. With logging off, these publish all aggregated journey/action reports directly.
   When on, workers also have Event Hubs sender access; the Function has receiver,
@@ -454,20 +492,23 @@ that endpoint. Follow the [tenant-binding requirements](./cross-tenant-access.md
 `npm run deploy` deploys the selected reporting foundation and [health models](../health-model/README.md),
 then the [worker foundation](../synthetic-tests/infra/README.md) and image.
 Only the enabled logging mode deploys an ingestion Function.
-It proves fresh Exchange reports before rolling out Teams and OneDrive. Workers reuse an
+It proves fresh Exchange reports before rolling out the other enabled services. Workers reuse an
 existing approved environment and identities when `deployment.foundation.mode` is
 `existing`, run an immutable image digest and download the same root-config snapshot.
+Keep the image and snapshot together: pre-SharePoint images do not recognize the
+new service selection, even when disabled. The standard deployment rebuilds/pins
+the image using a fingerprint that includes SharePoint source before rollout.
 
 Only scheduled Teams meetings need public HTTPS callback ingress. Background
 journey execution is not a long-lived ingress request. Lanes run independently
-with bounded execution and cleanup. All selected Exchange, Teams and OneDrive
+with bounded execution and cleanup. All selected Exchange, Teams, OneDrive and SharePoint
 journeys run every five minutes and allow 240 seconds per complete journey.
 Latency thresholds stay at 15000/60000 ms and provider lanes remain at 60 seconds.
 Genuine journey deadline expiry is a failed attempt; worker cancellations and
 cleanup-only failures report Unknown. Unexecuted dependent steps are not extra
 failed requests, and confirmed business-step evidence is preserved.
 Exchange reserves 12 seconds for cleanup settlement and 12 for publication;
-Teams/OneDrive reserve 12 and 30. All use a 299-second whole-cycle envelope,
+Teams/OneDrive/SharePoint reserve 12 and 30. All use a 299-second whole-cycle envelope,
 including initialization. The non-Exchange cycle budget defaults to 252 seconds;
 the checked-in Teams concurrency is six so all six attempts fit one wave, while
 OneDrive's two accounts per lane fit its default concurrency three.

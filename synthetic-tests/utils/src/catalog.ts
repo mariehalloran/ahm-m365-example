@@ -2,6 +2,7 @@ export const serviceCatalog = {
   exchange: { target: "Exchange Online", displayName: "Exchange Experience" },
   teams: { target: "Microsoft Teams", displayName: "Teams Experience" },
   onedrive: { target: "OneDrive for Business", displayName: "OneDrive Experience" },
+  sharepoint: { target: "SharePoint Online", displayName: "SharePoint Experience" },
 } as const;
 
 const exchangeMailGroup = { entityName: "exchange-mail", displayName: "Mail" } as const;
@@ -104,6 +105,37 @@ export const journeyCatalog = {
       "list-versions": { entityName: "step-2", displayName: "Enumerate actual document version history" },
       "read-prior-version": { entityName: "step-3", displayName: "Download prior version and verify bytes" },
       "restore-version": { entityName: "step-4", displayName: "Optional: restore downloaded prior bytes and verify" },
+    },
+  },
+  "sharepoint-roundtrip": {
+    service: "sharepoint", journey: "document-library-roundtrip", entityName: "sharepoint-document-roundtrip",
+    displayName: "Upload, reopen, verify and delete library document",
+    steps: {
+      "upload-document": { displayName: "Create owned folder and upload document" },
+      "reopen-document": { displayName: "Enumerate and download saved document" },
+      "verify-document-content": { displayName: "Verify exact document bytes" },
+      "delete-document": { displayName: "Delete owned artifacts and verify removal" },
+    },
+  },
+  "sharepoint-versions": {
+    service: "sharepoint", journey: "document-versions", entityName: "sharepoint-document-versions",
+    displayName: "Update library document and retrieve prior version",
+    steps: {
+      "write-document-revisions": { displayName: "Write and verify two document revisions" },
+      "list-document-versions": { displayName: "Enumerate persisted version history" },
+      "read-prior-document-version": { displayName: "Download and verify prior-version bytes" },
+      "delete-version-document": { displayName: "Delete owned artifacts and verify removal" },
+    },
+  },
+  "sharepoint-list-item": {
+    service: "sharepoint", journey: "list-item-lifecycle", entityName: "sharepoint-list-item",
+    displayName: "Create, read, update, verify and delete list item",
+    steps: {
+      "create-list-item": { displayName: "Create correlated list item" },
+      "read-list-item": { displayName: "Read and verify saved Title" },
+      "update-list-item": { displayName: "Update owned item's Title" },
+      "verify-list-item": { displayName: "Reopen and verify persisted update" },
+      "delete-list-item": { displayName: "Delete owned item and verify removal" },
     },
   },
 } as const;

@@ -2,7 +2,7 @@
 
 This repository deploys Azure Monitor Health Models and Microsoft 365 synthetic workers from a single root configuration: [`monitoring.config.json`](./monitoring.config.json).
 
-The health model helps administrators monitor Microsoft 365 in terms of completed tasks rather than isolated API responses. API-backed synthetic journeys provide success and latency signals, and the model connects business steps and journeys to Exchange, Teams, OneDrive, and the overall Microsoft 365 experience. This dependency-based view makes observed impact easier to trace and supports experience-level alerts, while Microsoft-reported Service Health remains separate supporting context.
+The health model helps administrators monitor Microsoft 365 in terms of completed tasks rather than isolated API responses. API-backed synthetic journeys provide success and latency signals, and the model connects business steps and journeys to Exchange, Teams, OneDrive, SharePoint Online, and the overall Microsoft 365 experience. This dependency-based view makes observed impact easier to trace and supports experience-level alerts, while Microsoft-reported Service Health remains separate supporting context.
 
 ![Exchange Experience health model showing Mail and Calendar journeys, business-step health, and separate Service Health context](./docs/images/exchange-health-model.png)
 
@@ -21,10 +21,15 @@ The health model helps administrators monitor Microsoft 365 in terms of complete
 | OneDrive | `user-drive-roundtrip` | File persistence and content integrity | Create an owned folder and file beneath the approved test folder, enumerate and download the file, verify its hash, then delete and verify removal. |
 | OneDrive | `app-folder-lifecycle` | App-folder data persistence and lifecycle | Create a cycle-owned folder in the app folder, write and read data, update and reread it, then delete the folder and verify removal. |
 | OneDrive | `document-versions` | Version history and prior content retrieval | Write and verify two revisions, enumerate versions, download and verify prior-version bytes, and optionally rewrite those bytes as current content before cleanup. |
+| SharePoint Online | `document-library-roundtrip` | Library persistence and content integrity | Upload in a cycle-owned folder beneath the approved test folder, enumerate and download the file, verify exact bytes, then delete and verify removal. |
+| SharePoint Online | `document-versions` | Library version history and prior bytes | Write and verify two revisions, enumerate actual history, download and verify the prior revision, then delete owned artifacts. |
+| SharePoint Online | `list-item-lifecycle` | List-item persistence and lifecycle | Create an item in the approved list, read its Title, update and verify persisted fields, then delete and verify removal. |
 
 ## Test accounts and bots
 
 Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts because mailboxes, calendars, and personal drives are user resources. This exercises real delivery and persistence rather than mocked API responses. The accounts are test targets, not worker sign-in credentials: hosted workers authenticate app-only using managed identities. Teams uses managed-identity bot pairs so channel and meeting journeys run unattended without human participants or interactive runtime sign-in. These checks cover API and bot behavior, not employee client interfaces or audio quality.
+
+SharePoint targets are approved sites, dedicated document-library test folders and ordinary lists, not user accounts or bots. Its managed identity needs administrator-approved `Sites.Selected` application access and `write` on the selected site. The checked-in SharePoint selection enables one approved target; complete [worker-identity discovery and verification](./synthetic-tests/sharepoint/README.md) before accepting live monitoring.
 
 ## Quick start
 
@@ -33,12 +38,17 @@ Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts becaus
    ```sh
    npm ci
    ```
-3. Populate the [generated ID bindings](./docs/deployment.md#generated-ids-in-env):
+3. Populate the [generated ID bindings](./docs/deployment.md#generated-ids-in-env)
+   using the operator and managed-identity contexts in the service setup guides.
+   When SharePoint is selected, the combined `setup:ids` command also requires
+   its configured worker identity to be available on the host:
    ```sh
    npm run setup:ids
    npm run setup:reply-seeds      # when Exchange reply journey is enabled
    npm run onedrive:setup -- --apply  # when OneDrive is enabled
    ```
+   SharePoint-only discovery runs as the selected managed identity:
+   `npm run setup:ids -- -SharePointOnly` on the selected worker-UAMI host.
 4. Preview and deploy:
    ```sh
    npm run deploy -- --plan
@@ -51,7 +61,7 @@ Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts becaus
 - Keep [generated per-target ID bindings](./docs/deployment.md#generated-ids-in-env) beside the config.
 - `logAnalytics.enabled` controls direct reports (`false`) vs observation pipeline (`true`).
 - `serviceHealth.enabled` controls provider context entities and collection.
-- Every selected Exchange, Teams and OneDrive journey runs every 300 seconds with a 240-second whole-journey deadline. Latency thresholds remain 15/60 seconds; provider lanes remain independent (60 seconds in the checked-in config).
+- Every selected Exchange, Teams, OneDrive and SharePoint journey runs every 300 seconds with a 240-second whole-journey deadline. Latency thresholds remain 15/60 seconds; provider lanes remain independent (60 seconds in the checked-in config).
 
 ## References
 
@@ -62,3 +72,5 @@ Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts becaus
 - Group configuration: [docs/monitoring-groups.md](./docs/monitoring-groups.md)
 - Worker details: [synthetic-tests/README.md](./synthetic-tests/README.md)
 - Model details: [health-model/README.md](./health-model/README.md)
+- SharePoint permissions: [docs/sharepoint-permissions.md](./docs/sharepoint-permissions.md)
+- SharePoint journeys and endpoints: [synthetic-tests/sharepoint/README.md](./synthetic-tests/sharepoint/README.md)

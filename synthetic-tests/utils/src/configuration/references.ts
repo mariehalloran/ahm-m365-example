@@ -117,7 +117,7 @@ function expandTeams(teams: unknown, tenantId: unknown, scope: Scope | undefined
 function expandTenant(tenant: Record<string, unknown>, index: number, scope: Scope | undefined): void {
   const providerClientId = tenant.providerClientId;
   delete tenant.providerClientId;
-  for (const service of ["exchange", "teams", "onedrive"]) {
+  for (const service of ["exchange", "teams", "onedrive", "sharepoint"]) {
     const where = `tenants.${index}.services.${service}`;
     expandResourceReferences(at(tenant, "services", service, "worker"), workerReferences, scope, `${where}.worker`);
     inheritProviderClientId(at(tenant, "services", service, "execution"), providerClientId);

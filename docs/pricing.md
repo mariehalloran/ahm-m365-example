@@ -13,6 +13,15 @@ Assumptions used for this guide:
 - 730 hours/month
 - baseline topology: 3 workers (Exchange, Teams, OneDrive), 1 Basic ACR
 
+The checked-in profile now selects a fourth SharePoint worker, which is not
+included in these dated three-worker estimates. It adds one service worker/model
+per tenant and three document/list journeys plus their step observations;
+recalculate compute, Graph load and ingestion from the selected target
+count/cadence before rollout.
+Its three lanes follow the same 240-second journey deadlines and 300-second
+cadence; no SharePoint cost or throughput measurement is implied here. See
+[SharePoint permissions/setup](./sharepoint-permissions.md).
+
 | Mode | Baseline (4 Exchange, 2 OneDrive, 1 Teams pair) | 100 Exchange + 100 OneDrive (baseline Teams) |
 | --- | ---: | ---: |
 | Direct reports (`logAnalytics.enabled: false`) | ~ $65/month | ~ $65/month* |

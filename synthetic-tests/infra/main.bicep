@@ -7,14 +7,14 @@ param projectConfig object = loadJsonContent('../../monitoring.config.json')
 param serviceCertificates object = {}
 param location string = projectConfig.deployment.location
 param deployWorkers bool = false
-param workerServices array = ['exchange', 'teams', 'onedrive']
+param workerServices array = ['exchange', 'teams', 'onedrive', 'sharepoint']
 param workerImage string = ''
 param workerConfigBlobUrl string = ''
 param workerConfigSha256 string = ''
 
 // A tenant service gets one worker when it is enabled with at least one scenario.
 func hostsWorker(selection object) bool =>
-  selection.enabled && !empty(filter(items(selection.scenarios), scenario => scenario.value))
+  (selection.?enabled ?? false) && !empty(filter(items(selection.?scenarios ?? {}), scenario => scenario.value))
 
 func workerIdentityId(worker object, healthModel object) string =>
   worker.?identityResourceId ?? '/subscriptions/${healthModel.subscriptionId}/resourceGroups/${healthModel.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${worker.?identityName ?? ''}'
@@ -24,7 +24,7 @@ var settings = projectConfig.deployment
 var workers = flatten(map(
   projectConfig.tenants,
   tenant => map(
-    filter(['exchange', 'teams', 'onedrive'], service => hostsWorker(tenant.services[service])),
+    filter(['exchange', 'teams', 'onedrive', 'sharepoint'], service => hostsWorker(tenant.services[?service] ?? {})),
     service => {
       tenant: tenant.id
       service: service

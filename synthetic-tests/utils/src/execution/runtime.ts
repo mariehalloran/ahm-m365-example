@@ -91,6 +91,13 @@ export async function serviceRuntime(
       target.restoreVersion === probe.restoreVersion))) {
     throw new ConfigurationError("OneDrive may access only the selected root-configured accounts, drives and folders");
   }
+  if (service.type === "sharepoint") {
+    const fields = ["siteUrl", "siteId", "libraryName", "driveId", "folderName", "folderId", "listName", "listId"] as const;
+    if (config.probes.some(probe => probeServices[probe.type].service !== "sharepoint" ||
+        !service.targets.some(target => target.id === probe.id && fields.every(field => target[field] === probe[field])))) {
+      throw new ConfigurationError("SharePoint may access only the selected root-configured sites, libraries, folders and lists");
+    }
+  }
   if (service.type === "teams") {
     const allowed = new Map(serviceProbes(service, { "channel-conversation": true, "scheduled-meeting": true })
       .map(probe => [`${probe.type}:${probe.id}`, probe]));

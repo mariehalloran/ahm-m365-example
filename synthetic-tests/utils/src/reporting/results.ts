@@ -9,6 +9,7 @@ export interface ResultContext {
   tenant: string;
   user?: string;
   peer?: string;
+  target?: { siteUrl: string; libraryName: string; folderName: string; listName: string };
   groups: { id: string; displayName: string }[];
 }
 export interface ResultOutput {

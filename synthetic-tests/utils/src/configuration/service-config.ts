@@ -52,7 +52,7 @@ const serviceFields = {
   serviceActivity: serviceActivitySchema.default({}),
 };
 export const serviceExecutionSchema = z.object(serviceFields).strict();
-const typedExecutionSchema = serviceExecutionSchema.extend({ type: z.enum(["exchange", "teams", "onedrive"]) });
+const typedExecutionSchema = serviceExecutionSchema.extend({ type: z.enum(["exchange", "teams", "onedrive", "sharepoint"]) });
 export type ServiceExecution = z.infer<typeof typedExecutionSchema>;
 const common = {
   ...serviceFields,
@@ -78,6 +78,16 @@ export const serviceTargetSchemas = {
     channelName: z.string().trim().min(1).max(50).optional(),
     serviceUrl: probeSchema.shape.serviceUrl,
   }).strict()).max(maxServiceTargets),
+  sharepoint: z.array(accountTarget.extend({
+    siteUrl: probeSchema.shape.siteUrl.unwrap(),
+    libraryName: probeSchema.shape.libraryName.unwrap(),
+    folderName: probeSchema.shape.folderName.unwrap(),
+    listName: probeSchema.shape.listName.unwrap(),
+    siteId: probeSchema.shape.siteId,
+    driveId: probeSchema.shape.driveId,
+    folderId: probeSchema.shape.folderId,
+    listId: probeSchema.shape.listId,
+  }).strict()).max(maxServiceTargets),
 };
 export const teamsCallTargetsSchema = z.array(target.extend({
   tenantId: z.string().uuid(),
@@ -98,6 +108,10 @@ const serviceSchema = z.discriminatedUnion("type", [
     botPairs: z.array(teamsBotPairSchema).max(maxServiceTargets).default([]),
     targets: serviceTargetSchemas.teams,
     callTargets: teamsCallTargetsSchema,
+  }).strict(),
+  z.object({
+    ...common, type: z.literal("sharepoint"),
+    targets: z.array(serviceTargetSchemas.sharepoint.element.extend({ id: probeSchema.shape.id })).max(maxServiceTargets),
   }).strict(),
 ]);
 export type ServiceConfig = z.infer<typeof serviceSchema>;
@@ -129,18 +143,22 @@ export function validateTeamsBotPairs(service: Pick<Extract<ServiceConfig, { typ
 function validateProviderSettings(service: ServiceExecution): void {
   if (service.intervalSeconds !== JOURNEY_INTERVAL_SECONDS ||
       service.executionLanes?.some(lane => lane.intervalSeconds !== JOURNEY_INTERVAL_SECONDS)) {
-    throw new ConfigurationError("Every Exchange, Teams and OneDrive journey requires a 300-second cadence");
+    throw new ConfigurationError("Every Exchange, Teams, OneDrive and SharePoint journey requires a 300-second cadence");
   }
   if (service.type === "exchange" && service.executionLanes && service.executionLanes.length !== 1) {
     throw new ConfigurationError("Exchange requires one aligned 300-second lane for every supported journey");
   }
   if (service.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS ||
       service.executionLanes?.some(lane => lane.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS)) {
-    throw new ConfigurationError("Every Exchange, Teams and OneDrive journey requires one 240-second complete-journey execution deadline");
+    throw new ConfigurationError("Every Exchange, Teams, OneDrive and SharePoint journey requires one 240-second complete-journey execution deadline");
   }
-  if (service.type === "onedrive" && (service.serviceActivity.enabled ||
+  if ((service.type === "onedrive" || service.type === "sharepoint") && (service.serviceActivity.enabled ||
       service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
-    throw new ConfigurationError("OneDrive has no approved beta service activity functions");
+    throw new ConfigurationError(`${service.type === "onedrive" ? "OneDrive" : "SharePoint"} has no approved beta service activity functions`);
+  }
+  if (service.type === "sharepoint" &&
+      (service.graphAuthentication !== "managed-identity" || service.healthReportAuthentication !== "managed-identity")) {
+    throw new ConfigurationError("SharePoint requires explicit managed-identity Graph and health-report authentication");
   }
   if (service.executionLanes) {
     const names = service.executionLanes.map(lane => lane.name);

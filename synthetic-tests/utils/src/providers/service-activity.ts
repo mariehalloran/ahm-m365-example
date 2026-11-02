@@ -75,7 +75,7 @@ export function getMessageVolumeMetricsForTeamsChat(graph: GraphClient, window: 
 }
 
 export function serviceActivitySources(service: ServiceConfig): ProviderSourceDefinition[] {
-  if (!service.serviceActivity.enabled || service.type === "onedrive") return [];
+  if (!service.serviceActivity.enabled || !activityFunctions[service.type].length) return [];
   const type = service.type;
   const functions = service.serviceActivity.functions ?? activityFunctions[service.type];
   return functions.map(name => ({

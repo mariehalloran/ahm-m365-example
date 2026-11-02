@@ -110,7 +110,8 @@ export function serviceHealthSources(service: ServiceConfig["type"]): ProviderSo
       source: "serviceAnnouncement.healthOverviews", apiVersion: "v1.0",
       async collect(graph, signal, collectedAt) {
         const records = (await getServiceHealthOverviews(graph, signal)).filter(item =>
-          item.service === name && (service !== "onedrive" || item.id === "OneDriveForBusiness"));
+          item.service === name && (service !== "onedrive" || item.id === "OneDriveForBusiness") &&
+          (service !== "sharepoint" || item.id === "SharePoint"));
         if (!records.length) throw new ProviderCollectionError("no-data");
         return records.map(item => ({
           kind: "overview" as const, service, collectedAt,

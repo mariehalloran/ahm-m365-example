@@ -6,7 +6,7 @@ import {
   MAX_COMMUNICATION_CANDIDATES, MAX_COMMUNICATION_SUMMARIES, recentlyUpdated, serviceHealthNames, serviceMessageNames,
 } from "./service-communications.js";
 
-export const providerServices = ["exchange", "teams", "onedrive"] as const;
+export const providerServices = ["exchange", "teams", "onedrive", "sharepoint"] as const;
 export const providerSources = [
   "serviceAnnouncement.healthOverviews", "serviceAnnouncement.issues", "serviceAnnouncement.messages",
   ...activityFunctionNames,

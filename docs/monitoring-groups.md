@@ -4,6 +4,8 @@ User groups apply to **Exchange and OneDrive only**. Define them under each tena
 service `targets` in the single root [monitoring.config.json](../monitoring.config.json).
 Teams channel `targets[]` and meeting `callTargets[]` remain ungrouped: their
 participants are bots, not the users in these groups.
+SharePoint `targets[]` are also ungrouped: they identify approved
+site/library/folder/list locations and never create per-target health branches.
 
 ## Define groups
 
@@ -51,7 +53,7 @@ does not rename its bindings. See [generated IDs](./deployment.md#generated-ids-
 - An empty group is allowed but has no model signals until it has runnable users.
   An enabled service with selected journeys still needs at least one user.
 - Root `groups`, `accounts` membership lists and flat Exchange/OneDrive target
-  arrays are no longer supported. Teams never reads these user groups or uses
+  arrays are no longer supported. Teams and SharePoint never read these user groups; Teams does not use
   them to grant team membership.
 
 ## What you get
@@ -74,6 +76,8 @@ aggregation groups in the model; overall signals publish ungrouped.
 - Teams journey, step and call-phase reports remain ungrouped. Redeployment replaces
   their journey definitions without user groups; old ingested group observations stop
   being refreshed and expire after the report TTL.
+- SharePoint document/list journeys and business steps also report ungrouped,
+  with location choices retained as observation dimensions.
 
 Naming rule: with one tenant in the config, overall signals keep their plain names
 (`observed-success-percentage`). With more than one, every overall model query
@@ -105,7 +109,7 @@ With `logAnalytics.enabled: true`, `M365Synthetic_CL` retains `GroupIds` and `Gr
 observation. A shared account emits one observation, not one duplicate per group.
 Model queries filter memberships; administrator queries expand them only after
 event-ID deduplication. The five saved searches cover failures, impacted users,
-success rates, latency and ingestion volume. Teams arrays remain empty. See
+success rates, latency and ingestion volume. Teams and SharePoint arrays remain empty. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 
 ## Limits

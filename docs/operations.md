@@ -7,21 +7,25 @@ executed-business-step measurements. With `logAnalytics.enabled: false`, contain
 aggregate their current cycle and push health reports directly, without a log pipeline.
 With `true`, Event Hubs, optional Capture and Log Analytics retain observations and
 Azure Monitor Health Models evaluates rolling success percentages/durations with KQL.
-Workers retain no cross-cycle history or user-token cache. Ten journeys reuse three
-Container Apps (one per enabled tenant and service); the default family has four models,
-57 entities, 53 relationships and 38 business-step entities, including Exchange's
-Mail and Calendar rollup parents. Enabling Service Health adds three entities and relationships.
+Workers retain no cross-cycle history or user-token cache. The checked-in 13
+selected journeys plan four Container Apps (one per enabled tenant and service).
+The model family has five models, 75 entities, 70 relationships and 51
+business-step entities before supporting context, including Exchange's Mail and
+Calendar rollup parents. Enabled Service Health adds four entities and
+relationships. SharePoint contributes three journeys and 13 business steps;
+configuration and administrative grants do not establish live worker acceptance.
 
-Exchange, Teams, and OneDrive use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
+Exchange, Teams, OneDrive and enabled SharePoint use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
-Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry, actions/journey and tests; shared code and Node tooling also live in that project, while the single root [monitoring.config.json](../monitoring.config.json) holds all configuration, apart from the IDs that setup looks up or generates in the gitignored `.env` beside it ([details](./deployment.md#generated-ids-in-env)). In `simulation` mode, console diagnostics and observation-count previews make no live mutations or Azure calls.
+Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry and journeys; shared code and Node tooling also live in that project. The single root [monitoring.config.json](../monitoring.config.json) holds user configuration; discovered IDs live in the adjacent gitignored `.env` ([details](./deployment.md#generated-ids-in-env)). Simulation makes no live mutations or Azure calls.
 
 ## Scheduling and shutdown
 
-- Every selected Exchange, Teams and OneDrive journey runs every 300 seconds. Exchange continuous execution waits for an aligned five-minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts every five minutes. `--once` is an immediate single-cycle diagnostic. Teams/OneDrive lanes start immediately; providers retain independent schedules (60 seconds in the checked-in config).
-- All live journeys have a 240-second execution deadline for the entire journey, not each step, including OneDrive. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. Latency thresholds remain 15000 ms Degraded / 60000 ms Unhealthy, independently of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share unchanged global/per-mailbox permits (32/two); there is no Exchange probe-count ceiling.
-- Every lane bounds initialization, execution, cleanup and publication within 299 seconds. Exchange reserves 12 seconds for cleanup settlement and 12 for publication; normal worst case is 264 seconds (240 + 12 + 12), with an enclosing execution budget at most 275 seconds. Teams/OneDrive allow 12 seconds for settlement and 30 for publication; their default 252-second cycle budget plus those reserves is 294 seconds. Initialization/late starts reduce the enclosing cycle budget rather than extending the selected journey deadline or overlapping the next cycle.
+- Every selected Exchange, Teams, OneDrive and SharePoint journey runs every 300 seconds. Exchange continuous execution waits for an aligned five-minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts every five minutes. `--once` is an immediate single-cycle diagnostic. Other synthetic lanes start immediately; providers retain independent schedules (60 seconds in the checked-in config).
+- All live journeys have a 240-second execution deadline for the entire journey, not each step. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. Latency thresholds remain 15000 ms Degraded / 60000 ms Unhealthy, independently of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share unchanged global/per-mailbox permits (32/two); there is no Exchange probe-count ceiling.
+- Every lane bounds initialization, execution, cleanup and publication within 299 seconds. Exchange reserves 12 seconds for cleanup settlement and 12 for publication; normal worst case is 264 seconds (240 + 12 + 12), with an enclosing execution budget at most 275 seconds. Teams/OneDrive/SharePoint allow 12 seconds for settlement and 30 for publication; their default 252-second cycle budget plus those reserves is 294 seconds. Initialization/late starts reduce the enclosing cycle budget rather than extending the selected journey deadline or overlapping the next cycle.
 - Non-Exchange capacity validation covers every selected lane, even small Teams cohorts, and rejects budgets that cannot cover all attempts or fit the cadence. The checked-in Teams lane runs six pair/target attempts at concurrency six; each OneDrive lane runs two accounts at default concurrency three. This is bounded capacity planning, not live throughput proof.
+- SharePoint has independent document, version-history and list-item lanes, each with a 240-second journey deadline, 300-second cadence, default concurrency three and 252-second cycle budget. Review real completion/cleanup before increasing targets.
 - `exchange-cycle-capacity` emits expected/started/completed/timed-out/inconclusive attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
@@ -40,6 +44,15 @@ Do not enable live mode against real-user resources.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no CLI, secret or host-identity fallback. Live managed-identity runs need an Azure host with that identity attached; follow the [tenant-binding requirements](./cross-tenant-access.md).
 5. Set `execution.mode: "live"` and independently opt in with `deployment.enableLiveProbes: true`; hosted workers then receive `ENABLE_LIVE_M365=true` and a local run exports it. See the [live gates](./deployment.md#live-execution-gates).
 6. Use `--once` first and inspect operation and cleanup outcomes.
+
+SharePoint requires manually prepared dedicated site/library/test-folder/list
+fixtures and application `Sites.Selected` plus an administrator-approved site
+`write` grant on the explicit worker UAMI. Run read-only
+`npm run setup:ids -- -SharePointOnly` on that identity's approved host to save
+existing bindings, then verify all three real flows. No delegated sign-in,
+certificate, secret, broad-permission fallback or automatic grants are available.
+See [SharePoint permissions](./sharepoint-permissions.md). Keep it
+disabled with empty targets until those approvals and resources exist.
 
 Teams defaults to an installed managed-identity bot in a dedicated standard channel.
 Supply the root `botPairs` inventory and generated per-pair client-ID bindings,
@@ -112,7 +125,8 @@ remain below 99%/95% success or above 15/60 seconds mean duration.
 Each observation retains tenant, account, journey, step, duration, failure category,
 safe error detail, run/correlation IDs and reporting-group arrays. Group membership
 does not duplicate observations. Queries preserve tenant separation and user-named
-journey aggregation groups; Teams stays ungrouped. Configured target-region labels
+journey aggregation groups; Teams and SharePoint stay ungrouped. SharePoint adds
+site/library/folder/list dimensions, not a synthetic-user identity. Configured target-region labels
 are separate from `ExecutionRegion` and do not establish backend placement.
 
 Publication remains bounded to 12 seconds for Exchange and 30 seconds for other
@@ -165,7 +179,7 @@ earlier genuine service failure remains a failed journey even if cleanup also fa
 apply to raw observations. Log Analytics can now calculate percentiles and weighted
 cross-cycle statistics from individual attempts rather than precomputed means.
 In enabled logging mode, the independent freshness alert uses two service intervals plus three minutes
-(780 seconds / 13 minutes for each of Exchange, Teams and OneDrive). Evaluation runs
+(780 seconds / 13 minutes for each enabled service at the 300-second cadence). Evaluation runs
 every minute, so allow up to another minute plus ingestion, alert-processing and
 notification lag beyond that observation-silence target. The unchanged 15-minute
 model window/direct-report TTL exceeds the 300-second cadence plus the 299-second
@@ -213,15 +227,19 @@ The following legacy attribute names correspond to the normalized columns:
 | Attribute | Meaning |
 | --- | --- |
 | `monitoring.tenant` | `TenantAlias`: the tenant alias in the config |
-| `monitoring.user` | `SyntheticUser`: the configured Exchange mailbox or OneDrive UPN; empty for Teams bots |
+| `monitoring.user` | `SyntheticUser`: the configured Exchange mailbox or OneDrive UPN; empty for Teams bots and SharePoint locations |
 | `monitoring.peer` | Not populated by single-user Exchange journeys |
-| `monitoring.group`, `monitoring.group_name` | `GroupIds`/`GroupNames`: aligned arrays of user-defined groups; empty for Teams |
+| `monitoring.group`, `monitoring.group_name` | `GroupIds`/`GroupNames`: aligned arrays of user-defined groups; empty for Teams and SharePoint |
 | `monitoring.group_duplicate` | Not needed in the new table: one event carries all memberships |
 | `probe.service`, `probe.journey`, `probe.step`, `probe.step_status`, `probe.diagnostic_category` | What ran, and how the step ended |
 | `probe.detail` | Failed steps only: a short hint from the integration error, truncated to 200 characters, never message or Graph content |
 | `probe.http_status`, `probe.failed_step` | Result rows only |
 | `probe.correlation_id`, `probe.id`, `probe.mode`, `probe.success`, `probe.duration_ms` | Correlation, target, mode and outcome |
 
+For SharePoint, filter `Service == "sharepoint"` and inspect
+`Dimensions.siteUrl`, `Dimensions.libraryName`, `Dimensions.folderName` and
+`Dimensions.listName`. `TestAccountId` is the derived location key, not a user.
+Keep these approved resource URLs/names within the same private diagnostic boundary.
 Ingestion and model evaluation are asynchronous. With the checked-in 15-minute
 signal window, a failure can influence health until it ages out. Queries do not
 silently convert missing data to Healthy. Records contain dedicated test-account
@@ -234,7 +252,7 @@ of employee UI, real-time message receipt or received audio.
 
 Simulation keeps providers off; live examples enable stable Service Health, with beta still separately gated. `serviceHealth: true` requires `ServiceHealth.Read.All` and reads v1.0 health overviews/issues. Its independent provider lane runs despite missing synthetic targets/bot credentials. Approved operational/degradation/interruption states report directly to the product's single suppressed `${service}-service-health` entity: **100 healthy, 50 degraded, 0 interruption**. Stable status, issues and approved beta signals are all reported on that one entity, ungrouped; there are no per-API child entities. OneDrive matches its distinct `OneDriveForBusiness` / `Microsoft OneDrive` entry, not SharePoint. Failed/missing/stale/unapproved states produce Unknown without a value; diagnostic counts without thresholds stay Unknown even when numeric. Supporting context never changes journey evidence or Experience rollup. See [destinations and units](./provider-monitoring.md).
 
-Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_SERVICE_ACTIVITY=true` and approved `ServiceActivity-Exchange.Read.All`/`ServiceActivity-Teams.Read.All`. Exchange supports nine functions and Teams five. Explicit customer thresholds report latest fresh buckets directly on suppressed Service Health; raw counts/QoE-coverage/UDP otherwise remain diagnostic, never automatic call quality or Experience/journey evidence. Beta remains unsupported for production; OneDrive has no beta collector. See [provider setup and deployment approval](./provider-monitoring.md).
+Exchange/Teams `serviceActivity.enabled: true` additionally needs `ENABLE_BETA_SERVICE_ACTIVITY=true` and approved `ServiceActivity-Exchange.Read.All`/`ServiceActivity-Teams.Read.All`. Exchange supports nine functions and Teams five. Explicit customer thresholds report latest fresh buckets directly on suppressed Service Health; raw counts/QoE-coverage/UDP otherwise remain diagnostic, never automatic call quality or Experience/journey evidence. Beta remains unsupported for production; OneDrive and SharePoint have no beta collector. SharePoint's stable overview is `SharePoint` / `SharePoint Online`, distinct from OneDrive. See [provider setup and deployment approval](./provider-monitoring.md).
 
 Each source runs per independent provider-lane cycle (`providerIntervalSeconds`, default 60), bounded to 30 seconds and five exact-origin/version/path pages. The whole provider cycle is bounded below its minute slot. Check `m365-provider-collection-failed` and `service-provider-summary.providers.failed`; successful journeys can coexist with provider failures. Missing/invalid/stale provider samples report Unknown, distinct from synthetic timeout failure/Unhealthy. Simulation skips sources without fabricated Microsoft health. No provider value enters synthetic/step measurements.
 
@@ -253,14 +271,15 @@ See the [provider endpoints, diagnostics and references](./provider-monitoring.m
 ## Timing, retries, and cleanup
 
 - A non-Exchange cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 252); all selected attempts plus cleanup/publication must fit the 300-second cadence, not a longer TTL.
-- By default three probes execute concurrently **per lane** for Teams and OneDrive (`maxConcurrentProbes`, configurable 1-20); the checked-in Teams lane uses six for its six attempts. Exchange starts all selected attempts together and limits actual HTTP requests instead. Runtime Graph requests have a separate bounded request/retry budget. Administrator bulk setup uses its own request/retry budget.
+- By default three probes execute concurrently **per lane** for Teams, OneDrive and SharePoint (`maxConcurrentProbes`, configurable 1-20); the checked-in Teams lane uses six for its six attempts. Exchange starts all selected attempts together and limits actual HTTP requests instead. Runtime Graph requests have a separate bounded request/retry budget. Administrator bulk setup uses its own request/retry budget.
 - Genuine expiry of a journey's execution deadline is a failed attempt. Enclosing worker/cycle cancellation and cleanup-only failure are Unknown. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. External shutdown does not start queued work.
 - Draft creation/send are not retried after ambiguous responses. Reads/idempotent deletes can retry; long Retry-After requests fail explicitly rather than retry too soon.
 - `durationMs` is total attempt time **through cleanup**, distinct from confirmed delivery time.
 - Exchange `sendDurationMs` measures the Graph draft-send request until response/error, excluding draft creation, polling, and cleanup. Failed sends retain timing; no attempted send means no send sample.
 - Exchange `deliveryDurationMs` runs from send initiation to matching Inbox observation, including send-request/polling latency, not exact transport latency.
 - Teams measures Connector request time and Graph-confirmed publication time separately. Only the bot's known created activity is deleted; ambiguous sends are not retried.
-- OneDrive verifies file bytes and actual prior-version content. File/version, attendee-calendar and channel-message pagination are bounded to their exact approved collections.
+- OneDrive and SharePoint verify exact file bytes and actual prior-version content. SharePoint also verifies persisted list Title revisions. File/version/list, attendee-calendar and channel-message pagination are bounded to their exact approved collections.
+- SharePoint validates pinned site/library/folder/list bindings before mutation. It deletes only the current nonce folder or Title-correlated item, never the configured roots. A definite folder-name conflict establishes no ownership; ambiguous creates are reconciled by exact nonce only.
 - Cleanup uses only known IDs or exact unguessable correlation subjects/paths. Never purge by date, mailbox, or library.
 - A delivery arriving after cleanup can leave an artifact. Agree on an ownership-checked review/retention process before scale-out.
 - An ambiguous Teams creation response can leave an activity without a cleanup ID. This is reported as cleanup failure; the owner must reconcile it before repeatedly running the test.

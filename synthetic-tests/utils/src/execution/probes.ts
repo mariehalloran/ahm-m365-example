@@ -72,7 +72,7 @@ export const simulate = async (
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
   result.durationMs = scenario === "slow" ? 30000 : scenario === "timeout" ? 65000 : 3200;
   result.diagnosticCategory = scenario === "failed"
-    ? metadata.service === "onedrive" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
+    ? metadata.service === "onedrive" || metadata.service === "sharepoint" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
     : scenario === "timeout" ? "delivery-timeout" : null;
   result.diagnosticContext.testStage = "simulated";
   if (!retainArtifacts) result.diagnosticContext.cleanupSucceeded = true;
@@ -85,6 +85,8 @@ export const simulate = async (
     "exchange-recurring-calendar": "update-event",
     "teams-channel-message": "post-message", "teams-call": "place-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
+    "sharepoint-roundtrip": "verify-document-content", "sharepoint-versions": "read-prior-document-version",
+    "sharepoint-list-item": "verify-list-item",
   } as const;
   const completionSteps = {
     "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
@@ -92,6 +94,8 @@ export const simulate = async (
     "exchange-recurring-calendar": "verify-event",
     "teams-channel-message": "confirm-reply", "teams-call": "end-call",
     "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
+    "sharepoint-roundtrip": "verify-document-content", "sharepoint-versions": "read-prior-document-version",
+    "sharepoint-list-item": "verify-list-item",
   } as const;
   const failedStep = scenario === "failed" ? failureSteps[probe.type]
     : scenario === "timeout" ? completionSteps[probe.type] : undefined;

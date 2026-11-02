@@ -51,13 +51,15 @@ Each existing service container has an **independent provider lane**. It does no
 `serviceMessages` defaults **off**, independently of stable health and beta.
 Messages-only selection inherits the same provider app and uses the same worker
 and provider lane. The checked-in test configuration enables messages for all
-three products and sets the provider cadence to 60 seconds. Synthetic schedules
+four selected products and sets the provider cadence to 60 seconds. SharePoint
+keeps those stable selections/cadence; missing separately approved provider
+access reports Unknown and never triggers an automatic grant. Synthetic schedules
 are unchanged. Selected beta functions share that cadence and are polled more
 often; their aggregation windows and health mappings do not change.
 
 The threshold example applies to **Exchange only**; Teams may omit `thresholds` entirely. Counts and Teams percentages are diagnostic by default. Thresholds are explicit customer choices, not universal SLOs. An optional `functions` array selects unique functions for that service: up to nine for Exchange or five for Teams. Omitting it selects every supported function for that service. Beta remains **disabled by default**; enable it per service. The checked-in configuration explicitly enables all nine Exchange and five Teams functions.
 
-For **OneDrive**, enable the wanted stable health/messages switches and keep
+For **OneDrive and SharePoint**, enable the wanted stable health/messages switches and keep
 `serviceActivity.enabled: false`, with no beta `functions` or `thresholds`.
 The inherited provider app does not automatically acquire Graph permissions.
 
@@ -82,6 +84,7 @@ server-side service filters plus exact local membership checks:
 | Exchange | `Exchange Online` | `exchange-service-health` | 9 |
 | Teams | `Microsoft Teams` | `teams-service-health` | 5 |
 | OneDrive | `Microsoft OneDrive`, overview ID `OneDriveForBusiness` | `onedrive-service-health` | 0 |
+| SharePoint Online | `SharePoint Online`, overview ID `SharePoint` | `sharepoint-service-health` | 0 |
 
 Issue filtering is `service eq '<service>' and (isResolved eq false or
 lastModifiedDateTime ge <window-start>)`: all unresolved issues remain visible,
@@ -96,6 +99,16 @@ retain the original service filter in every validated continuation. Five pages
 of at most 100 records and 2 MB/page are hard bounds, not a successful partial total.
 
 The parent verified the OneDrive mapping through the existing hosted identity and existing federated provider application. It is distinct from `{id: "SharePoint", service: "SharePoint Online"}`; no SharePoint alias is used. Keep the working **list** overview endpoint: the same authorized identity returned 403 for `/healthOverviews/OneDriveForBusiness`. This implementation makes no individual-ID lookup. Issues use the exact OneDrive service name. Missing tenant subscription/data or denied issue access produces sanitized Unknown diagnostics rather than a new grant, an alias or fabricated Healthy. No OneDrive beta serviceActivity endpoint has been approved or implemented.
+
+SharePoint uses that distinct existing mapping through the
+[stable overview list](https://learn.microsoft.com/en-us/graph/api/serviceannouncement-list-healthoverviews?view=graph-rest-1.0),
+exact `SharePoint Online` issue filtering and Message Center membership. Missing
+overview/subscription/permissions produces Unknown, not a OneDrive alias or
+fabricated Healthy. No SharePoint beta serviceActivity endpoint is configured
+or called. Provider permissions remain tenant-wide and separately approved;
+`Sites.Selected` synthetic access does not authorize them. SharePoint provider
+access and collection have not been verified for the newly selected worker;
+no new provider permission or federation grant is part of this integration.
 
 All activity endpoints are GETs beneath `https://graph.microsoft.com/beta/reports/serviceActivity/`:
 

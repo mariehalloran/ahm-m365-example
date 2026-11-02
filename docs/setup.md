@@ -1,4 +1,4 @@
-# Setup: Microsoft 365 test accounts and Azure access
+# Setup: Microsoft 365 test targets and Azure access
 
 Start here before the first deployment. Create dedicated test accounts, configure
 the project, grant access, then generate required service IDs and fixtures and deploy. Repeat the relevant
@@ -12,8 +12,8 @@ the workers. An Azure subscription alone does not provide Microsoft 365 accounts
 or licenses.
 
 Use the service-specific authorization guides alongside this shared runbook:
-[Exchange](./exchange-permissions.md), [Teams](./teams-permissions.md) and
-[OneDrive](./onedrive-permissions.md).
+[Exchange](./exchange-permissions.md), [Teams](./teams-permissions.md),
+[OneDrive](./onedrive-permissions.md) and [SharePoint](./sharepoint-permissions.md).
 
 Install Node.js 22 or 24, npm, Git, the Azure CLI and PowerShell 7.4+. Exchange
 administration also needs the `ExchangeOnlineManagement` PowerShell module:
@@ -106,6 +106,11 @@ Put Exchange/OneDrive user targets in
 [`targets.<groupId>.users`](./monitoring-groups.md), with `userGroupName` alongside
 each `users` array; there is no separate root group list. Supply the ungrouped Teams channel and meeting
 references and approved provider/readback app registrations where selected.
+SharePoint uses ungrouped `targets[]` with actual `siteUrl`, `libraryName`,
+`folderName` and `listName`, not licensed users or bot pairs. Keep a new
+selection disabled until [selected-site setup](#sharepoint-selected-site-setup)
+is approved; omitted SharePoint selection defaults disabled. The checked-in
+profile now selects its approved site and dedicated fixtures.
 See [what the config holds](./deployment.md#what-the-config-holds) for each field.
 The root `logAnalytics.enabled` toggle selects direct container health reports
 (`false`) or the optional Event Hub/Function/DCR/Log Analytics pipeline (`true`).
@@ -121,6 +126,9 @@ manage recipients in the action groups, not this config
 Monitor export, stable Service Health, Exchange beta Service Activity and root
 health alerts. Optional features default off when omitted, but this config is not
 an offline example. Beta collection requires separate approval.
+SharePoint selects one approved site/library/folder/list and its permanent worker
+identity. Worker-identity discovery, deployment and live acceptance remain
+separate from administrative fixture provisioning.
 
 ## What the setup helpers do
 
@@ -131,6 +139,9 @@ application permissions:
 - `npm run setup:ids` ([`setup/generate-ids.ps1`](../synthetic-tests/setup/generate-ids.ps1)):
   finds or creates the named Teams channel, and looks up both client IDs of each pair, the Teams
   calling callback URL, the meeting organizer's user ID and each OneDrive account's user ID.
+  `npm run setup:ids -- -SharePointOnly [-Tenant <alias>]` instead uses the selected
+  worker managed identity to discover existing SharePoint site/library/folder/list
+  IDs without Azure CLI administrator sign-in, creation or grants.
 - `npm run setup:reply-seeds` ([`setup/provision-reply-seeds.ps1`](../synthetic-tests/setup/provision-reply-seeds.ps1)):
   provisions the retained SELF-REPLY message each reply-mail mailbox answers.
 
@@ -145,6 +156,7 @@ grants below exist; [deployment.md](./deployment.md#generated-ids-in-env) lists 
 | --- | --- |
 | Test account creation and licensing | User Administrator; License Administrator can manage licenses separately |
 | Personal OneDrive pre-provisioning | SharePoint Administrator with a SharePoint license |
+| SharePoint site/library/list preparation and Selected-site access | SharePoint administrator/resource owner; separately authorized administrator for application consent and site permission grants |
 | 1-3 (Azure resources, identities, AcrPull) | Owner, or Contributor + User Access Administrator, on the subscription or resource group |
 | 4 (Exchange) | Exchange Organization Management, or an equivalent delegated role |
 | 5 (Entra application roles, federated credentials) | Privileged Role Administrator or Global Administrator, and Application Administrator |
@@ -152,8 +164,9 @@ grants below exist; [deployment.md](./deployment.md#generated-ids-in-env) lists 
 
 Azure roles do not confer Microsoft 365 administrator roles. Before the commands
 below, sign in with `az login` to the appropriate tenant and subscription. The
-PowerShell helpers select the configured tenant matching your current Azure CLI
-login; repeat the Microsoft 365 steps and helpers for each configured tenant.
+ordinary PowerShell helper paths select the configured tenant matching your current
+Azure CLI login; SharePoint-only discovery requires the explicit same-tenant managed
+identity instead. Repeat the Microsoft 365 steps and helpers for each configured tenant.
 
 ## 1. Resource providers and the resource group
 
@@ -331,6 +344,47 @@ installed. To fix it:
    `post-message`/`permission-failure` entries to stop appearing (see
    [Verify monitoring](#verify-monitoring)).
 
+## SharePoint: selected-site setup
+
+Follow [SharePoint permissions](./sharepoint-permissions.md) for the authorization
+boundary and the [worker reference](../synthetic-tests/sharepoint/README.md) for
+exact v1.0 endpoints. When a real target is approved:
+
+1. Manually prepare one dedicated `/sites/...` or `/teams/...` SharePoint site,
+   document library, direct child test folder and ordinary list with standard
+   `Title`. Enable at least two document versions; disable required checkout,
+   content approval and extra required columns on these fixtures. Retention and
+   protection policies must permit the approved writes/deletes.
+2. Select a same-tenant worker UAMI in `sharepoint.worker.identity`. An
+   administrator grants application `Sites.Selected` and a site-specific
+   `write` assignment to that application's client ID. The
+   [Selected-permissions overview](https://learn.microsoft.com/en-us/graph/permissions-selected-overview)
+   explains both necessary approvals and how site grants authorize drive/list
+   operations. Consent alone is insufficient. Neither runtime nor ID discovery gets
+   `Sites.ReadWrite.All`, `Files.ReadWrite.All` or `Sites.FullControl.All`.
+   Any separately approved one-time fixture provisioning uses a disposable
+   administrator managed identity/job, with just-in-time permission revoked
+   immediately afterward; it is never a worker or discovery credential.
+3. Configure the actual location names and `siteUrl` in root `sharepoint.targets`,
+   name the worker app, and enable the service in `live` mode. IDs and arbitrary
+   target keys do not belong in that block. Optional stable health/messages use
+   the separately approved provider application and worker federation, not the
+   site permission.
+4. On an approved host with the worker identity attached, explicitly set its
+   actual `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `ENABLE_LIVE_M365=true`.
+   Run `npm run setup:ids -- -SharePointOnly` from `synthetic-tests/`, adding
+   `-Tenant <alias>` for multiple tenants. It only reads existing resources and
+   saves generated `.env` bindings. It performs no delegated sign-in, automatic
+   grants, site/list/library creation or certificate/secret fallback.
+5. Review the local deploy plan before a separately approved rollout. Verify real
+   document bytes, prior-version bytes, list fields, owned-artifact cleanup and
+   reporting before recurring use. The selected fixtures and site grant are not
+   proof of worker access or healthy journeys.
+
+The ordinary `setup:ids` path also invokes SharePoint discovery when enabled,
+after its existing services' administrator lookups. `-SharePointOnly` avoids
+those unrelated administrator operations and skips all access/writes when disabled.
+
 ## 7. Generate the `.env` values and deploy
 
 Obtain administrator-approved [access](./cross-tenant-access.md) before enabling
@@ -345,6 +399,12 @@ that environment variable explicitly.
 OneDrive folder setup needs a separately approved `tenants[].services.onedrive.setup`
 identity and a suitable host. Review its plan before applying, following the
 [OneDrive setup guide](./onedrive-setup.md#plan-apply-and-rerun).
+SharePoint may bootstrap generated bindings from approved fixture-provisioning
+outputs. Deploy normally, then verify read-only discovery in a disposable job
+using only the worker UAMI and its deployed immutable config Blob. The compiled
+`dist/sharepoint/src/setup-command.js` checks all four IDs without writing `.env`.
+The local `-SharePointOnly` command can also populate bindings on an approved
+worker-identity host; it is never an administrator CLI lookup or health proof.
 
 ```sh
 cd synthetic-tests

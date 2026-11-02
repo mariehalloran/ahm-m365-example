@@ -271,6 +271,85 @@
           ]
         }
       ]
+    },
+    {
+      "service": "sharepoint",
+      "displayName": "SharePoint Experience",
+      "journeys": [
+        {
+          "name": "document-library-roundtrip",
+          "entityName": "sharepoint-document-roundtrip",
+          "displayName": "Upload, reopen, verify and delete library document",
+          "steps": [
+            {
+              "name": "upload-document",
+              "displayName": "Create owned folder and upload document"
+            },
+            {
+              "name": "reopen-document",
+              "displayName": "Enumerate and download saved document"
+            },
+            {
+              "name": "verify-document-content",
+              "displayName": "Verify exact document bytes"
+            },
+            {
+              "name": "delete-document",
+              "displayName": "Delete owned artifacts and verify removal"
+            }
+          ]
+        },
+        {
+          "name": "document-versions",
+          "entityName": "sharepoint-document-versions",
+          "displayName": "Update library document and retrieve prior version",
+          "steps": [
+            {
+              "name": "write-document-revisions",
+              "displayName": "Write and verify two document revisions"
+            },
+            {
+              "name": "list-document-versions",
+              "displayName": "Enumerate persisted version history"
+            },
+            {
+              "name": "read-prior-document-version",
+              "displayName": "Download and verify prior-version bytes"
+            },
+            {
+              "name": "delete-version-document",
+              "displayName": "Delete owned artifacts and verify removal"
+            }
+          ]
+        },
+        {
+          "name": "list-item-lifecycle",
+          "entityName": "sharepoint-list-item",
+          "displayName": "Create, read, update, verify and delete list item",
+          "steps": [
+            {
+              "name": "create-list-item",
+              "displayName": "Create correlated list item"
+            },
+            {
+              "name": "read-list-item",
+              "displayName": "Read and verify saved Title"
+            },
+            {
+              "name": "update-list-item",
+              "displayName": "Update owned item's Title"
+            },
+            {
+              "name": "verify-list-item",
+              "displayName": "Reopen and verify persisted update"
+            },
+            {
+              "name": "delete-list-item",
+              "displayName": "Delete owned item and verify removal"
+            }
+          ]
+        }
+      ]
     }
   ],
   "providerActivityFunctions": {
@@ -292,6 +371,7 @@
       "getAudioStreamQoEMetricsForTeams",
       "getAudioStreamsOverUdpMetricsForTeams"
     ],
-    "onedrive": []
+    "onedrive": [],
+    "sharepoint": []
   }
 }

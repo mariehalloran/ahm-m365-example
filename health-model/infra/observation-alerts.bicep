@@ -6,7 +6,7 @@ param workspaceName string = 'law-${projectConfig.healthModel.name}'
 
 var actionGroups = projectConfig.healthModel.alertActionGroupIds
 var expected = flatten(map(projectConfig.tenants, tenant => map(
-  filter(['exchange', 'teams', 'onedrive'], service => tenant.services[service].enabled && tenant.services[service].execution.mode == 'live' && !empty(filter(items(tenant.services[service].scenarios), scenario => scenario.value))),
+  filter(['exchange', 'teams', 'onedrive', 'sharepoint'], service => (tenant.services[?service].?enabled ?? false) && (tenant.services[?service].?execution.?mode ?? '') == 'live' && !empty(filter(items(tenant.services[?service].?scenarios ?? {}), scenario => scenario.value))),
   service => {
     tenant: tenant.id
     service: service

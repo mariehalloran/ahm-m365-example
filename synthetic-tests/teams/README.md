@@ -11,14 +11,17 @@ This service validates Teams messaging and calling experiences using paired bots
 
 ## Required setup
 
-1. Follow [Teams permissions and setup](../../docs/teams-permissions.md) and configure ungrouped targets in root `monitoring.config.json`.
+1. Follow [Teams permissions and setup](../../docs/teams-permissions.md) and configure ungrouped targets in root [monitoring.config.json](../../monitoring.config.json).
 2. Select every managed-identity bot pair (two independent pairs in the checked-in config), install each primary bot's app, configure federated readback and the signed calling callback. No bot secrets or employee sign-in are used.
 3. Resolve generated IDs:
    ```sh
    npm run setup:ids
    ```
 
-## Run locally
+## Run one cycle
+
+Run from [synthetic-tests/](../) on a host with the configured managed identities
+for live execution.
 
 ```sh
 npm run teams -- --once

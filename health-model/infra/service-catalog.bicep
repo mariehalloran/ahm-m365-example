@@ -26,7 +26,7 @@ func getJourneyGroups(journeys JourneyDefinition[]) JourneyGroupDefinition[] =>
 
 @export()
 type ServiceDefinition = {
-  service: 'exchange' | 'teams' | 'onedrive'
+  service: 'exchange' | 'teams' | 'onedrive' | 'sharepoint'
   displayName: string
   journeys: JourneyDefinition[]
 }

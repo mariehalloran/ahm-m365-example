@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { probeServices, stepNames, targetServices, testTypes, type StepName, type TestType } from "./catalog.js";
+import { sharePointSiteUrlSchema } from "./configuration/sharepoint-target.js";
 export { journeyStepEntities, probeServices, stepNames, testTypes } from "./catalog.js";
 export type { StepName, TestType } from "./catalog.js";
 
@@ -20,10 +21,10 @@ export function isInconclusiveCategory(category: DiagnosticCategory | null | und
 export const maxServiceTargets = 1000;
 export const maxOneDriveTargets = maxServiceTargets;
 export const serviceProbeLimits = Object.fromEntries(
-  (["exchange", "teams", "onedrive"] as const).map(service => [
+  (["exchange", "teams", "onedrive", "sharepoint"] as const).map(service => [
     service, testTypes.filter(type => probeServices[type].service === service).length * maxServiceTargets,
   ]),
-) as Record<"exchange" | "teams" | "onedrive", number>;
+) as Record<"exchange" | "teams" | "onedrive" | "sharepoint", number>;
 // Exchange journeys wait on several mailbox/calendar propagation delays inside their deadline, so they poll
 // finely; a 2-second interval alone costs about a second per wait and left calendar journeys at the cap.
 export const exchangePollIntervalMilliseconds = 500;
@@ -145,6 +146,11 @@ export const probeSchema = z.object({
   replySeed: replySeedSchema.optional(),
   driveId: z.string().min(1).optional(),
   folderId: z.string().min(1).optional(),
+  siteUrl: sharePointSiteUrlSchema.optional(),
+  siteId: z.string().min(1).max(300).optional(),
+  libraryName: z.string().trim().min(1).max(255).optional(),
+  listName: z.string().trim().min(1).max(255).optional(),
+  listId: z.string().uuid().optional(),
   tenantId: z.string().uuid().optional(),
   userPrincipalName: z.string().email().optional(),
   userId: z.string().uuid().optional(),

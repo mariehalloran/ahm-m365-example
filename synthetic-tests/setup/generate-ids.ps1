@@ -3,7 +3,8 @@
 .SYNOPSIS
     Looks up and writes to .env the IDs that are only known once the one-time setup in docs/setup.md is done: the
     Teams channel ID (creating the named channel if it does not exist yet), both client IDs of each Teams bot pair, the
-    Teams calling callback URL, the meeting organizer's user ID and each OneDrive account's user ID.
+    Teams calling callback URL, the meeting organizer's user ID, each OneDrive account's user ID and existing
+    SharePoint site/library/folder/list IDs. SharePoint discovery uses the selected managed identity, never Azure CLI sign-in.
 
 .DESCRIPTION
     Run after completing docs/setup.md and before `npm run deploy`:
@@ -13,10 +14,32 @@
 
     It only fills in what is missing, so running it again is safe. It never writes to monitoring.config.json.
 #>
-param([string]$Config = (Join-Path $PSScriptRoot '../../monitoring.config.json'))
+param(
+    [string]$Config = (Join-Path $PSScriptRoot '../../monitoring.config.json'),
+    [switch]$SharePointOnly,
+    [string]$Tenant
+)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
+
+# Runs read-only SharePoint discovery without the other services' administrator Azure CLI session.
+function Resolve-SharePointIds([string]$File, [string]$TenantAlias) {
+    $arguments = @('--import', 'tsx', (Join-Path $PSScriptRoot '../sharepoint/src/setup-command.ts'), '--config', $File)
+    if ($TenantAlias) { $arguments += @('--tenant', $TenantAlias) }
+    Push-Location (Join-Path $PSScriptRoot '..')
+    try {
+        & node @arguments
+        if ($LASTEXITCODE -ne 0) { throw 'SharePoint ID discovery failed; no resources or permissions were created.' }
+    }
+    finally { Pop-Location }
+}
+
+if ($SharePointOnly) {
+    Resolve-SharePointIds (Resolve-Path $Config).Path $Tenant
+    return
+}
+if ($Tenant) { throw '-Tenant is supported only with -SharePointOnly; other setup IDs use the administrator Azure CLI tenant.' }
 
 $project = Read-MonitoringConfig $Config
 $tenant = Select-ConfiguredTenant $project.Document
@@ -73,6 +96,10 @@ if ($onedrive.enabled -ne $false -and $onedrive.execution.mode -eq 'live') {
         $user = Invoke-Graph GET "/users/$($target.userPrincipalName)`?`$select=id"
         Set-Binding $project.EnvFile $bindings (& $key (Get-AccountTargetId $target.userPrincipalName) 'USER_ID') $user.id
     }
+}
+
+if ($tenant.services.sharepoint.enabled -eq $true -and $tenant.services.sharepoint.execution.mode -eq 'live') {
+    Resolve-SharePointIds $project.File $tenant.id
 }
 
 Write-Host "`nDone. Next: npm run onedrive:setup (if OneDrive is selected), npm run setup:reply-seeds (if reply-mail is selected), then npm run deploy."

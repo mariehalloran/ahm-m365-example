@@ -22,7 +22,7 @@ import {
   CLEANUP_GRACE_MS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_INTERVAL_SECONDS, PUBLICATION_TIMEOUT_MS, SLOT_MARGIN_MS,
 } from "./budgets.js";
 
-const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
+const usage = "Usage: npm run <exchange|teams|onedrive|sharepoint> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
 
 export function parseWorkerArguments(args: readonly string[]) {
   let config: string | undefined;

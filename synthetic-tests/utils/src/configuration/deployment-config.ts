@@ -81,7 +81,7 @@ export const deploymentSettingsSchema = z.object({
   commandTimeoutSeconds: z.number().int().min(30).max(7200).default(1800),
   rolloutTimeoutSeconds: z.number().int().min(30).max(1800).default(300),
   retireEntities: z.array(z.object({
-    service: z.enum(["exchange", "teams", "onedrive"]),
+    service: z.enum(["exchange", "teams", "onedrive", "sharepoint"]),
     entityName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,258}[a-zA-Z0-9]$/),
   }).strict()).max(100).default([]),
   stateDirectory: z.string().regex(/^\.[a-z][a-z0-9-]{0,60}$/).default(".monitoring-deployment"),

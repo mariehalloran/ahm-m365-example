@@ -160,7 +160,8 @@ async function sourceFiles(directory: string): Promise<string[]> {
 export async function sourceFingerprint(): Promise<string> {
   const files: string[] = [];
   for (const directory of ["health-model/infra", "health-model/queries", "synthetic-tests/infra", "synthetic-tests/utils/src",
-    "synthetic-tests/exchange/src", "synthetic-tests/teams/src", "synthetic-tests/onedrive/src", "synthetic-tests/ingestion"]) {
+    "synthetic-tests/exchange/src", "synthetic-tests/teams/src", "synthetic-tests/onedrive/src",
+    "synthetic-tests/sharepoint/src", "synthetic-tests/ingestion"]) {
     files.push(...await sourceFiles(directory));
   }
   files.push(...["package.json", "package-lock.json", "Dockerfile", ".dockerignore", "tsconfig.json", "tsconfig.build.json"]
@@ -305,7 +306,7 @@ async function verifyBot(run: DeploymentRun, botId: string | undefined, identity
 async function planRetirements(run: DeploymentRun): Promise<Retirement[]> {
   const { subscriptionId, resourceGroup, name } = run.prepared.document.healthModel;
   const retirements: Retirement[] = [];
-  for (const service of ["exchange", "teams", "onedrive"] as const) {
+  for (const service of ["exchange", "teams", "onedrive", "sharepoint"] as const) {
     const names = run.prepared.settings.retireEntities.filter(entry => entry.service === service).map(entry => entry.entityName);
     if (!names.length) continue;
     const modelPath = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CloudHealth/healthmodels/${name}-${service}`;

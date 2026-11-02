@@ -4,6 +4,10 @@ import { probeSchema, type TestType } from "../contracts.js";
 // Keep remote fixture/folder ownership checks in their existing journey steps, not worker-wide validation.
 const exchange = probeSchema.required({ mailbox: true });
 const oneDrive = probeSchema.required({ userId: true, userPrincipalName: true, folderName: true });
+const sharePoint = probeSchema.required({
+  siteUrl: true, siteId: true, libraryName: true, folderName: true, listName: true,
+});
+const sharePointDocument = sharePoint.required({ driveId: true, folderId: true });
 const channel = probeSchema.required({
   tenantId: true,
   teamId: true,
@@ -33,9 +37,14 @@ export const liveProbeSchema = z.discriminatedUnion("type", [
   oneDrive.extend({ type: z.literal("onedrive-roundtrip") }),
   oneDrive.extend({ type: z.literal("onedrive-appfolder") }),
   oneDrive.extend({ type: z.literal("onedrive-versions") }),
+  sharePointDocument.extend({ type: z.literal("sharepoint-roundtrip") }),
+  sharePointDocument.extend({ type: z.literal("sharepoint-versions") }),
+  sharePoint.required({ listId: true }).extend({ type: z.literal("sharepoint-list-item") }),
 ]);
 
 export type LiveProbe = z.infer<typeof liveProbeSchema>;
 type LiveProbeByType = { [Type in TestType]: Extract<LiveProbe, { type: Type }> };
 export type LiveProbeFor<Type extends TestType = TestType> = LiveProbeByType[Type];
 export type OneDriveProbe = LiveProbeFor<"onedrive-roundtrip" | "onedrive-appfolder" | "onedrive-versions">;
+export type SharePointProbe = LiveProbeFor<"sharepoint-roundtrip" | "sharepoint-versions" | "sharepoint-list-item">;
+export type SharePointDocumentProbe = LiveProbeFor<"sharepoint-roundtrip" | "sharepoint-versions">;

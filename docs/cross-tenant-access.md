@@ -8,7 +8,8 @@
 2. Approve dedicated Exchange/OneDrive test accounts and bot-only Teams resources.
    The test accounts own mailboxes/drives; Teams participants are selected
    managed-identity bots. A licensed organizer prepares the meeting but does not
-   answer synthetic calls.
+   answer synthetic calls. SharePoint uses approved site/library/folder/list
+   fixtures, not a user account.
 3. Edit root [`monitoring.config.json`](../monitoring.config.json). Keep
    `graphAuthentication` and `healthReportAuthentication` as `managed-identity`
    in each service's `execution` block. `deployment.azureTenantId` defaults to
@@ -24,14 +25,17 @@
    | Exchange | [Mailbox-scoped application RBAC](./exchange-permissions.md#exchange-application-rbac), without tenant-wide Entra mail/calendar grants |
    | Teams | [Managed-identity bot pairs and readback](./teams-permissions.md); install each primary app and approve calling separately for every participating UAMI |
    | OneDrive | [Selected-folder and AppFolder permissions](./onedrive-permissions.md), with separate transient provisioning authority for [bulk setup](./onedrive-setup.md) |
+   | SharePoint | [Application `Sites.Selected` and site-scoped write](./sharepoint-permissions.md); read-only ID discovery uses the same selected worker UAMI |
    | Provider context | [Read-only provider application and federation](./provider-monitoring.md), independent of synthetic permissions |
    | Azure reporting | [Configuration/reporting roles](./deployment.md#identity-and-permissions), plus separately approved entity-scoped [annotation access](./provider-monitoring.md#notice-update-data-annotations) when selected |
 
 6. Follow the shared [`docs/setup.md`](./setup.md) for administrator actions,
    including manual mailbox-scope maintenance and Teams app installation. Run
    `npm run setup:ids`, `npm run setup:reply-seeds` when SELF-REPLY is selected,
-   and the separately approved OneDrive setup job. Generated IDs stay in the
-   adjacent gitignored [`.env`](./deployment.md#generated-ids-in-env).
+   and the separately approved OneDrive setup job. SharePoint-only discovery is
+   `npm run setup:ids -- -SharePointOnly` on the same-tenant worker-identity host.
+   Generated IDs stay in the adjacent gitignored
+   [`.env`](./deployment.md#generated-ids-in-env).
 7. After allowed/denied access checks, select each approved `worker.identity`,
    set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove
    `deployment.stage` (default `workers`) and deploy. Verify actual operations,
@@ -57,6 +61,8 @@ Microsoft 365 tenant. Do not relabel a UAMI's `AZURE_TENANT_ID` or assume changi
 Tenant-binding guards reject unsupported combinations before credential use.
 An approved cross-tenant extension requires implementation and validation beyond
 this documentation; there is no key-upload workaround in this setup path.
+SharePoint requires the selected same-tenant managed identity for both runtime
+and discovery; it has no CLI, delegated, certificate or secret fallback.
 
 ## Several tenants in one config
 
@@ -75,4 +81,5 @@ together; old reports expire after their TTL.
 
 `npm run setup:ids` and `npm run setup:reply-seeds` select the configured tenant
 matching the signed-in administrator. Repeat them per tenant under its approved
-binding; they do not supply cross-tenant worker authentication.
+binding; they do not supply cross-tenant worker authentication. SharePoint-only
+discovery instead selects the actual managed-identity tenant.

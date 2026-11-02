@@ -83,6 +83,7 @@ export function cycleObservations(project: ProjectConfig, service: ServiceConfig
       service: service.type, journey: definition.journey, testType: result.testType,
       tenantId: project.tenant.tenantId, tenantAlias: project.tenant.id,
       testAccountId: result.testId, syntheticUser: context.user,
+      ...context.target,
       botPairId: result.diagnosticContext.botPairId,
       reportingGroupIds: groups.map(group => group.id),
       reportingGroupNames: groups.map(group => group.displayName),

@@ -11,11 +11,13 @@ const MAX_EXCERPT_INPUT_LENGTH = 65536;
 
 export const serviceHealthNames = {
   exchange: "Exchange Online", teams: "Microsoft Teams", onedrive: "Microsoft OneDrive",
+  sharepoint: "SharePoint Online",
 } as const;
 export const serviceMessageNames = {
   exchange: [serviceHealthNames.exchange],
   teams: [serviceHealthNames.teams],
   onedrive: [serviceHealthNames.onedrive, "OneDrive for Business"],
+  sharepoint: [serviceHealthNames.sharepoint],
 } as const;
 
 const date = z.string().max(64).datetime({ offset: true });

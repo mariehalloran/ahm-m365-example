@@ -1,10 +1,10 @@
 # Journey and business-step health models
 
-Health models are generated from the single root config (`monitoring.config.json`) and deployed by `npm run deploy` from `synthetic-tests/`.
+Health models are generated from the single root [monitoring.config.json](../monitoring.config.json) and deployed by `npm run deploy` from [synthetic-tests/](../synthetic-tests/).
 
 ## Model shape
 
-- Root model references one nested model per selected service: Exchange, Teams, OneDrive.
+- Root model references one nested model per selected service: Exchange, Teams, OneDrive, SharePoint Online.
 - Each service model contains:
   - Service experience root
   - Selected journey entities
@@ -27,6 +27,15 @@ Health models are generated from the single root config (`monitoring.config.json
 | OneDrive | `user-drive-roundtrip` -> `onedrive-planned-user-drive-roundtrip` |
 | OneDrive | `app-folder-lifecycle` -> `onedrive-planned-app-folder-lifecycle` |
 | OneDrive | `document-versions` -> `onedrive-planned-document-versions` |
+| SharePoint Online | `document-library-roundtrip` -> `sharepoint-document-roundtrip` |
+| SharePoint Online | `document-versions` -> `sharepoint-document-versions` |
+| SharePoint Online | `list-item-lifecycle` -> `sharepoint-list-item` |
+
+[catalog.ts](../synthetic-tests/utils/src/catalog.ts) is canonical; `npm run catalog:generate`
+projects it to [catalog.json](../synthetic-tests/utils/src/catalog.json) for Bicep. SharePoint adds three journeys and
+13 business-step children only when selected. The checked-in selection includes
+its model, root reference and worker in the deployment plan. Disabling the service
+omits them.
 
 ## Signal delivery modes
 
@@ -46,7 +55,7 @@ rows; the `inconclusive-by-group` saved search retains their diagnostics.
 
 - Exchange and OneDrive groups are defined under each service `targets` object.
 - Groups are attached as `signalAggregationGroups` on journey entities.
-- Teams stays ungrouped.
+- Teams and SharePoint stay ungrouped; site/library/list targets do not create user groups or per-target entities.
 
 ## Service Health context
 
@@ -55,17 +64,25 @@ When root `serviceHealth.enabled` is true:
 - Each service model includes one suppressed `<service>-service-health` entity.
 - Stable service health/status/count context is collected on provider lanes.
 - Optional Message Center and approved activity signals are published on the same entity.
+- SharePoint uses the stable `SharePoint` / `SharePoint Online` overview and exact issue/message service membership, separately from OneDrive.
+
+## Root health alerts
+
+`healthModel.alertActionGroupIds` references existing Azure Monitor action groups.
+Root Degraded/Unhealthy transitions use Sev 2/Sev 1 alerts; receivers remain
+operator-managed. These state-change alerts do not replace independent execution,
+report-freshness or notification checks. See [operations](../docs/operations.md).
 
 ## Deploy and validate
 
-From `synthetic-tests/`:
+From [synthetic-tests/](../synthetic-tests/):
 
 ```sh
 npm run deploy -- --plan
 npm run deploy
 ```
 
-Local validation:
+Local validation from the repository root:
 
 ```sh
 npm --prefix synthetic-tests run catalog:check
@@ -76,7 +93,7 @@ az bicep build --file synthetic-tests/infra/main.bicep --stdout > /dev/null
 
 ## Related docs
 
-- `docs/architecture.md`
-- `docs/deployment.md`
-- `docs/monitoring-groups.md`
-- `docs/provider-monitoring.md`
+- [Architecture](../docs/architecture.md)
+- [Deployment](../docs/deployment.md)
+- [Reporting groups](../docs/monitoring-groups.md)
+- [Provider monitoring](../docs/provider-monitoring.md)
