@@ -33,10 +33,10 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 Do not enable live mode against real-user resources.
 
-1. Obtain dedicated approved targets and an owner. Use the [mailbox administrator request](../MAILBOX-SYNTHETIC-ACCESS.md) for Exchange.
-2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, [`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access) extends the identity's scope to every configured mailbox, add-only.
-3. For OneDrive, use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) (not part of `npm run setup:ids` or `npm run setup:reply-seeds`) to create folders/grants and save real drive/folder IDs to `.env`; runtime has no broad permission or root-discovery fallback.
-4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no certificate, CLI, secret or host-identity fallback. Explicit Graph `certificate` mode uses `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_CERTIFICATE_PATH`; local certificate-backed health reports independently use `AZURE_*`. Protect/ignore private keys.
+1. Obtain dedicated approved targets and an owner. Use the [Exchange permissions and administrator handoff](./exchange-permissions.md).
+2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, maintain the scope for every configured mailbox by hand using [`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access).
+3. For OneDrive, follow [worker/provisioner permissions](./onedrive-permissions.md): use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) (not part of `npm run setup:ids` or `npm run setup:reply-seeds`) to create folders/grants and save real drive/folder IDs to `.env`; runtime has no broad permission or root-discovery fallback.
+4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no CLI, secret or host-identity fallback. Live managed-identity runs need an Azure host with that identity attached; follow the [tenant-binding requirements](./cross-tenant-access.md).
 5. Set `execution.mode: "live"` and independently opt in with `deployment.enableLiveProbes: true`; hosted workers then receive `ENABLE_LIVE_M365=true` and a local run exports it. See the [live gates](./deployment.md#live-execution-gates).
 6. Use `--once` first and inspect operation and cleanup outcomes.
 
@@ -46,7 +46,7 @@ with matching hosted `BOT_TENANT_ID` and `AZURE_TENANT_ID`.
 A separate same-tenant Entra application holds team-scoped
 `ChannelMessage.Read.Group`; service `teamsReadbackClientId` selects it through
 worker-UAMI federation. The manifest's `webApplicationInfo.id` references this
-application, not the UAMI. See [bot setup](../synthetic-tests/teams/README.md#primary-setup-unattended-bot).
+application, not the UAMI. See [Teams permissions and bot setup](./teams-permissions.md).
 No runtime user MFA/cache or certificate is needed. Bot-only meeting calls require
 two distinct explicit UAMIs with approved `Calls.JoinGroupCall.All` and root-owned
 `{ id, meetingThreadId, organizer }` call targets (setup looks up the organizer's user ID
@@ -69,8 +69,8 @@ password or interactive sign-in. Calling's tenant-wide application permission is
 separate approved exception, not a scoped recipient grant. Optional provider collection
 requires separately approved read-only application permissions; it never grants them.
 
-Explicit certificate-backed cross-tenant Graph is supported; generic cross-tenant
-managed-identity federation is not. The Teams readback federation above is same-tenant.
+The [documented managed-identity setup](./cross-tenant-access.md) requires tenant-local
+bindings; generic cross-tenant synthetic federation is not implemented.
 The Graph client uses public-cloud endpoints only. Do not add tenant-wide Entra
 Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for Applications.
 
@@ -160,7 +160,7 @@ still runs after mutation using an independent ten-second budget. Cleanup-only
 failure makes the journey Unknown without erasing confirmed business steps; an
 earlier genuine service failure remains a failed journey even if cleanup also fails.
 
-[Shared measurement semantics](../synthetic-tests/utils/README.md#measurement-semantics)
+[Shared measurement semantics](../synthetic-tests/utils/README.md#reporting-model)
 apply to raw observations. Log Analytics can now calculate percentiles and weighted
 cross-cycle statistics from individual attempts rather than precomputed means.
 In enabled logging mode, the independent freshness alert uses two service intervals plus three minutes
@@ -173,8 +173,8 @@ publication-loss detection remains an operational acceptance requirement in dire
 Root-configured `healthModel.alertActionGroupIds` connects existing Azure Monitor
 action groups to the main model's root: Degraded alerts at Sev 2 and Unhealthy at
 Sev 1. Manage recipients in those groups, not in the project configuration.
-See [root health alerts](../health-model/README.md#root-health-alerts) for deployment
-and notification checks. These state-change alerts do not replace independent
+See [deployment](./deployment.md#deploy-with-one-command) and
+[notification checks](#enterprise-reliability-acceptance-gate). These state-change alerts do not replace independent
 worker/report-freshness monitoring or prove notification delivery.
 
 ## Log Analytics for administrators
@@ -243,7 +243,7 @@ active counts; an empty annotation interval is not proof of no ongoing incident.
 Count diagnostics distinguish no unseen changes from unavailable sources. See
 [timeline bounds and permissions](./provider-monitoring.md#notice-update-data-annotations).
 
-See the [strict schema, limits, diagnostics and first-party references](../synthetic-tests/utils/README.md#optional-provider-collectors). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply diagnostic retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
+See the [provider endpoints, diagnostics and references](./provider-monitoring.md#exact-endpoints-and-units). Provider issue metadata/history is tenant-sensitive approved context, not email/channel/file content; apply diagnostic retention and access controls. Do not sum overlapping report windows as request counts. There is no watermark/checkpoint or deduplication guarantee.
 
 ## Timing, retries, and cleanup
 
@@ -310,6 +310,6 @@ For higher availability, evaluate independently placed probe instances with expl
 
 Stateless, in-memory aggregation/publication cannot preserve every result through a crash/network partition. Missing-data detection and redundant observation reduce blind spots but do not reconstruct lost samples. If a future requirement demands durable lossless delivery, it conflicts with an entirely stateless no-outbox worker and needs an explicit architecture decision.
 
-Before operational sign-off, deliberately test process termination, an alive-but-stalled probe, bad credentials/certificate expiry, denied health-report ingestion, stale/expired reports, broken cross-model references, and a disabled/broken alert path. Measure detection, notification, recovery, duplicates, and gaps. Keep a named owner, escalation, runbook, and tested manual disablement procedure.
+Before operational sign-off, deliberately test process termination, an alive-but-stalled probe, removed identity/federation grants, denied health-report ingestion, stale/expired reports, broken cross-model references, and a disabled/broken alert path. Measure detection, notification, recovery, duplicates, and gaps. Keep a named owner, escalation, runbook, and tested manual disablement procedure.
 
 These platform alerts, external observers, redundant deployments, and notification tests are **requirements, not deployed functionality**. Budget them separately from the earlier single-replica compute estimate.

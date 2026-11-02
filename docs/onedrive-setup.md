@@ -42,11 +42,9 @@ it does not grant application consent.
 
 Use a **separate, explicitly approved setup identity**. Application-based setup
 needs Graph `Files.ReadWrite.All`, which is tenant-wide and belongs only to the
-provisioning identity, never the runtime worker. Certificate or managed-identity
-authentication supports unattended provisioning after approval. An explicit
-Azure CLI operator mode can instead use an existing authorized administrator
-session with suitable delegated file access. Global/SharePoint administrator
-roles alone do not add Graph file permissions.
+provisioning identity, never the runtime worker. Use managed-identity authentication
+on the approved Azure host. Global/SharePoint administrator roles alone do not add
+Graph file permissions.
 
 Setup creates no privileged application, consent, licenses or Azure role
 assignments. Obtain those approvals through your normal administration pipeline;
@@ -104,18 +102,12 @@ Select the provisioning credential in the tenant's OneDrive service block of
 }
 ```
 
-`authentication` is `managed-identity` (requires `setupClientId`, no certificate or
-key material) for an approved managed identity attached to the host running the
-command, `certificate` (requires `setupClientId` and `certificatePath`; avoid this —
-it means a private key file exists on disk and must be stored and rotated securely)
-for environments that cannot attach a managed identity, or `azure-cli` (neither) for
-an already-authorized operator session. There is no credential fallback.
-Managed-identity/certificate setup refuses the worker client ID as the setup
-identity, and `workerClientId` must match `worker.identityClientId` when that is set.
-**Prefer `managed-identity`**: no certificates, keys or passwords ever exist on disk.
-Azure CLI sessions commonly lack delegated `Files.ReadWrite.All` consent and fail
-with Graph 403s unless that consent was separately granted tenant-wide, which is
-broader than this setup needs — use managed-identity instead of widening CLI consent.
+`authentication: "managed-identity"` requires `setupClientId` and an approved
+managed identity attached to the host running the command. No certificate, key or
+password is used, and there is no credential fallback. Setup refuses the worker
+client ID as the setup identity; `workerClientId` must match
+`worker.identityClientId` when that is set. Use the job below rather than widening
+an operator's Azure CLI consent or adding standing worker permissions.
 
 ### Run with a managed identity
 
@@ -148,8 +140,8 @@ using the same worker image, rather than from a workstation:
    the config and `.env` text as the job's command input. Review the plan (omit
    `--apply`) before applying, exactly as in a local run.
 
-4. Delete the job execution and **revoke the `Files.ReadWrite.All` grant** right after
-   a successful apply — delete the app role assignment created in step 2. The setup
+4. Delete the disposable job and **revoke the `Files.ReadWrite.All` grant** after
+   the plan/apply, including failure: delete the app role assignment created in step 2. The setup
    identity is left with zero standing Graph permissions between runs; only `AcrPull`
    persists, which is low-risk read-only registry access. Re-grant `Files.ReadWrite.All`
    only when about to provision again.
@@ -188,7 +180,7 @@ ordinary permission/provisioning failures. Authentication or checkpoint failures
 scheduling. The summary includes `ready`,
 `planned`, `failed`, and `notStarted`; failure, interruption or incomplete work
 returns a nonzero exit status. Logs contain opaque target IDs/categories, not
-tokens, certificate contents or raw API responses.
+tokens or raw API responses.
 
 Rerun the same command after fixing the reported prerequisites. Existing folders
 and write grants are reused. Only this worker's direct read grant can be upgraded;
@@ -250,11 +242,11 @@ Setup does not deploy, restart workers, run journeys or publish health. Preview 
 `npm run deploy -- --plan`, then run `npm run deploy` again: it fills the saved `.env`
 bindings into the config it mounts in a new worker revision, rebuilding the image when
 `deployment.image.mode` is `build`
-([worker rollout](../synthetic-tests/infra/README.md#provision-and-publish)).
+([worker rollout](./deployment.md#deploy-with-one-command)).
 Confirm the ready revision uses the expected immutable image and account bindings.
 
 On an approved host, verify a real
-[single worker cycle](../synthetic-tests/README.md#prove-one-cycle-before-enabling-recurrence),
+[single worker cycle](../synthetic-tests/README.md#commands),
 owned-artifact cleanup, and actual accepted reports. Confirm fresh values on
 `onedrive-planned-user-drive-roundtrip`, `onedrive-planned-app-folder-lifecycle`,
 `onedrive-planned-document-versions` and their existing `step-1` through `step-4`

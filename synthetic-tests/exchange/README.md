@@ -6,15 +6,15 @@ This service validates mailbox and calendar flows through Microsoft Graph using 
 
 | Scenario | Summary |
 | --- | --- |
-| `send-receive-mail` | Send from sender mailbox and confirm receipt in receiver mailbox |
+| `send-receive-mail` | Send to self and confirm delivery in the same mailbox's Inbox |
 | `edit-reopen-draft` | Create draft, reopen, edit, and validate saved changes |
-| `attachment-mail` | Send mail with attachment and verify attachment metadata |
-| `reply-mail` | Reply to seeded conversation and verify response handling |
-| `recurring-calendar` | Create recurring event and verify generated instances |
+| `attachment-mail` | Send an attachment to self, download it and verify its content hash |
+| `reply-mail` | Send a SELF-REPLY to a retained self-addressed fixture and verify its correlated delivery |
+| `recurring-calendar` | Create, verify, update and delete a private recurring series without attendees |
 
 ## Required setup
 
-1. Configure Exchange targets in root `monitoring.config.json`.
+1. Follow [Exchange permissions and setup](../../docs/exchange-permissions.md) and configure dedicated mailbox targets in root `monitoring.config.json`.
 2. Run ID resolution:
    ```sh
    npm run setup:ids
@@ -54,5 +54,5 @@ Journey output includes:
 
 ## Related docs
 
-- Worker runtime: `../utils/README.md`
-- Root setup and deployment: `../../README.md`
+- Worker runtime: [shared utilities](../utils/README.md)
+- Root setup and deployment: [repository overview](../../README.md)

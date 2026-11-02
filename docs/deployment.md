@@ -401,7 +401,7 @@ The [root configuration](../monitoring.config.json) is the only file you maintai
 | `healthModel`, `serviceHealth` | Azure destination, thresholds/report TTL and optional suppressed Service Health context |
 | `logAnalytics.enabled` | The single reporting toggle: `false` for direct container health reports, `true` for the observation/KQL pipeline |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins, above |
-| `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (certificate references and, for Teams, bot names), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
+| `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (service access bindings), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
 | `tenants[].services.exchange.targets`, `….onedrive.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
 
 It holds names, choices and the few [IDs only you can supply](#what-the-config-holds),
@@ -416,11 +416,12 @@ Use an explicitly selected managed identity per service and separate
 authorization for Microsoft 365 access and health reporting.
 
 - **Exchange:** application RBAC scoped to the dedicated test mailboxes; see
-  [mailbox access](../MAILBOX-SYNTHETIC-ACCESS.md). Both the one-time approval and
+  [Exchange permissions](./exchange-permissions.md). Both the one-time approval and
   extending the scope to every configured mailbox are manual
   ([`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access)).
 - **Teams messaging:** managed-identity Bot Connector authentication and a
-  separate federated application with team-scoped Graph readback permission.
+  separate federated application with team-scoped Graph readback permission; see
+  [Teams permissions](./teams-permissions.md).
   No user sign-in, MFA, refresh-token cache or bot-to-bot delivery claim.
 - **Teams meeting:** two explicit bot identities with `Calls.JoinGroupCall.All`,
   one dedicated meeting, signed callback verification, and independent teardown
@@ -428,16 +429,17 @@ authorization for Microsoft 365 access and health reporting.
   bidirectional audio or call quality.
 - **OneDrive:** `Files.SelectedOperations.Selected` with write grants on the
   dedicated folders; app-folder operations separately use
-  `Files.ReadWrite.AppFolder`. See [OneDrive setup](../synthetic-tests/onedrive/README.md).
+  `Files.ReadWrite.AppFolder`. See [OneDrive permissions](./onedrive-permissions.md)
+  and [bulk setup](./onedrive-setup.md).
 - **Reporting:** workers have private configuration-reader and service-model report
   roles. With logging off, these publish all aggregated journey/action reports directly.
   When on, workers also have Event Hubs sender access; the Function has receiver,
   host/quarantine storage and DCR ingestion roles, and model identities query the workspace.
   The root reads its nested models in both modes.
 
-There is no silent CLI, user, certificate or credential fallback. Explicit
-certificate options for local application access remain separate from hosted
-managed-identity execution.
+There is no silent CLI, user or credential fallback. Live managed-identity runs
+need an Azure host with the selected identity attached; a laptop does not provide
+that endpoint. Follow the [tenant-binding requirements](./cross-tenant-access.md).
 
 ## Container Apps boundary
 

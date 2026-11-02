@@ -9,6 +9,7 @@ provider calls or provider reports. Synthetic journeys are unchanged.
 Microsoft documents the related advanced monitoring feature for at least 5,000
 qualifying Office/Microsoft 365 E3/E5 licenses and 50 monthly active users.
 Confirm beta API eligibility with Microsoft; consent alone does not establish it.
+These published feature minimums do not establish the cause of an observed beta 403.
 These minimums do **not** apply to stable Service Health.
 
 Each existing service container has an **independent provider lane**. It does not wait for synthetic execution and cannot change synthetic success, business-step measurements, or Experience rollup. All stable and approved beta signals for a product belong to **one** impact-suppressed `${service}-service-health` entity, reported ungrouped. There are no per-API entities or relationships. No extra container, mandatory Log Analytics workspace, or simulated live data is introduced.
@@ -224,7 +225,7 @@ The signals are plain external signals on the one supporting entity: no aggregat
 ARM can return external signal names in lowercase. Compare those names
 case-insensitively; `additionalContext.source` retains the exact Graph function name.
 
-Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Both numeric diagnostic measurements and missing-data Unknown reports retain unit context. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [schema evidence and limitation](../health-model/README.md#external-report-units-and-definitions) and [ordered migration with exact retired IDs and model inventory](../health-model/README.md#consolidating-service-health-ordered-handoff). All old worker revisions must be inactive before final child/relationship pruning.
+Units accompany **every direct report** in `additionalContext.unit`: `Percent`, `Count`, or overview `status-score` (categorical 0/50/100, not a percentage). Both numeric diagnostic measurements and missing-data Unknown reports retain unit context. **Native external-report unit labels are not supported by the ingestion API**; no unsupported `dataUnit` is sent and read-only external signal definitions are not written. See [model Service Health context](../health-model/README.md#service-health-context). All old worker revisions must be inactive before final child/relationship pruning.
 
 Select the **latest complete bucket**, not an average/sum of overlapping history. Missing/invalid/duplicate/future/out-of-window data, failed source collection, or bucket age exceeding `maxAgeMinutes` produces **Unknown without a value** on that cycle. Failure categories and HTTP statuses, such as 403, remain console diagnostics and report context. The default maximum age is 60 minutes and is configurable independently of cadence. QoE/UDP interpretations remain explicit in report context even with customer thresholds. No missing-data report changes synthetic attempt success or Experience rollup.
 

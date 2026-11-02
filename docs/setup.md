@@ -241,7 +241,7 @@ principal (`az ad sp show --id <principalId>` or `az identity show ... --query p
 | Identity | Role | When |
 | --- | --- | --- |
 | Every selected Teams pair's primary and peer UAMIs | `Calls.JoinGroupCall.All` | `scheduled-meeting` selected |
-| OneDrive worker | `Files.SelectedOperations.Selected` | OneDrive enabled |
+| OneDrive worker | `Files.SelectedOperations.Selected` | `user-drive-roundtrip` or `document-versions` selected |
 | OneDrive worker | `Files.ReadWrite.AppFolder` | `app-folder-lifecycle` selected |
 | `tenants[].providerClientId` app | `ServiceHealth.Read.All` | root `serviceHealth.enabled` and service `execution.serviceHealth` |
 | `tenants[].providerClientId` app | `ServiceMessage.Read.All` | root `serviceHealth.enabled` and service `execution.serviceMessages` |
