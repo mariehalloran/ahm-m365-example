@@ -16,7 +16,7 @@ Confirm Exchange Online provisioning/licensing with the tenant owner using the
 [test-account runbook](./setup.md#create-and-license-test-microsoft-365-accounts).
 Reporting groups do not grant mailbox access.
 
-Every selected journey runs for every mailbox on aligned **120-second boundaries**:
+Every selected journey runs for every mailbox on aligned **300-second boundaries**:
 
 | Journey | Completed operation |
 | --- | --- |
@@ -26,14 +26,14 @@ Every selected journey runs for every mailbox on aligned **120-second boundaries
 | `reply-mail` | Send and verify a SELF-REPLY to a retained received self-addressed fixture |
 | `recurring-calendar` | Create, verify, update and delete a private recurring series without attendees |
 
-With all three sending journeys selected, the nominal load is **2,160 submitted
-messages/day/mailbox**, or 64,800 per thirty days, plus the retained setup fixture,
+With all three sending journeys selected, the nominal load is **864 submitted
+messages/day/mailbox**, or 25,920 per thirty days, plus the retained setup fixture,
 message copies, draft and calendar operations. A hundred mailboxes select 500
-journey attempts every two minutes; that is requested load, not proven capacity.
+journey attempts every five minutes; that is requested load, not proven capacity.
 Agree on cadence, mail-flow restrictions, retention and an escalation owner.
 
-Each complete journey has a **60-second execution deadline**, separately bounded
-cleanup and a **15-second latency degradation threshold**. Genuine service failures
+Each complete journey has a **240-second execution deadline**, separately bounded
+cleanup and unchanged **15-second Degraded / 60-second Unhealthy latency thresholds**. Genuine service failures
 and journey deadline expiry remain failures. Worker cancellation and cleanup-only
 outcomes are Unknown without numeric success/failure samples; skipped actions are
 not failed requests.

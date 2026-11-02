@@ -199,10 +199,11 @@ reconcile any uncheckpointed grants.
 
 Setup concurrency and synthetic execution concurrency are independent.
 The service's `execution` block owns `maxConcurrentProbes` (1-20, default 3) and
-`cycleTimeoutSeconds` (1-86,400, default 170). Every selected account executes
-every selected journey. Up to 1,000 accounts/3,000 OneDrive attempts are supported;
-health reports remain aggregated by the same journey/business-step IDs, not
-per-account entities.
+`cycleTimeoutSeconds` (default 252). Every selected account executes every selected
+journey every 300 seconds with a 240-second whole-journey deadline. Setup/inventory
+can handle hundreds of accounts, but runtime admission must also fit that fixed
+cadence; a large inventory is not proof of execution capacity. Health reports remain
+aggregated by the same journey/business-step IDs, not per-account entities.
 
 Live configuration requires each lane's cycle budget to cover:
 
@@ -210,28 +211,27 @@ Live configuration requires each lane's cycle budget to cover:
 ceil(selected lane attempts / maxConcurrentProbes) * (lane timeoutSeconds + 12)
 ```
 
-For **500 accounts**, three separate 120-second lanes and concurrency 20, each
-lane needs at least `ceil(500 / 20) * 132 = 3,300` seconds. For example, set
-these fields in `tenants[].services.onedrive.execution`:
+The cycle budget plus 12 seconds of cleanup settlement and 30 seconds of publication
+must also fit the 299-second whole-cycle envelope. Thus each lane must start all
+selected attempts in one wave: two waves already require 504 seconds before
+publication. The checked-in three lanes each run two accounts within default
+concurrency three and the 252-second cycle budget; no concurrency increase is needed.
 
-```json
-{
-  "maxConcurrentProbes": 20,
-  "cycleTimeoutSeconds": 3600
-}
-```
+For **500 accounts**, even concurrency 20 requires
+`ceil(500 / 20) * (240 + 12) = 6,300` seconds per lane, so live configuration is
+rejected. Increasing cycle timeout or TTL cannot satisfy the approved cadence.
+That cohort needs a separately approved capacity design, not additional replicas
+that duplicate work or silently skipped accounts.
 
-With 300-second lanes, set root `healthModel.signalWindowMinutes` to at least 75 for
-that example. The signal window must exceed cadence + configured cycle budget + 42 seconds
-for cleanup/publication; enabled providers have an independent
-budget too. Configuration rejects insufficient capacity or observation windows before live work.
+The unchanged 15-minute signal window exceeds cadence plus the 299-second whole-cycle
+bound; enabled providers have an independent budget too. Configuration rejects
+insufficient capacity or observation windows before live work.
 Keep existing lane assignments and the separate [live gates](./deployment.md#live-execution-gates).
 
 Concurrency is **per lane**: three simultaneous lanes at 20 can run 60 attempts.
-Lanes never overlap themselves and missed slots are skipped. This conservative
-example does **not** guarantee five-minute completion or outage detection:
-worst-case account timeouts can take nearly an hour. Do not merely extend TTL to
-hide missing progress. Measure Graph throttling, cycle duration, memory and
+Lanes never overlap themselves and missed slots are skipped, not replayed.
+These bounds do **not** guarantee live throughput or outage detection.
+Do not merely extend TTL to hide missing progress. Measure Graph throttling, cycle duration, memory and
 freshness against your detection target, and obtain approval before increasing
 traffic. The default 0.25 CPU/0.5 GiB is not a tested production sizing guarantee.
 Additional Container App replicas duplicate work; they do not shard this inventory.

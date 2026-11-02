@@ -168,6 +168,13 @@ writes a protected record (what-if results, provenance) to
 `.monitoring-deployment/<runId>/` in the repository root. The root `.gitignore`
 already excludes that default `deployment.stateDirectory`; ignore a custom one yourself.
 
+Report verification allows the longest selected start interval plus its whole-cycle
+bound, then the existing `deployment.rolloutTimeoutSeconds` allowance for ingestion
+or model visibility. With the 300-second cadence, 299-second cycle bound and default
+300-second allowance, each service's observation/direct-report check can wait
+899 seconds (14 minutes 59 seconds). Container readiness still has its separate
+300-second rollout deadline; it is not proof of completed journeys.
+
 ### The `deployment` section
 
 | Setting | Meaning |
@@ -183,7 +190,7 @@ already excludes that default `deployment.stateDirectory`; ignore a custom one y
 | `image` | `{ "mode": "build", "repository", "tag" }`, built in ACR for `linux/amd64` with the run ID appended to the tag, or `{ "mode": "existing", "reference" }`, a `registry/repository@sha256:…` digest in the configured registry |
 | `workspaceName`, `applicationInsightsName` | Optional logging-mode resource names, defaulting to `law-<healthModel.name>` and `appi-<healthModel.name>`; not created for a new direct-only deployment |
 | `retireEntities` | Optional `{ "service", "entityName" }` list of obsolete entities to delete after the rollout |
-| `commandTimeoutSeconds`, `rolloutTimeoutSeconds`, `stateDirectory` | Defaults 1800, 300 and `.monitoring-deployment` |
+| `commandTimeoutSeconds`, `rolloutTimeoutSeconds`, `stateDirectory` | Defaults 1800, 300 and `.monitoring-deployment`; rollout timeout also supplies the report-visibility allowance after the next start interval and bounded cycle |
 
 ### Live execution gates
 
@@ -207,8 +214,9 @@ which sets `ENABLE_BETA_SERVICE_ACTIVITY=true`.
 
 ## Deployment status and order
 
-**Single-user Exchange conversion:** the five-journey, aligned-two-minute source
-change is not deployed or live-accepted by this implementation task. Historical
+**Current timing policy:** every selected Exchange, Teams and OneDrive journey has a
+240-second execution deadline and 300-second cadence; Exchange remains aligned.
+These source/config changes are not deployed or live-accepted by this implementation task. Historical
 tenant evidence below predates that conversion and does not establish self-reply
 fixture validity, current cohort capacity or current health ingestion. Re-provision
 fixtures and perform the approved live acceptance separately.
@@ -452,13 +460,18 @@ existing approved environment and identities when `deployment.foundation.mode` i
 
 Only scheduled Teams meetings need public HTTPS callback ingress. Background
 journey execution is not a long-lived ingress request. Lanes run independently
-with bounded execution and cleanup. The checked-in Exchange cadence is two
-minutes, and both Exchange and Teams allow 60 seconds per complete journey.
+with bounded execution and cleanup. All selected Exchange, Teams and OneDrive
+journeys run every five minutes and allow 240 seconds per complete journey.
+Latency thresholds stay at 15000/60000 ms and provider lanes remain at 60 seconds.
 Genuine journey deadline expiry is a failed attempt; worker cancellations and
 cleanup-only failures report Unknown. Unexecuted dependent steps are not extra
 failed requests, and confirmed business-step evidence is preserved.
-Exchange reserves 12 seconds for cleanup settlement and 12 for publication inside
-a 119-second slot envelope; actual cleanup remains independently bounded to ten
+Exchange reserves 12 seconds for cleanup settlement and 12 for publication;
+Teams/OneDrive reserve 12 and 30. All use a 299-second whole-cycle envelope,
+including initialization. The non-Exchange cycle budget defaults to 252 seconds;
+the checked-in Teams concurrency is six so all six attempts fit one wave, while
+OneDrive's two accounts per lane fit its default concurrency three.
+Actual cleanup remains independently bounded to ten
 seconds. Graceful shutdown permits bounded reporting, but cannot extend the hard
 slot deadline. These source changes have not been deployed or live-accepted.
 

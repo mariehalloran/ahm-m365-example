@@ -104,10 +104,10 @@ requires an Azure host with the selected identity attached and the
 [live gates](./deployment.md#live-execution-gates). Azure image/configuration/report
 permissions are [separate](./deployment.md#identity-and-permissions).
 
-Each complete journey retains a **120-second deadline** and **15-second latency
-degradation threshold**, with separately bounded cleanup. Cadences belong to the
-OneDrive execution lanes (300 seconds in the checked-in config), independently of
-Exchange/Teams and providers. Worker cancellation and cleanup-only outcomes are
+Each complete journey has a **240-second deadline** and unchanged **15-second
+Degraded / 60-second Unhealthy latency thresholds**, with separately bounded cleanup.
+All selected OneDrive lanes run every **300 seconds**, like Exchange/Teams;
+provider schedules remain independent. Worker cancellation and cleanup-only outcomes are
 Unknown without numeric samples; genuine service failures/deadline expiry remain
 failures. Validate real operations, owned-artifact cleanup, accepted reports and
 [notification/freshness checks](./operations.md#enterprise-reliability-acceptance-gate);

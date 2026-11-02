@@ -31,8 +31,9 @@ npm run onedrive -- --tenant <alias> --once
 
 ## Runtime behavior
 
-- Each lane runs configured scenarios on a fixed cycle interval.
-- Each complete journey has a 120-second deadline and a separate 15-second latency degradation threshold.
+- Each lane runs configured scenarios every 300 seconds.
+- Each complete journey has a 240-second deadline; latency thresholds remain 15 seconds Degraded and 60 seconds Unhealthy.
+- Each checked-in lane runs both accounts concurrently at the default concurrency three. Cleanup settlement allows 12 seconds and publication 30 within a 299-second whole-cycle envelope.
 - Worker cancellation and cleanup-only outcomes are Unknown without numeric samples; genuine service failures/deadline expiry remain failures.
 - Setup-generated IDs are read from `.env` and bound to configured targets.
 - Results include per-step latency and resource IDs for cleanup troubleshooting.

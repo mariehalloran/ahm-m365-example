@@ -21,6 +21,11 @@ Assumptions used for this guide:
 
 \* Worker cost stays near baseline only if current sizing can still complete within configured deadlines.
 
+These dated estimates predate the current 240-second journey deadlines, 300-second
+cadence and two-pair Teams inventory; they are not current-profile measurements.
+The 100-OneDrive projection is not admissible within that cadence at the existing
+concurrency limit; see [execution capacity](./onedrive-setup.md#size-the-worker-for-hundreds-of-accounts).
+
 ## Main cost drivers
 
 ### Always present

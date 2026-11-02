@@ -38,6 +38,7 @@ Use `--tenant <alias>` when the config includes multiple tenants.
 - Service selection, scenarios, execution, and deployment all come from the root config.
 - `logAnalytics.enabled` controls reporting path.
 - `serviceHealth.enabled` controls provider context collection.
+- All selected journeys run every 300 seconds with a 240-second whole-journey deadline; Exchange aligns to five-minute boundaries. Cleanup/reporting are separately bounded, and latency thresholds stay at 15/60 seconds.
 
 ## Service guides
 

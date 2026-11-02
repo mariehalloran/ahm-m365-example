@@ -20,6 +20,9 @@ This package provides the common runtime, config loading, reporting, deployment 
   - journey status and aggregate service status
   - optional provider context when enabled
 - Cancellation and deadlines are handled through `AbortSignal` and lane-specific timeout settings.
+- Every selected synthetic lane runs every 300 seconds with a 240-second whole-journey deadline. Exchange aligns to wall-clock five-minute boundaries; other synthetic lanes start immediately. Provider lanes keep their independent cadence.
+- Each whole cycle, including initialization, cleanup and reporting, ends within 299 seconds. Cleanup uses ten seconds, with 12 seconds for settlement; publication allows 12 seconds for Exchange or 30 for Teams/OneDrive.
+- Non-Exchange `cycleTimeoutSeconds` defaults to 252; capacity validation includes every selected pair/target attempt. The checked-in Teams lane needs concurrency six, while each OneDrive lane runs two attempts within its default concurrency three.
 
 ## Reporting model
 

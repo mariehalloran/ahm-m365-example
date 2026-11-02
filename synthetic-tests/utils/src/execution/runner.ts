@@ -9,7 +9,7 @@ import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-pe
 import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
 import type { CyclePublisher, CycleResults, ResultOutput } from "../reporting/results.js";
 import {
-  CLEANUP_GRACE_MS, EXCHANGE_INTERVAL_SECONDS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_TIMEOUT_SECONDS, PUBLICATION_TIMEOUT_MS,
+  CLEANUP_GRACE_MS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS, PUBLICATION_TIMEOUT_MS,
 } from "./budgets.js";
 
 export type TeamsBotPairClients = Pick<ProbeContext, "teamsBot" | "teamsCalling" | "teamsCallingPeer">;
@@ -108,7 +108,7 @@ async function runSingleProbe<P extends Probe>(
   handler: ((probe: P, context: ProbeContext) => Promise<SyntheticResult>) | undefined,
 ): Promise<SyntheticResult> {
   const liveExchange = config.EXECUTION_MODE === "live" && probeServices[probe.type].service === "exchange";
-  const liveTimedJourney = config.EXECUTION_MODE === "live" && probeServices[probe.type].service !== "onedrive";
+  const liveTimedJourney = config.EXECUTION_MODE === "live";
   if (liveTimedJourney) {
     config = { ...config, PROBE_TIMEOUT_MS: Math.min(config.PROBE_TIMEOUT_MS, JOURNEY_TIMEOUT_SECONDS * 1000) };
   }
@@ -289,7 +289,7 @@ function reportExchangeCapacity(
     }, { requests: 0, waitedRequests: 0, waitMs: 0 });
     dependencies.telemetry.emit("exchange-cycle-capacity", {
       cycleId: cycle.cycleId, groupId: group.id, group: group.displayName,
-      intervalSeconds: EXCHANGE_INTERVAL_SECONDS, executionTimeoutMs: config.PROBE_TIMEOUT_MS,
+      intervalSeconds: JOURNEY_INTERVAL_SECONDS, executionTimeoutMs: config.PROBE_TIMEOUT_MS,
       expectedAttempts: probes.length,
       startedAttempts: probes.filter(probe => cycle.startedAttempts.has(`${probe.type}:${probe.id}`)).length,
       completedAttempts: settled.length,

@@ -27,9 +27,10 @@ npm run teams -- --tenant <alias> --once
 
 ## Runtime behavior
 
-- Every selected pair exercises every selected target on the checked-in 120-second cadence; Teams has no user groups.
-- Each complete call or conversation journey has a 60-second execution deadline shared by its steps.
-- The latency degradation threshold remains 15 seconds, separately from the execution deadline.
+- Every selected pair exercises every selected target on the 300-second cadence; Teams has no user groups.
+- Each complete call or conversation journey has a 240-second execution deadline shared by its steps.
+- Latency thresholds remain 15 seconds Degraded and 60 seconds Unhealthy, separately from the execution deadline.
+- The checked-in lane starts all six pair/target attempts concurrently. Cleanup settlement allows 12 seconds and publication 30 within a 299-second whole-cycle envelope.
 - Worker cancellations and cleanup-only failures report Unknown, without hiding genuine service failures or successful business steps.
 - Cancelled call phases have no numeric sample; internal cancellation teardown does not invent a business departure measurement.
 - Results include step timing and call/conversation operation status.

@@ -51,6 +51,7 @@ Exchange and OneDrive use dedicated, licensed Microsoft 365 test accounts becaus
 - Keep [generated per-target ID bindings](./docs/deployment.md#generated-ids-in-env) beside the config.
 - `logAnalytics.enabled` controls direct reports (`false`) vs observation pipeline (`true`).
 - `serviceHealth.enabled` controls provider context entities and collection.
+- Every selected Exchange, Teams and OneDrive journey runs every 300 seconds with a 240-second whole-journey deadline. Latency thresholds remain 15/60 seconds; provider lanes remain independent (60 seconds in the checked-in config).
 
 ## References
 

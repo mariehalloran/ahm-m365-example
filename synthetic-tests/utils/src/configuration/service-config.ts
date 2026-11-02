@@ -4,7 +4,7 @@ import { ConfigurationError, createRuntimeConfig, teamsCallingCallbackUrlSchema,
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "../providers/provider-catalog.js";
 import { teamsBotPairSchema } from "./deployment-config.js";
 import {
-  CLEANUP_GRACE_MS, EXCHANGE_INTERVAL_SECONDS, EXCHANGE_PUBLICATION_TIMEOUT_MS, EXCHANGE_SLOT_MARGIN_MS, JOURNEY_TIMEOUT_SECONDS,
+  CLEANUP_GRACE_MS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS, SLOT_MARGIN_MS,
 } from "../execution/budgets.js";
 export { activityFunctions } from "../providers/provider-catalog.js";
 
@@ -21,11 +21,11 @@ export const serviceActivitySchema = z.object({
 }).strict();
 const serviceFields = {
   intervalSeconds: z.number().int().min(1).max(86400),
-  timeoutSeconds: z.number().int().min(1).max(120),
+  timeoutSeconds: z.number().int().min(1).max(JOURNEY_TIMEOUT_SECONDS),
   maxConcurrentProbes: z.number().int().min(1).max(20).default(3),
   maxConcurrentRequests: z.number().int().min(1).max(1000).default(32),
   maxConcurrentRequestsPerMailbox: z.number().int().min(1).max(20).default(2),
-  cycleTimeoutSeconds: z.number().int().min(1).max(86400).default(170),
+  cycleTimeoutSeconds: z.number().int().min(1).max(86400).default(JOURNEY_TIMEOUT_SECONDS + CLEANUP_GRACE_MS / 1000),
   mode: z.enum(["simulation", "live"]),
   scenario: z.enum(scenarios).default("healthy"),
   cohort: probeSchema.shape.cohort,
@@ -42,7 +42,7 @@ const serviceFields = {
   executionLanes: z.array(z.object({
     name: z.string().regex(/^[a-zA-Z0-9-]{1,40}$/),
     intervalSeconds: z.number().int().min(1).max(86400),
-    timeoutSeconds: z.number().int().min(1).max(120),
+    timeoutSeconds: z.number().int().min(1).max(JOURNEY_TIMEOUT_SECONDS),
     journeys: z.array(z.string().min(1)).min(1),
   }).strict()).min(1).max(12).optional(),
   healthReportAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
@@ -127,14 +127,16 @@ export function validateTeamsBotPairs(service: Pick<Extract<ServiceConfig, { typ
 
 /** Validates service-owned execution deadlines and independent provider selections. */
 function validateProviderSettings(service: ServiceExecution): void {
-  if (service.type === "exchange" && (service.intervalSeconds !== EXCHANGE_INTERVAL_SECONDS ||
-      service.executionLanes && (service.executionLanes.length !== 1 ||
-        service.executionLanes[0]!.intervalSeconds !== EXCHANGE_INTERVAL_SECONDS))) {
-    throw new ConfigurationError("Exchange requires one aligned 120-second lane for every supported journey");
+  if (service.intervalSeconds !== JOURNEY_INTERVAL_SECONDS ||
+      service.executionLanes?.some(lane => lane.intervalSeconds !== JOURNEY_INTERVAL_SECONDS)) {
+    throw new ConfigurationError("Every Exchange, Teams and OneDrive journey requires a 300-second cadence");
   }
-  if (service.type !== "onedrive" && (service.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS ||
-      service.executionLanes?.some(lane => lane.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS))) {
-    throw new ConfigurationError("Every Exchange and Teams journey requires one 60-second complete-journey execution deadline");
+  if (service.type === "exchange" && service.executionLanes && service.executionLanes.length !== 1) {
+    throw new ConfigurationError("Exchange requires one aligned 300-second lane for every supported journey");
+  }
+  if (service.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS ||
+      service.executionLanes?.some(lane => lane.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS)) {
+    throw new ConfigurationError("Every Exchange, Teams and OneDrive journey requires one 240-second complete-journey execution deadline");
   }
   if (service.type === "onedrive" && (service.serviceActivity.enabled ||
       service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
@@ -247,7 +249,7 @@ export function serviceSettings(
     EXCHANGE_MAX_CONCURRENT_REQUESTS: service.maxConcurrentRequests,
     EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: service.maxConcurrentRequestsPerMailbox,
     CYCLE_TIMEOUT_MS: service.type === "exchange"
-      ? service.intervalSeconds * 1000 - EXCHANGE_SLOT_MARGIN_MS - CLEANUP_GRACE_MS - EXCHANGE_PUBLICATION_TIMEOUT_MS
+      ? service.intervalSeconds * 1000 - SLOT_MARGIN_MS - CLEANUP_GRACE_MS - EXCHANGE_PUBLICATION_TIMEOUT_MS
       : service.cycleTimeoutSeconds * 1000,
     probes: serviceProbes(service, selectedScenarios),
   }, env);

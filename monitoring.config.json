@@ -97,10 +97,10 @@
           "execution": {
             // Execute real Graph operations against the approved test mailboxes.
             "mode": "live",
-            // Run every selected journey for every mailbox on aligned two-minute boundaries.
-            "intervalSeconds": 120,
+            // Run every selected journey for every mailbox on aligned five-minute boundaries.
+            "intervalSeconds": 300,
             // Complete-journey execution deadline in seconds; cleanup is separately bounded.
-            "timeoutSeconds": 60,
+            "timeoutSeconds": 240,
             // Diagnostic execution-cohort label, not a worker location or reporting group.
             "cohort": "exchange-global",
             // Shared concurrent Graph HTTP-request limit, including polling, retries and cleanup.
@@ -209,9 +209,11 @@
             // Execute real bot and Graph operations against approved Teams targets.
             "mode": "live",
             // Default synthetic cadence in seconds; the explicit lane below uses the same interval.
-            "intervalSeconds": 120,
+            "intervalSeconds": 300,
             // Complete-journey execution deadline in seconds, separate from the latency threshold.
-            "timeoutSeconds": 60,
+            "timeoutSeconds": 240,
+            // Start all six selected pair/target attempts together so their deadlines fit one cycle.
+            "maxConcurrentProbes": 6,
             // Diagnostic execution-cohort label, not a reporting group.
             "cohort": "teams-global",
             // Collect stable Microsoft-reported Teams Service Health.
@@ -244,14 +246,14 @@
             "teamsReadbackClientId": "417d47e9-6ef3-40de-a8af-ac15b5438d54",
             // Explicit synthetic lanes, independent of the provider collection schedule.
             "executionLanes": [
-              // Both Teams journeys share this two-minute lane.
+              // Both Teams journeys share this five-minute lane.
               {
                 // Stable lane label used in execution diagnostics.
                 "name": "teams",
                 // Lane cadence in seconds.
-                "intervalSeconds": 120,
+                "intervalSeconds": 300,
                 // Execution deadline in seconds for each journey in the lane.
-                "timeoutSeconds": 60,
+                "timeoutSeconds": 240,
                 // Selected journeys assigned to this lane.
                 "journeys": [
                   // Primary bot posts a root message and reply, verified through Graph.
@@ -350,7 +352,7 @@
             // Default synthetic cadence in seconds; explicit lanes below also run every five minutes.
             "intervalSeconds": 300,
             // Journey execution deadline in seconds, separate from cleanup and latency thresholds.
-            "timeoutSeconds": 120,
+            "timeoutSeconds": 240,
             // Diagnostic execution-cohort label, not a worker location or reporting group.
             "cohort": "onedrive-global",
             // Collect stable Microsoft-reported OneDrive Service Health; no approved beta activity API.
@@ -368,7 +370,7 @@
                 // Lane cadence in seconds.
                 "intervalSeconds": 300,
                 // Execution deadline in seconds for its journey.
-                "timeoutSeconds": 120,
+                "timeoutSeconds": 240,
                 // Selected journeys assigned to this lane.
                 "journeys": [
                   // Create, download, verify and delete content beneath the approved test folder.
@@ -382,7 +384,7 @@
                 // Lane cadence in seconds.
                 "intervalSeconds": 300,
                 // Execution deadline in seconds for its journey.
-                "timeoutSeconds": 120,
+                "timeoutSeconds": 240,
                 // Selected journeys assigned to this lane.
                 "journeys": [
                   // Write, read, update, reread and delete cycle-owned app-folder content.
@@ -396,7 +398,7 @@
                 // Lane cadence in seconds.
                 "intervalSeconds": 300,
                 // Execution deadline in seconds for its journey.
-                "timeoutSeconds": 120,
+                "timeoutSeconds": 240,
                 // Selected journeys assigned to this lane.
                 "journeys": [
                   // Verify two revisions and retrieve the actual bytes of an earlier version.

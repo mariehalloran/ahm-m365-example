@@ -18,9 +18,10 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 ## Scheduling and shutdown
 
-- Exchange continuous execution waits for an aligned two-minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts every two minutes. `--once` is an immediate single-cycle diagnostic. Other products/provider lanes retain their independent cadences and immediate first run.
-- Live Exchange and Teams journeys have a 60-second execution deadline for the entire journey, not each step. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. OneDrive retains its 120-second deadline. Latency degradation remains 15000 ms, independently of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share global/per-mailbox permits; there is no Exchange probe-count ceiling.
-- Exchange allows 12 seconds for cleanup settlement and 12 for publication inside a 119-second slot envelope (one second before the next boundary). Normal worst case is 84 seconds: 60 execution + 12 settlement + 12 publication. Initialization and late starts reduce the enclosing cycle's maximum 95-second execution budget, not the selected per-journey deadline.
+- Every selected Exchange, Teams and OneDrive journey runs every 300 seconds. Exchange continuous execution waits for an aligned five-minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts every five minutes. `--once` is an immediate single-cycle diagnostic. Teams/OneDrive lanes start immediately; providers retain independent schedules (60 seconds in the checked-in config).
+- All live journeys have a 240-second execution deadline for the entire journey, not each step, including OneDrive. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. Latency thresholds remain 15000 ms Degraded / 60000 ms Unhealthy, independently of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share unchanged global/per-mailbox permits (32/two); there is no Exchange probe-count ceiling.
+- Every lane bounds initialization, execution, cleanup and publication within 299 seconds. Exchange reserves 12 seconds for cleanup settlement and 12 for publication; normal worst case is 264 seconds (240 + 12 + 12), with an enclosing execution budget at most 275 seconds. Teams/OneDrive allow 12 seconds for settlement and 30 for publication; their default 252-second cycle budget plus those reserves is 294 seconds. Initialization/late starts reduce the enclosing cycle budget rather than extending the selected journey deadline or overlapping the next cycle.
+- Non-Exchange capacity validation covers every selected lane, even small Teams cohorts, and rejects budgets that cannot cover all attempts or fit the cadence. The checked-in Teams lane runs six pair/target attempts at concurrency six; each OneDrive lane runs two accounts at default concurrency three. This is bounded capacity planning, not live throughput proof.
 - `exchange-cycle-capacity` emits expected/started/completed/timed-out/inconclusive attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
@@ -164,7 +165,11 @@ earlier genuine service failure remains a failed journey even if cleanup also fa
 apply to raw observations. Log Analytics can now calculate percentiles and weighted
 cross-cycle statistics from individual attempts rather than precomputed means.
 In enabled logging mode, the independent freshness alert uses two service intervals plus three minutes
-(7 minutes Exchange, 7 Teams, 13 OneDrive with the checked-in cadences). It shares
+(780 seconds / 13 minutes for each of Exchange, Teams and OneDrive). Evaluation runs
+every minute, so allow up to another minute plus ingestion, alert-processing and
+notification lag beyond that observation-silence target. The unchanged 15-minute
+model window/direct-report TTL exceeds the 300-second cadence plus the 299-second
+whole-cycle bound; it is not the freshness-alert target. The freshness rule shares
 the workspace dependency and does not detect every workspace/region/notification outage.
 That rule is retired when logging is turned off. Direct report expiry becomes
 Unknown rather than guaranteed Unhealthy; independent stopped/stalled-worker and
@@ -247,8 +252,8 @@ See the [provider endpoints, diagnostics and references](./provider-monitoring.m
 
 ## Timing, retries, and cleanup
 
-- A cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 170); size target lists and report TTL accordingly.
-- By default three probes execute concurrently **per lane** for Teams and OneDrive (`maxConcurrentProbes`, configurable 1-20). Exchange starts all selected attempts together and limits actual HTTP requests instead. Runtime Graph requests have a separate bounded request/retry budget. Administrator bulk setup uses its own request/retry budget.
+- A non-Exchange cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 252); all selected attempts plus cleanup/publication must fit the 300-second cadence, not a longer TTL.
+- By default three probes execute concurrently **per lane** for Teams and OneDrive (`maxConcurrentProbes`, configurable 1-20); the checked-in Teams lane uses six for its six attempts. Exchange starts all selected attempts together and limits actual HTTP requests instead. Runtime Graph requests have a separate bounded request/retry budget. Administrator bulk setup uses its own request/retry budget.
 - Genuine expiry of a journey's execution deadline is a failed attempt. Enclosing worker/cycle cancellation and cleanup-only failure are Unknown. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. External shutdown does not start queued work.
 - Draft creation/send are not retried after ambiguous responses. Reads/idempotent deletes can retry; long Retry-After requests fail explicitly rather than retry too soon.
 - `durationMs` is total attempt time **through cleanup**, distinct from confirmed delivery time.
@@ -274,7 +279,7 @@ Synthetic content is fixed boilerplate or a generated correlation ID. Protect de
 
 Do not enable HTTP-body/token logging, disable TLS validation, or export business content.
 Health observations are unsampled and compact; no record is added for every retry,
-poll or SDK operation. One journey/target every two minutes produces about 21,600 journey observations
+poll or SDK operation. One journey/target every five minutes produces about 8,640 journey observations
 per thirty-day month plus executed business steps. Capture adds a separate hourly
 charge when enabled. Use the ingestion-volume saved search before scaling.
 
@@ -290,7 +295,7 @@ charge when enabled. Use the ingestion-volume saved search before scaling.
 
 Container Apps is a reasonable default for these lightweight API tests, not an assurance that the complete monitoring system is production-ready. The small single-region proof of concept does not meet an enterprise availability commitment.
 
-Agree on a detection target before production, for example “page when no Exchange result has been observed for seven minutes.” Include execution time, report acceptance/model propagation, notification delivery, planned maintenance, and measured worst cases in that target. A configured schedule or hosting SLA does not guarantee the same detection latency.
+Agree on a detection target before production. The logging-mode rule targets 13 minutes without a fresh service journey observation, evaluated every minute, plus ingestion/alert/notification lag; it does not guarantee a 13-minute page. Include execution time, report acceptance/model propagation, notification delivery, planned maintenance, and measured worst cases in the accepted target. A configured schedule or hosting SLA does not guarantee the same detection latency.
 
 Independent monitoring must cover:
 

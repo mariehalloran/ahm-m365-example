@@ -11,7 +11,7 @@ import {
 } from "./service-config.js";
 import { applicationAccessSchema, deploymentSettingsSchema, teamsBotPairSchema, workerSettingsSchema } from "./deployment-config.js";
 import { canonicalProjectFile } from "../paths.js";
-import { EXCHANGE_SLOT_MARGIN_MS } from "../execution/budgets.js";
+import { CLEANUP_GRACE_MS, PUBLICATION_TIMEOUT_MS, SLOT_MARGIN_MS } from "../execution/budgets.js";
 
 export const serviceTypes = ["exchange", "teams", "onedrive"] as const;
 type ServiceJourney<S extends ServiceConfig["type"]> =
@@ -253,26 +253,27 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
     if (project.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
       throw new ConfigurationError("Live health reports require an approved healthModel.subscriptionId");
     }
-    const cycleBudgetSeconds = service.type === "exchange"
-      ? service.intervalSeconds - EXCHANGE_SLOT_MARGIN_MS / 1000 : service.cycleTimeoutSeconds + 42;
     const lanes = executionLanes(service)
       .filter(lane => lane.journeys.some(journey => (selected.scenarios as Record<string, boolean>)[journey]));
     const pairCount = service.type === "teams" ? project.services.teams.botPairs.length : 1;
-    const largeCohort = selected.targets.length * pairCount > 30 ||
-      (service.type === "teams" && project.services.teams.callTargets.length * pairCount > 30);
-    if (service.type === "onedrive" || (largeCohort && service.type !== "exchange")) {
+    if (service.type !== "exchange") {
       for (const lane of lanes) {
         const attempts = pairCount * lane.journeys.filter(journey => (selected.scenarios as Record<string, boolean>)[journey])
           .reduce((sum, journey) => sum + (service.type === "teams" && journey === "scheduled-meeting"
             ? project.services.teams.callTargets.length : selected.targets.length), 0);
-        const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + 12);
+        const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + CLEANUP_GRACE_MS / 1000);
         if (service.cycleTimeoutSeconds < required) {
           const label = service.type === "onedrive" ? "OneDrive" : "Teams";
-          throw new ConfigurationError(`${label} lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase the budget within the concurrency limit or reduce the cohort`);
+          throw new ConfigurationError(`${label} lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase concurrency within its limit or reduce the cohort to fit the 300-second cadence`);
+        }
+        if (service.cycleTimeoutSeconds * 1000 + CLEANUP_GRACE_MS + PUBLICATION_TIMEOUT_MS >
+            lane.intervalSeconds * 1000 - SLOT_MARGIN_MS) {
+          throw new ConfigurationError(`${service.type} lane ${lane.name} must fit its cycleTimeoutSeconds plus cleanup/publication inside the 300-second cadence`);
         }
       }
     }
     const longestInterval = Math.max(...lanes.map(lane => lane.intervalSeconds));
+    const cycleBudgetSeconds = longestInterval - SLOT_MARGIN_MS / 1000;
     const providerBudget = project.serviceHealth.enabled && hasProviderSources(service)
       ? service.providerIntervalSeconds + 60 : 0;
     if (project.healthModel.signalWindowMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {

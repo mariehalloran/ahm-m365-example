@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { probeServices, testTypes, type Telemetry } from "../contracts.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
-import { EXCHANGE_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS } from "./budgets.js";
+import { JOURNEY_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS } from "./budgets.js";
 
 export interface ExecutionLane {
   name: string;
@@ -11,14 +11,14 @@ export interface ExecutionLane {
   alignToInterval?: boolean;
 }
 
-/** Keeps all Exchange journeys on one aligned two-minute lane and other service/provider lanes independent. */
+/** Keeps all Exchange journeys on one aligned five-minute lane and other service/provider lanes independent. */
 export function executionLanes(service: Pick<ServiceConfig, "type" | "intervalSeconds" | "timeoutSeconds" | "executionLanes">): ExecutionLane[] {
   const journeys = testTypes.filter(type => probeServices[type].service === service.type).map(type => probeServices[type].journey);
   if (service.type !== "exchange") {
     return service.executionLanes ?? [{ name: service.type, intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys }];
   }
   return [{
-    name: "exchange", intervalSeconds: EXCHANGE_INTERVAL_SECONDS, timeoutSeconds: JOURNEY_TIMEOUT_SECONDS,
+    name: "exchange", intervalSeconds: JOURNEY_INTERVAL_SECONDS, timeoutSeconds: JOURNEY_TIMEOUT_SECONDS,
     journeys, alignToInterval: true,
   }];
 }

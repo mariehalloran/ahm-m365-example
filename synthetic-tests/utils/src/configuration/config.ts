@@ -8,6 +8,7 @@ import { probeSchema, probeServices, scenarios, serviceProbeLimits, type Probe }
 import { liveProbeSchema, type LiveProbe } from "./resolved-probes.js";
 import { validateTeamsServiceUrl } from "../integrations/teams.js";
 import { canonicalProjectFile } from "../paths.js";
+import { CLEANUP_GRACE_MS, JOURNEY_TIMEOUT_SECONDS } from "../execution/budgets.js";
 
 export class ConfigurationError extends Error {
   constructor(message: string) { super(message); this.name = "ConfigurationError"; }
@@ -66,11 +67,11 @@ export const teamsCallingCallbackUrlSchema = z.string().url().refine(value => {
 const runtimeSettingsSchema = z.object({
   EXECUTION_MODE: z.enum(["simulation", "live"]).default("simulation"),
   SYNTHETIC_SCENARIO: z.enum(scenarios).default("healthy"),
-  PROBE_TIMEOUT_MS: number(90000, 100, 120000, true),
+  PROBE_TIMEOUT_MS: number(JOURNEY_TIMEOUT_SECONDS * 1000, 100, JOURNEY_TIMEOUT_SECONDS * 1000, true),
   MAX_CONCURRENT_PROBES: number(3, 1, 20, true),
   EXCHANGE_MAX_CONCURRENT_REQUESTS: number(32, 1, 1000, true),
   EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: number(2, 1, 20, true),
-  CYCLE_TIMEOUT_MS: number(170000, 100, 86400000, true),
+  CYCLE_TIMEOUT_MS: number(JOURNEY_TIMEOUT_SECONDS * 1000 + CLEANUP_GRACE_MS, 100, 86400000, true),
   POLL_INTERVAL_MS: number(2000, 10, 10000, true),
   ENABLE_LIVE_M365: z.enum(["true", "false"]).default("false"),
   TEAMS_AUTHENTICATION: z.literal("bot").default("bot"),

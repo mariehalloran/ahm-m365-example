@@ -9,6 +9,8 @@ import { groupSignalName, tenantSignalName } from "../configuration/groups.js";
 import { az, azJson, hash, runFile, runtimeConfiguration, writeJson, type DeploymentRun } from "./deploy-phases.js";
 import { nodeProjectDirectory } from "../paths.js";
 import { serviceProbes } from "../configuration/service-config.js";
+import { executionLanes } from "../execution/execution-lanes.js";
+import { SLOT_MARGIN_MS } from "../execution/budgets.js";
 
 const template = "reporting-template.json";
 const parameters = "reporting.parameters.json";
@@ -186,6 +188,15 @@ async function observationWorkspace(run: DeploymentRun): Promise<string> {
   return workspace.customerId;
 }
 
+/** Allows a start interval and whole cycle, then the existing rollout allowance for report visibility. */
+function reportingVerificationTimeout(run: DeploymentRun, workers: DeploymentRun["prepared"]["workers"]): number {
+  const scheduledCycleMs = Math.max(...workers.flatMap(worker => executionLanes(worker.service)
+    .filter(lane => lane.journeys.some(journey =>
+      (worker.project.services[worker.type].scenarios as Record<string, boolean>)[journey]))
+    .map(lane => 2 * lane.intervalSeconds * 1000 - SLOT_MARGIN_MS)));
+  return scheduledCycleMs + run.prepared.settings.rolloutTimeoutSeconds * 1000;
+}
+
 /** Verifies fresh target-scoped ingestion while distinguishing Unknown diagnostics from service failures. */
 export async function verifyObservations(run: DeploymentRun, service: string, since: string): Promise<void> {
   const workers = run.prepared.workers.filter(worker => worker.type === service && worker.service.mode === "live");
@@ -202,7 +213,7 @@ export async function verifyObservations(run: DeploymentRun, service: string, si
   const snapshot = runtimeConfiguration(run);
   const query = `M365Synthetic_CL | where Timestamp >= datetime(${since}) and Timestamp <= now() and Category == 'M365Synthetic' and Mode == 'live' and Kind == 'journey' | where Service == '${service}' and tostring(Dimensions.configSha256) == '${snapshot.sha256}' | summarize arg_max(Timestamp, *) by EventId | summarize Records=count(), Failures=countif(Value == 0 and FailureCategory !in ('cancelled', 'cleanup-failure')), Unknown=countif(isnull(Value) or FailureCategory in ('cancelled', 'cleanup-failure')) by TenantAlias,TestAccountId,Journey`;
   run.phase = "verify-observation-ingestion";
-  const deadline = run.now() + 480000;
+  const deadline = run.now() + reportingVerificationTimeout(run, workers);
   while (run.now() < deadline) {
     const rows = z.array(z.object({
       TenantAlias: z.string(), TestAccountId: z.string(), Journey: z.string(),
@@ -279,7 +290,7 @@ export async function verifyDirectReports(run: DeploymentRun, service: string, s
   const { subscriptionId, resourceGroup, name } = run.prepared.document.healthModel;
   const url = `https://management.azure.com/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CloudHealth/healthmodels/${name}-${service}/entities?api-version=2026-10-01-preview`;
   run.phase = "verify-direct-health-reports";
-  const deadline = run.now() + 480000;
+  const deadline = run.now() + reportingVerificationTimeout(run, workers);
   while (run.now() < deadline) {
     const response = responseSchema.parse(await azJson<unknown>(run, run.phase, [
       "rest", "--method", "get", "--url", url, ...run.subscription,

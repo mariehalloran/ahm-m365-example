@@ -19,7 +19,7 @@ import { executionLanes, runExecutionLanes, type ExecutionLane } from "./executi
 import { canonicalProjectFile } from "../paths.js";
 import { resultContext } from "../configuration/groups.js";
 import {
-  CLEANUP_GRACE_MS, EXCHANGE_INTERVAL_SECONDS, EXCHANGE_PUBLICATION_TIMEOUT_MS, EXCHANGE_SLOT_MARGIN_MS, PUBLICATION_TIMEOUT_MS,
+  CLEANUP_GRACE_MS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_INTERVAL_SECONDS, PUBLICATION_TIMEOUT_MS, SLOT_MARGIN_MS,
 } from "./budgets.js";
 
 const usage = "Usage: npm run <exchange|teams|onedrive> -- [--config <monitoring.config.json>] [--tenant <alias>] [--once]";
@@ -112,7 +112,7 @@ async function reportInitializationFailure(
       const count = probes.filter(probe => group.targetIds.includes(probe.id)).length;
       if (count) telemetry.emit("exchange-cycle-capacity", {
         cycleId, groupId: group.id, group: group.displayName, expectedAttempts: count,
-        intervalSeconds: EXCHANGE_INTERVAL_SECONDS, executionTimeoutMs: service.timeoutSeconds * 1000,
+        intervalSeconds: JOURNEY_INTERVAL_SECONDS, executionTimeoutMs: service.timeoutSeconds * 1000,
         startedAttempts: 0, completedAttempts: count, timedOutAttempts: 0,
         inconclusiveAttempts: category === "cancelled" ? count : 0,
         graphRequests: 0, permitWaitRequests: 0, permitWaitMs: 0,
@@ -236,18 +236,20 @@ interface SyntheticLaneExecution {
   initialize: () => Promise<InitializedService>;
 }
 
-/** Reserves Exchange cleanup/publication time before the next aligned slot, including slow initialization. */
+/** Bounds each lane's initialization, execution, cleanup and publication before its next slot. */
 async function executeSyntheticLane(lane: ExecutionLane, execution: SyntheticLaneExecution): Promise<void> {
   const { service, options, signal, telemetry, probes, publishResults, results, initialize } = execution;
   const startedAt = Date.now();
   const intervalMs = lane.intervalSeconds * 1000;
-  const slotBudgetMs = service.type === "exchange"
-    ? Math.max(1, intervalMs - EXCHANGE_SLOT_MARGIN_MS - (options.once ? 0 : startedAt % intervalMs)) : undefined;
-  const slotDeadline = slotBudgetMs === undefined ? undefined : AbortSignal.timeout(slotBudgetMs);
-  const laneSignal = slotDeadline ? AbortSignal.any([signal, slotDeadline]) : signal;
-  const settlementMs = CLEANUP_GRACE_MS + EXCHANGE_PUBLICATION_TIMEOUT_MS;
-  const initializationSignal = slotBudgetMs === undefined ? signal
-    : AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, slotBudgetMs - settlementMs))]);
+  const slotBudgetMs = Math.max(1, intervalMs - SLOT_MARGIN_MS
+    - (lane.alignToInterval && !options.once ? startedAt % intervalMs : 0));
+  const slotDeadline = AbortSignal.timeout(slotBudgetMs);
+  const laneSignal = AbortSignal.any([signal, slotDeadline]);
+  const settlementMs = CLEANUP_GRACE_MS
+    + (service.type === "exchange" ? EXCHANGE_PUBLICATION_TIMEOUT_MS : PUBLICATION_TIMEOUT_MS);
+  const initializationSignal = AbortSignal.any([
+    signal, AbortSignal.timeout(Math.max(1, slotBudgetMs - settlementMs)),
+  ]);
   const laneProbes = probes.filter(probe => lane.journeys.includes(probeServices[probe.type].journey));
   const initializationFailed = async (error: unknown) => {
     if (!signal.aborted) {
@@ -260,18 +262,17 @@ async function executeSyntheticLane(lane: ExecutionLane, execution: SyntheticLan
   };
   const laneInitialization = withAbort(initializationSignal, initialize).then(value => ({
     ...value,
-    dependencies: { ...value.dependencies, ...(slotDeadline ? { publicationSignal: slotDeadline } : {}) },
+    dependencies: { ...value.dependencies, publicationSignal: slotDeadline },
     config: {
       ...filterRuntimeProbes(value.config, probe => lane.journeys.includes(probeServices[probe.type].journey)),
       PROBE_TIMEOUT_MS: lane.timeoutSeconds * 1000,
-      ...(slotBudgetMs === undefined ? {} : {
-        CYCLE_TIMEOUT_MS: Math.max(1, slotBudgetMs - settlementMs - (Date.now() - startedAt)),
-      }),
+      CYCLE_TIMEOUT_MS: Math.max(1, Math.min(
+        value.config.CYCLE_TIMEOUT_MS, slotBudgetMs - settlementMs - (Date.now() - startedAt),
+      )),
     },
   }));
   const execute = () => executeServiceCycle(laneInitialization, options, laneSignal, telemetry, initializationFailed);
-  if (slotDeadline) await withAbort(slotDeadline, execute);
-  else await execute();
+  await withAbort(slotDeadline, execute);
 }
 
 /** Runs stateless synthetic and provider lanes, keeping their cadence and result publication independent. */
