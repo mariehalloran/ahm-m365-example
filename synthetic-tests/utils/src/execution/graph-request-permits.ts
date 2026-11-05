@@ -1,3 +1,5 @@
+import { requestPermitObserver } from "./steps.js";
+
 interface Waiter {
   mailbox: string;
   signal: AbortSignal;
@@ -6,6 +8,7 @@ interface Waiter {
   resolve: (release: () => void) => void;
   reject: (error: unknown) => void;
   abort: () => void;
+  observer?: ReturnType<typeof requestPermitObserver>;
 }
 export interface PermitMeasurements { requests: number; waitedRequests: number; waitMs: number }
 
@@ -77,9 +80,11 @@ export class GraphRequestPermits {
           const index = this.queue.indexOf(waiter);
           if (index >= 0) this.queue.splice(index, 1);
           this.measure(waiter, false);
+          waiter.observer?.waitingCancelled();
           reject(signal.reason);
           this.drain();
         },
+        observer: requestPermitObserver(),
       };
       this.queue.push(waiter);
       signal.addEventListener("abort", waiter.abort, { once: true });
@@ -108,6 +113,7 @@ export class GraphRequestPermits {
       this.active++;
       this.mailboxActive.set(waiter.mailbox, mailboxActive + 1);
       this.measure(waiter, true);
+      waiter.observer?.started();
       let released = false;
       waiter.resolve(() => {
         if (released) return;

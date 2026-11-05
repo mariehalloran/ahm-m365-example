@@ -3,8 +3,7 @@ import { probeServices, type Telemetry } from "../contracts.js";
 import type { RunnerDependencies, TeamsBotPairClients } from "./runner.js";
 import { hasProviderSources, serviceProbes, type ServiceConfig } from "../configuration/service-config.js";
 import { createFederatedGraphClient, createLiveGraphClient, createLiveTeamsBot, createTeamsCallingGraph, createTeamsReadbackGraph } from "../integrations/auth.js";
-import { createTeamsCallingVerifier, type CallingIdentity } from "../integrations/teams-calling-auth.js";
-import { startTeamsCallingCallback } from "../integrations/teams-calling-callback.js";
+import type { TeamsCallState } from "../integrations/teams-callback-state.js";
 import { GraphClient } from "../integrations/graph.js";
 import { GraphRequestPermits } from "./graph-request-permits.js";
 import { createResultOutput, type ResultOutput } from "../reporting/results.js";
@@ -24,7 +23,7 @@ export function serviceEnvironment(
     return value ?? env[name];
   };
   const azureTenant = env.AZURE_TENANT_ID ?? project.deployment?.azureTenantId;
-  const azureClient = bind("AZURE_CLIENT_ID", selected.worker?.identityClientId);
+  const azureClient = bind("AZURE_CLIENT_ID", selected.identityClientId);
   return {
     ...env, AZURE_TENANT_ID: azureTenant, AZURE_CLIENT_ID: azureClient,
     ...(access.m365TenantId ? { M365_TENANT_ID: bind("M365_TENANT_ID", access.m365TenantId) } : {}),
@@ -73,7 +72,7 @@ export function providerGraphClient(service: ServiceConfig, env: NodeJS.ProcessE
 export async function serviceRuntime(
   service: ServiceConfig, config: Config, telemetry: Telemetry, env: NodeJS.ProcessEnv = process.env,
   suppliedResults?: ResultOutput,
-  options: { onTeamsCallingNotification?: (notification: unknown, identity: CallingIdentity) => void } = {},
+  options: { teamsCallState?: TeamsCallState } = {},
 ): Promise<RunnerDependencies> {
   if (!service.enabled) throw new ConfigurationError("Service runtime requires an enabled probe type");
   const live = config.EXECUTION_MODE === "live";
@@ -121,7 +120,7 @@ export async function serviceRuntime(
         : createLiveGraphClient(env, service.graphAuthentication),
     } : {}),
   };
-  const needsCalling = config.probes.some(probe => probe.type === "teams-call");
+  if (options.teamsCallState) dependencies.teamsCallState = options.teamsCallState;
   if (live && service.type === "teams") {
     const clients = new Map<string, TeamsBotPairClients>();
     for (const pair of service.botPairs) {
@@ -140,18 +139,6 @@ export async function serviceRuntime(
       });
     }
     dependencies.teamsBotPairs = clients;
-  }
-  if (live && service.type === "teams" && needsCalling) {
-    const audiences = service.botPairs.filter(pair => config.probes.some(probe => probe.botPairId === pair.id && probe.type === "teams-call"))
-      .flatMap(pair => [pair.botClientId!, pair.botPeerClientId!]);
-    const verify = await createTeamsCallingVerifier(env, audiences);
-    const server = await startTeamsCallingCallback({
-      port: config.TEAMS_CALLING_PORT, verify,
-      ...(options.onTeamsCallingNotification ? { onNotification: options.onTeamsCallingNotification } : {}),
-      onAccepted: () => telemetry.emit("teams-calling-callback-accepted", { authentication: "verified", tenantMatched: true }),
-      onRejected: (httpStatus, stage, diagnostic) => telemetry.emit("teams-calling-callback-rejected", { httpStatus, stage, ...diagnostic }),
-    });
-    dependencies.shutdown = () => server.shutdown();
   }
   return dependencies;
 }

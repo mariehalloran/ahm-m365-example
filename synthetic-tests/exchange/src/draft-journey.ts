@@ -81,6 +81,7 @@ export const exchangeDraftProbe: ProbeHandler<"exchange-draft"> = async (probe, 
       attempt.mutationAttempted,
       (cleanupSignal) => cleanup(context.graph!, attempt, cleanupSignal),
       telemetry,
+      context.config.CLEANUP_TIMEOUT_MS,
       Date.now,
       cleanupEnabled,
     );

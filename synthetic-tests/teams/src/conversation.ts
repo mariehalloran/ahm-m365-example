@@ -148,6 +148,7 @@ export const teamsConversationProbe: ProbeHandler<"teams-channel-message"> = asy
       (cleanupSignal) =>
         cleanupReply(context.teamsBot!, attempt, cleanupSignal),
       telemetry,
+      config.CLEANUP_TIMEOUT_MS,
       now,
       config.TEAMS_CLEANUP_ENABLED !== "false",
     );

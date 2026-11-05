@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { categories, isInconclusiveCategory, probeServices, reportedResult } from "../contracts.js";
+import { categories, isInconclusiveCategory, probeServices, reportedResult, type SyntheticResult } from "../contracts.js";
 import { executionLanes } from "../execution/execution-lanes.js";
 import { resultContext } from "../configuration/groups.js";
 import type { ProjectConfig } from "../configuration/project-config.js";
 import type { CycleResults } from "./results.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
-import { resultMeasurements } from "./measurements.js";
+import { resultMeasurements, type SyntheticMeasurement } from "./measurements.js";
 
 const syntheticDimensions = z.object({
   service: z.string().min(1).max(80),
@@ -70,9 +70,18 @@ const period = (seconds: number) => seconds % 60 === 0 ? `${seconds / 60}m` : `$
 
 /** Serializes conclusive binary samples and explicit no-sample diagnostics for each executed action. */
 export function cycleObservations(project: ProjectConfig, service: ServiceConfig, cycle: CycleResults): Observation[] {
-  const lanes = executionLanes(service);
   return cycle.results.flatMap(raw => {
     const result = reportedResult(raw);
+    return resultObservations(project, service, cycle.cycleId, result, resultMeasurements(result));
+  });
+}
+
+/** Projects one completed action or journey without waiting for any other target. */
+export function resultObservations(
+  project: ProjectConfig, service: ServiceConfig, cycleId: string,
+  result: SyntheticResult, measurements: SyntheticMeasurement[],
+): Observation[] {
+  const lanes = executionLanes(service);
     const definition = probeServices[result.testType];
     if (definition.service !== service.type) throw new Error("Observation service does not match its execution lane");
     const lane = lanes.find(lane => lane.journeys.includes(definition.journey));
@@ -89,15 +98,15 @@ export function cycleObservations(project: ProjectConfig, service: ServiceConfig
       reportingGroupNames: groups.map(group => group.displayName),
       region: result.diagnosticContext.region,
       executionRegion: project.deployment?.location,
-      mode: service.mode, runId: cycle.cycleId, correlationId: result.correlationId,
+      mode: service.mode, runId: cycleId, correlationId: result.correlationId,
       authenticationMethod: service.type === "teams" ? "managed-identity-bot" : service.graphAuthentication,
       testVersion: result.schemaVersion,
     };
-    return resultMeasurements(result).map(({
+    return measurements.map(({
       kind, step, success, durationMs, observedAt, diagnosticCategory: failureCategory, cleanupFailed, cleanupFailure, detail,
     }) => observationSchema.parse({
       eventId: createHash("sha256").update([
-        project.tenant.id, service.type, cycle.cycleId, result.correlationId, result.testType, result.testId, kind, step,
+        project.tenant.id, service.type, cycleId, result.correlationId, result.testType, result.testId, kind, step,
       ].join("\0")).digest("hex"),
       timestamp: observedAt, category: "M365Synthetic",
       subject: `${service.type}.${definition.journey}${step ? `.${step}` : ""}`,
@@ -111,11 +120,12 @@ export function cycleObservations(project: ProjectConfig, service: ServiceConfig
           errorMessage: detail ?? `${failureCategory} during ${service.type}.${definition.journey}${step ? `.${step}` : ""}`,
         } : {}),
         ...(result.diagnosticContext.httpStatus ? { httpStatus: result.diagnosticContext.httpStatus } : {}),
+        ...(result.diagnosticContext.requestCapacityExceeded ? { requestCapacityExceeded: true } : {}),
+        ...(result.diagnosticContext.graphRequestsStarted === undefined ? {} : { graphRequestsStarted: result.diagnosticContext.graphRequestsStarted }),
         ...(result.call ? {
           callChainId: result.call.callChainId, peerCallChainId: result.call.peerCallChainId,
-          resultCodes: result.call.resultCodes,
+          resultCodes: [...result.call.resultCodes],
         } : {}),
       },
     }));
-  });
 }

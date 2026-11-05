@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { probeServices, testTypes, type Telemetry } from "../contracts.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
-import { JOURNEY_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS } from "./budgets.js";
+import { ConfigurationError } from "../configuration/config.js";
 
 export interface ExecutionLane {
   name: string;
@@ -11,16 +11,23 @@ export interface ExecutionLane {
   alignToInterval?: boolean;
 }
 
-/** Keeps all Exchange journeys on one aligned five-minute lane and other service/provider lanes independent. */
+/** Computes the remaining execution slot without borrowing cleanup or publication time. */
+export function laneBudget(service: ServiceConfig, lane: ExecutionLane, slotStart: number, now = Date.now()) {
+  const slotEnd = slotStart + lane.intervalSeconds * 1000 - service.slotMarginSeconds * 1000;
+  const executionMs = Math.min(service.cycleTimeoutSeconds * 1000,
+    slotEnd - now - (service.cleanupGraceSeconds + service.publicationTimeoutSeconds) * 1000);
+  if (now < slotStart || executionMs < lane.timeoutSeconds * 1000) {
+    throw new ConfigurationError("Execution lane is stale or has insufficient startup capacity for its configured journey deadline");
+  }
+  return { slotEnd, executionMs };
+}
+
+/** Keeps all Exchange journeys in one aligned lane and all configured service lanes independent. */
 export function executionLanes(service: Pick<ServiceConfig, "type" | "intervalSeconds" | "timeoutSeconds" | "executionLanes">): ExecutionLane[] {
   const journeys = testTypes.filter(type => probeServices[type].service === service.type).map(type => probeServices[type].journey);
-  if (service.type !== "exchange") {
-    return service.executionLanes ?? [{ name: service.type, intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys }];
-  }
-  return [{
-    name: "exchange", intervalSeconds: JOURNEY_INTERVAL_SECONDS, timeoutSeconds: JOURNEY_TIMEOUT_SECONDS,
-    journeys, alignToInterval: true,
-  }];
+  return (service.executionLanes ?? [{
+    name: service.type, intervalSeconds: service.intervalSeconds, timeoutSeconds: service.timeoutSeconds, journeys,
+  }]).map(lane => ({ ...lane, alignToInterval: true }));
 }
 
 /** Awaits each lane's batch before its next slot, skipping missed slots instead of catching up. */

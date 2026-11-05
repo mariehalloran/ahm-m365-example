@@ -89,31 +89,3 @@ export async function verifySharePointList(
     throw new IntegrationError("configuration-failure", undefined, "selected-list-mismatch");
   }
 }
-
-/** Resolves existing site/library/folder/list IDs using read-only Graph calls and no permission/provisioning APIs. */
-export async function discoverSharePointBindings(
-  graph: GraphOperations, target: SharePointLocation, signal: AbortSignal,
-): Promise<{ siteId: string; driveId: string; folderId: string; listId: string }> {
-  const url = new URL(target.siteUrl);
-  const site = await graph.json(`/sites/${encoded(url.hostname)}:${url.pathname}?$select=id,webUrl`, siteSchema, signal);
-  verifySiteUrl(site.webUrl, target.siteUrl);
-  const drives = (await siteDrives(graph, site.id, signal)).filter(drive => drive.name === target.libraryName);
-  if (drives.length !== 1 || drives[0]!.driveType !== "documentLibrary") {
-    throw new IntegrationError("configuration-failure", undefined, "named-library-not-unique");
-  }
-  const driveId = drives[0]!.id;
-  const folder = await selectedFolder(graph, driveId, target.folderName, signal);
-  const collection = `${sitePath(site.id)}/lists`;
-  const schema = z.object({ value: z.array(listSchema).max(200), "@odata.nextLink": z.string().optional() });
-  let path: string | undefined = `${collection}?$select=id,displayName,list&$top=200`;
-  const lists: z.infer<typeof listSchema>[] = [];
-  for (let page = 0; path && page < 20; page++) {
-    const response: z.infer<typeof schema> = await graph.json(path, schema, signal);
-    lists.push(...response.value);
-    path = response["@odata.nextLink"] ? graphNextPagePath(response["@odata.nextLink"], collection) : undefined;
-  }
-  if (path || new Set(lists.map(list => list.id)).size !== lists.length) throw new IntegrationError("read-failure");
-  const matches = lists.filter(list => list.displayName === target.listName && list.list.template === "genericList");
-  if (matches.length !== 1) throw new IntegrationError("configuration-failure", undefined, "named-list-not-unique");
-  return { siteId: site.id, driveId, folderId: folder.id, listId: matches[0]!.id };
-}

@@ -1,432 +1,168 @@
-# Setup: Microsoft 365 test targets and Azure access
+# Shared Azure setup
 
-Start here before the first deployment. Create dedicated test accounts, configure
-the project, grant access, then generate required service IDs and fixtures and deploy. Repeat the relevant
-steps whenever you add a tenant, service or target.
+This runbook covers only the common tools, Azure resources and dispatcher-to-Function
+authentication. **Microsoft 365 accounts, fixtures, application consent and resource
+grants are documented separately by service:**
 
-## Prerequisites
+| Service | Setup and authorization | Journeys, health model and Graph endpoints |
+| --- | --- | --- |
+| Exchange | [Test mailboxes, application RBAC and reply fixtures](./exchange-permissions.md) | [Exchange README](../synthetic-tests/exchange/README.md) |
+| Teams | [Bot pairs, installed apps, readback and meeting calling](./teams-permissions.md) | [Teams README](../synthetic-tests/teams/README.md) |
+| OneDrive | [Accounts and worker permissions](./onedrive-permissions.md), then [folder provisioning](./onedrive-setup.md) | [OneDrive README](../synthetic-tests/onedrive/README.md) |
+| SharePoint Online | [Sites, fixtures, Selected access and discovery](./sharepoint-permissions.md) | [SharePoint README](../synthetic-tests/sharepoint/README.md) |
+| Optional provider context | [Service Health, Message Center and beta activity consent/federation](./provider-monitoring.md) | Exact provider endpoints are in the same runbook |
 
-You need an approved Microsoft 365 test tenant with available licenses for the
-selected services, and an Azure subscription for Azure Monitor Health Models and
-the workers. An Azure subscription alone does not provide Microsoft 365 accounts
-or licenses.
+Azure roles do not confer Microsoft 365 administrator rights, service licenses or
+Graph application permissions. Use an approved Azure subscription associated with
+the monitored Microsoft 365 tenant; see [tenant binding](./cross-tenant-access.md).
 
-Use the service-specific authorization guides alongside this shared runbook:
-[Exchange](./exchange-permissions.md), [Teams](./teams-permissions.md),
-[OneDrive](./onedrive-permissions.md) and [SharePoint](./sharepoint-permissions.md).
+## Tools and operator access
 
-Install Node.js 22 or 24, npm, Git, the Azure CLI and PowerShell 7.4+. Exchange
-administration also needs the `ExchangeOnlineManagement` PowerShell module:
-`Install-Module ExchangeOnlineManagement -Scope CurrentUser`.
-From the repository root, install the project's dependencies:
+Install Node.js 22 or 24, npm, Git, Azure CLI with Bicep, and PowerShell 7.4+.
+Exchange administration additionally needs the module in its own setup guide.
+From the repository root:
 
 ```sh
 npm ci --prefix synthetic-tests
+az login --tenant <approved-tenant-id>
+az account set --subscription <approved-subscription-id>
 ```
 
-## Create and license test Microsoft 365 accounts
-
-Use dedicated, non-administrator accounts rather than employee accounts: the
-journeys create mail, drafts, private appointments and files. The project does
-**not** create user accounts, buy licenses or assign licenses.
-
-1. Sign in to the [Microsoft 365 admin center](https://admin.microsoft.com) as a
-   **User Administrator** in the tenant you intend to monitor. Go to **Users >
-   Active users > Add a user**.
-2. Enter a recognizable display name and username, such as `m365-monitor-001`,
-   and select one of your tenant's verified domains. Record the resulting user
-   principal name (UPN), such as `m365-monitor-001@yourtenant.onmicrosoft.com`.
-3. Set the user's usage location. For Exchange Multi-Geo, follow the
-   [PDL setup below](#optional-exchange-multi-geo-placement) before licensing.
-   Assign a license covering the services below. Expand **Apps** and confirm the
-   required service plans are enabled; not every Microsoft 365 subscription includes Teams.
-4. Leave the account without administrator roles. Store its generated password in
-   your approved password manager, never in the config, `.env` or Git. Retain your
-   normal sign-in protections; the hosted workers use application identities,
-   not these users' passwords or refresh tokens.
-5. Finish creating the user and repeat for each required account. Wait for license
-   assignment and service provisioning to complete before generating fixtures or
-   running live journeys.
-
-| Account use | Required service | Root config field under `tenants[].services` |
-| --- | --- | --- |
-| Exchange mailbox | Exchange Online, including mail and calendar | `exchange.targets.<groupId>.users[].mailbox` |
-| OneDrive owner | SharePoint Online / OneDrive entitlement | `onedrive.targets.<groupId>.users[].userPrincipalName` |
-| Teams meeting organizer | Microsoft Teams | `teams.callTargets[].organizer` |
-
-Each Exchange target exercises its **own** mailbox for every selected
-journey. Teams synthetic
-participants are **managed-identity bots**, not licensed user accounts. A licensed
-test user prepares the test team/meeting fixtures; it does not answer probe calls.
-
-Verify each Exchange mailbox exists in the Exchange admin center before applying
-the mailbox scope below. For OneDrive, either open OneDrive once as the test user
-or have a licensed SharePoint Administrator
-[pre-provision the personal site](https://learn.microsoft.com/en-us/sharepoint/pre-provision-accounts).
-Users must be licensed and allowed to sign in for pre-provisioning. Application-only
-Graph setup does not create personal OneDrives; wait until the drive exists before
-running [folder setup](./onedrive-setup.md#provision-personal-onedrives).
-
-For hundreds of accounts, use **Users > Active users > Add multiple users** and
-the admin center's downloadable CSV template instead of adding them one by one.
-Keep bulk-upload files and exported passwords outside Git. Microsoft's
-[account creation guide](https://learn.microsoft.com/en-us/microsoft-365/admin/add-users/add-users)
-and [license assignment guide](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/assign-licenses-to-users)
-cover bulk creation and existing accounts.
-
-### Optional Exchange Multi-Geo placement
-
-To monitor mailboxes in different geographies, follow Microsoft's
-[Exchange Online Multi-Geo administration guide](https://learn.microsoft.com/en-us/microsoft-365/enterprise/administering-exchange-online-multi-geo?view=o365-worldwide).
-This requires appropriate Multi-Geo licensing and an enabled destination geography.
-
-- **New cloud-only accounts:** create the user without an Exchange license, set
-  `PreferredDataLocation` (PDL) on its Entra user with Microsoft Graph PowerShell
-  (for example, `EUR`), then assign the license.
-- **Synchronized accounts:** configure PDL in on-premises Active Directory and
-  synchronize it through Microsoft Entra Connect.
-- **Existing mailboxes:** changing PDL initiates an asynchronous relocation.
-  Verify the actual mailbox database geography in Exchange Online PowerShell;
-  the requested PDL alone does not prove that the move has completed.
-
-Country and `UsageLocation` alone do not select mailbox placement. PDL selects a
-geography, not a particular stamp or database. Reporting group names do not change
-mailbox placement.
-
-## Configure the project
-
-Edit the repository-root [monitoring.config.json](../monitoring.config.json) for
-your Azure destination and Microsoft 365 tenants, replacing this repository's
-real test-tenant settings. 
-
-Use the account fields in the table above, the selected scenarios and execution settings.
-Exchange uses the mailbox address and OneDrive uses the UPN as the account identity;
-do not assign account target IDs. Teams channel and meeting targets retain their `id`.
-Put Exchange/OneDrive user targets in
-[`targets.<groupId>.users`](./monitoring-groups.md), with `userGroupName` alongside
-each `users` array; there is no separate root group list. Supply the ungrouped Teams channel and meeting
-references and approved provider/readback app registrations where selected.
-SharePoint uses ungrouped `targets[]` with actual `siteUrl`, `libraryName`,
-`folderName` and `listName`, not licensed users or bot pairs. Keep a new
-selection disabled until [selected-site setup](#sharepoint-selected-site-setup)
-is approved; omitted SharePoint selection defaults disabled. The checked-in
-profile now selects its approved site and dedicated fixtures.
-See [what the config holds](./deployment.md#what-the-config-holds) for each field.
-The root `logAnalytics.enabled` toggle selects direct container health reports
-(`false`) or the optional Event Hub/Function/DCR/Log Analytics pipeline (`true`).
-Pipeline resource names are required only when enabled; Capture is optional within
-that mode. Select the active mode explicitly. Both modes use private configuration
-storage named by `deployment.configurationStorageAccount`; that store is not a log
-pipeline. No additional Microsoft 365 permissions are needed for either Azure reporting path.
-Reference existing Azure Monitor action groups with `healthModel.alertActionGroupIds`;
-manage recipients in the action groups, not this config
-([notification checks](./operations.md#enterprise-reliability-acceptance-gate)).
-
-**Review the live settings:** the checked-in config enables live probes, Azure
-Monitor export, stable Service Health, Exchange beta Service Activity and root
-health alerts. Optional features default off when omitted, but this config is not
-an offline example. Beta collection requires separate approval.
-SharePoint selects one approved site/library/folder/list and its permanent worker
-identity. Worker-identity discovery, deployment and live acceptance remain
-separate from administrative fixture provisioning.
-
-## What the setup helpers do
-
-Two PowerShell helpers read the root config and write generated bindings to the
-gitignored `.env` beside it. They do not create or license accounts or grant
-application permissions:
-
-- `npm run setup:ids` ([`setup/generate-ids.ps1`](../synthetic-tests/setup/generate-ids.ps1)):
-  finds or creates the named Teams channel, and looks up both client IDs of each pair, the Teams
-  calling callback URL, the meeting organizer's user ID and each OneDrive account's user ID.
-  `npm run setup:ids -- -SharePointOnly [-Tenant <alias>]` instead uses the selected
-  worker managed identity to discover existing SharePoint site/library/folder/list
-  IDs without Azure CLI administrator sign-in, creation or grants.
-- `npm run setup:reply-seeds` ([`setup/provision-reply-seeds.ps1`](../synthetic-tests/setup/provision-reply-seeds.ps1)):
-  provisions the retained SELF-REPLY message each reply-mail mailbox answers.
-
-Both are idempotent (safe to run again) and read the same root config. Run them after the
-grants below exist; [deployment.md](./deployment.md#generated-ids-in-env) lists the exact
-`.env` keys they write. OneDrive's folders are a separate, separately approved command,
-[`npm run onedrive:setup`](./onedrive-setup.md).
-
-## Roles you need
-
-| Step | Role |
+| Operator action | Required authority |
 | --- | --- |
-| Test account creation and licensing | User Administrator; License Administrator can manage licenses separately |
-| Personal OneDrive pre-provisioning | SharePoint Administrator with a SharePoint license |
-| SharePoint site/library/list preparation and Selected-site access | SharePoint administrator/resource owner; separately authorized administrator for application consent and site permission grants |
-| 1-3 (Azure resources, identities, AcrPull) | Owner, or Contributor + User Access Administrator, on the subscription or resource group |
-| 4 (Exchange) | Exchange Organization Management, or an equivalent delegated role |
-| 5 (Entra application roles, federated credentials) | Privileged Role Administrator or Global Administrator, and Application Administrator |
-| 6 (Teams bots, app) | The Azure role above, plus a Teams administrator to publish the app |
+| Deploy Azure resources and scoped role assignments | Owner, or Contributor plus User Access Administrator, on the approved resource scope |
+| Upload/download one-off setup inputs and results | Storage Blob Data Contributor on the configuration container; deployment grants its operator this access |
+| Create/verify the Function API app and service principal | Tenant-approved app-registration/enterprise-app administration rights |
+| Grant Microsoft 365 application permissions | The separately authorized administrator named in each service/provider guide |
 
-Azure roles do not confer Microsoft 365 administrator roles. Before the commands
-below, sign in with `az login` to the appropriate tenant and subscription. The
-ordinary PowerShell helper paths select the configured tenant matching your current
-Azure CLI login; SharePoint-only discovery requires the explicit same-tenant managed
-identity instead. Repeat the Microsoft 365 steps and helpers for each configured tenant.
+Administrator Azure CLI sessions are used for setup/deployment only. Runtime
+Functions use explicitly selected managed identities, never that CLI session.
+Do not store passwords, tokens, private keys or certificates in config or Git.
 
-## 1. Resource providers and the resource group
+## Configure the deployment and selected services
+
+Root [monitoring.config.json](../monitoring.config.json) owns `healthModel`,
+`deployment`, `logAnalytics`, `serviceHealth`, tenant IDs and the optional tenant
+`providerClientId`. Its `serviceFiles` map loads four files:
+
+| File | Matching `tenants[].config` owns |
+| --- | --- |
+| [monitoring.exchange.json](../monitoring.exchange.json) | Exchange identity, mailbox groups, scenarios and execution |
+| [monitoring.teams.json](../monitoring.teams.json) | Teams identity, bot pairs, channels/meetings, readback and execution |
+| [monitoring.onedrive.json](../monitoring.onedrive.json) | OneDrive identity, account groups, setup identity and execution |
+| [monitoring.sharepoint.json](../monitoring.sharepoint.json) | SharePoint identity, site/library/folder/list targets and execution |
+
+Match each service entry's `id` to the root tenant alias. Paths such as
+`config.identity` in service guides refer to that service-file entry; the loader
+composes it into `tenants[].services.<service>` for deployment/runtime.
+Generated IDs belong in the adjacent gitignored [`.env`](./deployment.md#generated-ids-in-env),
+not user-maintained target fields.
+
+**Review before running:** the checked-in profile is live, not an offline
+example. It enables all services, stable health/messages, Exchange/Teams beta
+activity, Azure reporting and health alerts. Keep unapproved services disabled;
+optional provider approvals are independent of synthetic access.
+
+`logAnalytics.enabled: false` sends aggregate reports directly from execution
+Functions to Azure Monitor Health Models. `true` sends observations directly
+through the Logs Ingestion API/DCR to Log Analytics for KQL-backed model health.
+Neither mode uses Event Hubs, Capture or an intermediary ingestion Function.
+Both require private configuration storage. Action-group IDs select existing
+Azure Monitor action groups; recipients remain managed in those groups.
+
+## Prepare Azure resources and identities
+
+Register the providers used by the selected deployment:
 
 ```sh
 az provider register --namespace Microsoft.ManagedIdentity --wait
 az provider register --namespace Microsoft.ContainerRegistry --wait
 az provider register --namespace Microsoft.App --wait
-az provider register --namespace Microsoft.BotService --wait
 az provider register --namespace Microsoft.CloudHealth --wait
-# Only when logAnalytics.enabled is true:
-az provider register --namespace Microsoft.OperationalInsights --wait
-az provider register --namespace Microsoft.Insights --wait
-az provider register --namespace Microsoft.EventHub --wait
 az provider register --namespace Microsoft.Web --wait
-
-# Required for private configuration storage in both modes:
 az provider register --namespace Microsoft.Storage --wait
+az provider register --namespace Microsoft.Insights --wait
+# When Teams is selected:
+az provider register --namespace Microsoft.BotService --wait
+# When logAnalytics.enabled is true:
+az provider register --namespace Microsoft.OperationalInsights --wait
 
 az group create --name <healthModel.resourceGroup> --location <deployment.location>
 ```
 
-## 2. Container registry, Container Apps environment and managed identities
-
-Only the resources a bare name in the config asks for; skip any that are already a full
-`/subscriptions/...` resource ID (someone else's). This example matches the Consto test
-tenant's config:
+Prepare the registry and Container Apps environment named by
+`deployment.foundation` when using `mode: "existing"`:
 
 ```sh
-RG=rg-m365-consto; LOCATION=centralus
-
-az acr create --name crm365ctbcoagujf67a --resource-group $RG --location $LOCATION \
-  --sku Basic --admin-enabled false --public-network-enabled true
-
-az containerapp env create --name cae-m365-experience-consto --resource-group $RG --location $LOCATION \
-  --enable-workload-profiles true --logs-destination none
-
-# One identity per service worker, plus every distinct botPairs identity/peerIdentity:
-for NAME in uami-m365-experience-consto-exchange uami-m365-experience-consto-teams \
-            uami-m365-experience-consto-onedrive uami-m365-experience-consto-teams-peer \
-            uami-m365-consto-teams-002 uami-m365-consto-teams-peer-002; do
-  az identity create --name $NAME --resource-group $RG --location $LOCATION
-done
+az acr create --name <registry-name> --resource-group <resource-group> \
+  --location <location> --sku Basic --admin-enabled false
+az containerapp env create --name <environment-name> --resource-group <resource-group> \
+  --location <location> --enable-workload-profiles true --logs-destination none
 ```
 
-A managed identity has no access of its own; creating one grants nothing until steps 4-5.
-
-## 3. AcrPull on the registry
-
-Skip this: `npm run deploy` grants it itself, to every identity a worker needs, as part of
-its foundation stage (`synthetic-tests/infra/registry-pull.bicep`). It is listed here only
-so an audit of "who can pull from the registry" finds it in one place.
-
-## 4. Exchange: mailbox access
-
-Follow [Exchange application RBAC setup](./exchange-permissions.md#exchange-application-rbac)
-for the first mailbox and role assignments, then extend the same scope's filter to cover
-every mailbox in `tenants[].services.exchange.targets.<groupId>.users[].mailbox`,
-deduplicated across groups and joined with `-or`. Review the complete approved
-inventory, including existing scope members: `Set-ManagementScope` replaces the
-filter rather than adding clauses automatically.
-
-```powershell
-Connect-ExchangeOnline -UserPrincipalName "<approved-admin>"
-
-$scopeName = "AHM-Exchange-<alias>-ManagedIdentity"
-$mailboxes = "user1@contoso.example", "user2@contoso.example"   # complete approved scope inventory
-$filter = ($mailboxes | ForEach-Object { "(PrimarySmtpAddress -eq '$_')" }) -join ' -or '
-Set-ManagementScope -Identity $scopeName -RecipientRestrictionFilter $filter
-
-foreach ($mailbox in $mailboxes) { Test-ServicePrincipalAuthorization -Identity $principalId -Resource $mailbox }
-```
-
-Grant only the roles the selected scenarios use: `Application Mail.ReadWrite` for
-the mail/draft journeys, `Application Mail.Send` for
-send-receive-mail/attachment-mail/reply-mail,
-`Application Calendars.ReadWrite` for recurring-calendar. `Test-ServicePrincipalAuthorization`
-reflects a scope change immediately; the running worker can still see HTTP 403 for a newly
-added mailbox for up to 2 hours.
-
-## 5. Microsoft Graph application roles and federated credentials
-
-Grant each only where the matching scenario is selected, to the identity's own service
-principal (`az ad sp show --id <principalId>` or `az identity show ... --query principalId`):
-
-| Identity | Role | When |
-| --- | --- | --- |
-| Every selected Teams pair's primary and peer UAMIs | `Calls.JoinGroupCall.All` | `scheduled-meeting` selected |
-| OneDrive worker | `Files.SelectedOperations.Selected` | `user-drive-roundtrip` or `document-versions` selected |
-| OneDrive worker | `Files.ReadWrite.AppFolder` | `app-folder-lifecycle` selected |
-| `tenants[].providerClientId` app | `ServiceHealth.Read.All` | root `serviceHealth.enabled` and service `execution.serviceHealth` |
-| `tenants[].providerClientId` app | `ServiceMessage.Read.All` | root `serviceHealth.enabled` and service `execution.serviceMessages` |
-| `tenants[].providerClientId` app | `ServiceActivity-Exchange.Read.All` / `-Teams.Read.All` | that service's `serviceActivity.enabled` and `deployment.enableBetaServiceActivity` |
-
-These provider application grants are tenant-wide, not scoped by runtime service
-filters. Message Center defaults off and requires separate approval. Readable
-communications use Data annotations on each existing Service Health entity; an
-approved deployment assigns the existing worker identity a separate entity-scoped
-entity-read and annotation read/add role. It does not broaden its ingest-only
-report role or its Microsoft 365 synthetic permissions.
-See [annotation access and limits](./provider-monitoring.md#notice-update-data-annotations).
+Skip existing approved resources. A bare resource name resolves in the root
+subscription/resource group; use a full resource ID for an existing resource
+elsewhere. Create each configured service `identity` and every distinct Teams
+primary/peer identity **before deployment preflight**:
 
 ```sh
-GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
-ROLE_ID=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 \
-  --query "appRoles[?value=='Calls.JoinGroupCall.All'].id" -o tsv)
-az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$PRINCIPAL_ID/appRoleAssignments" \
-  --body "{\"principalId\":\"$PRINCIPAL_ID\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$ROLE_ID\"}"
+az identity create --name <configured-identity-name> \
+  --resource-group <resource-group> --location <location>
 ```
 
-Each identity that calls the **provider** app registration (`providerClientId`) or the
-**Teams readback** app registration (`teamsReadbackClientId`) needs a federated credential
-on that app, so it can sign in as that app with no secret:
+Creating an identity grants no Microsoft 365 access. Keep its non-secret
+`clientId` (application ID), `principalId` (service-principal object ID) and resource
+ID distinct. Teams Bot registrations are prepared in the
+[Teams setup guide](./teams-permissions.md#prepare-the-bots-readback-and-callback).
+Deployment manages normal image-pull, configuration, Function storage and reporting
+roles; do not broaden service Graph grants to solve Azure reporting failures.
+
+## Authenticate scheduled Function dispatch
+
+From `synthetic-tests/`, using the approved operator session:
 
 ```sh
-az rest --method post --url "https://graph.microsoft.com/v1.0/applications/<app object id>/federatedIdentityCredentials" \
-  --body "{\"name\":\"<tenant alias>-<service>-worker\",\"issuer\":\"https://login.microsoftonline.com/<tenantId>/v2.0\",\"subject\":\"<identity principalId>\",\"audiences\":[\"api://AzureADTokenExchange\"]}"
+npm run setup:function-auth
 ```
 
-If you ever recreate an identity (a new resource group, a deleted-and-recreated identity),
-its `principalId` changes: repoint that identity's federated credential(s) to the new value,
-on both the provider app and, for the Teams worker, the readback app.
+[`setup/function-auth.ps1`](../synthetic-tests/setup/function-auth.ps1) creates or
+verifies a dedicated single-tenant Function API registration with v2 tokens and
+the selected dispatcher UAMI. It writes `FUNCTION_API_CLIENT_ID` and
+`COORDINATOR_CLIENT_ID` to `.env`. Existing explicitly bound applications must
+already satisfy its checks.
 
-## 6. Teams: bots, team and channel, app
+The dispatcher requests an application token for that API; the Functions validate
+the token and enforce the single configured dispatcher identity. This is separate
+from Graph authorization: the helper grants no Microsoft 365 permission and
+creates no client secret, certificate or Function key. Teams calling notifications
+have their own signed-notification validation.
 
-**Bots.** For every `teams.botPairs[]` entry, provision its primary `bot` bound to
-`identity` and its `peerBot` bound to `peerIdentity`, each with a Teams channel.
-Repeat the commands below for each registration; do not reuse participant
-identities between pairs. All pairs share the existing Teams worker and callback:
+## Deploy the foundation, authorize services, then enable scheduling
 
-```sh
-az bot create --name <pair.bot or pair.peerBot> --resource-group $RG --app-type UserAssignedMSI \
-  --appid <identity clientId> --msi-resource-id <identity resource ID> \
-  --tenant-id <tenants[].tenantId> --sku F0 --location global
+1. Set root `deployment.stage: "foundation"` and run from `synthetic-tests/`:
+   ```sh
+   npm run deploy -- --plan
+   npm run deploy
+   ```
+   This establishes health models, configuration/reporting infrastructure and
+   Function hosts before recurring execution. It does not grant Microsoft 365
+   access. Preflight still requires the selected identities/bot registrations.
+2. Complete each selected service's setup guide in the table above. Approve only
+   its required roles, prepare fixtures and generate IDs. The ordinary
+   `npm run setup:ids` processes all enabled live services; it performs operator
+   lookups for Teams/OneDrive and dispatches SharePoint discovery as its selected
+   UAMI. One-off commands need the deployed configuration storage and Container
+   Apps environment. They launch tracked PowerShell jobs and report failures.
+3. If provider context is wanted, separately approve the
+   [provider application's roles and each service identity's federation](./provider-monitoring.md#provider-authentication).
+4. After authorization, set each approved service's `execution.mode: "live"`,
+   root `deployment.enableLiveProbes: true` and `deployment.stage: "all"`.
+   Selected beta activity also requires `deployment.enableBetaServiceActivity: true`.
+   Preview and deploy again with the same commands.
 
-# Only when scheduled-meeting is selected, the calling callback URL (from npm run setup:ids):
-az bot msteams create --name <pair.bot or pair.peerBot> --resource-group $RG \
-  --enable-calling --calling-web-hook "https://<teams worker appName>.<environment default domain>/api/calls"
-```
-
-**Team and channel.** Prepare an approved dedicated test team for each ungrouped
-Teams target's `teamId`, and create the channel named by its `channelName`
-(or run `npm run setup:ids`, which does both the channel lookup/creation and the client-ID
-and URL lookups above in one pass once the bots and identities exist).
-Exchange/OneDrive user groups do not grant Teams membership.
-
-**Teams app.** The project's app template lives in
-[`synthetic-tests/setup/teams-app/`](../synthetic-tests/setup/teams-app/) (`manifest.json`
-with `{{placeholders}}`, plus the two icons). Create a separate package for **each
-pair's primary bot**, using a unique app ID. Fill in `version`, `appId` (reuse the existing
-app's `externalId` when updating it, otherwise the bot's client ID), `botId` (the bot's
-client ID), `calling` (`true`/`false`), `host` (`<teams worker appName>.<environment default
-domain>`) and `readbackClientId`, then zip the three files and, as a Teams administrator:
-
-1. Teams admin center > Teams apps > Manage apps > upload each primary bot's package
-   (or update that same app).
-2. Teams > each selected team > Manage team > Apps > add or update each primary app (it asks to
-   consent to `ChannelMessage.Read.Group` for that team only).
-
-**Fixing a stale app after the bot is recreated.** The installed Teams app is a
-Microsoft 365 tenant object, independent of the Azure resource group. If the bot's
-identity is ever deleted and recreated (for example, rebuilding the resource group),
-the previously installed app still points at the old bot's client ID, and channel
-messages start failing at the `post-message` step with `diagnosticCategory:
-"permission-failure"` / `httpStatus: 403` even though the app still shows as
-installed. To fix it:
-
-1. Run `npm run setup:ids` to refresh the affected pair's client-ID bindings. Update
-   the package's bot ID yourself and bump its version; the command does not create packages.
-2. Re-upload it and re-add it to the team as in the two steps above.
-3. If Teams creates a separate "M365 Synthetic Bot" entry instead of updating the
-   existing one in place (happens when the new package's `id` doesn't match the
-   previously uploaded app's `externalId`), remove the old, stale entry from the team
-   and the org catalog so no dead binding is left behind.
-4. Confirm the fix by checking the Teams worker's logs on the next cycle for
-   `post-message`/`permission-failure` entries to stop appearing (see
-   [Verify monitoring](#verify-monitoring)).
-
-## SharePoint: selected-site setup
-
-Follow [SharePoint permissions](./sharepoint-permissions.md) for the authorization
-boundary and the [worker reference](../synthetic-tests/sharepoint/README.md) for
-exact v1.0 endpoints. When a real target is approved:
-
-1. Manually prepare one dedicated `/sites/...` or `/teams/...` SharePoint site,
-   document library, direct child test folder and ordinary list with standard
-   `Title`. Enable at least two document versions; disable required checkout,
-   content approval and extra required columns on these fixtures. Retention and
-   protection policies must permit the approved writes/deletes.
-2. Select a same-tenant worker UAMI in `sharepoint.worker.identity`. An
-   administrator grants application `Sites.Selected` and a site-specific
-   `write` assignment to that application's client ID. The
-   [Selected-permissions overview](https://learn.microsoft.com/en-us/graph/permissions-selected-overview)
-   explains both necessary approvals and how site grants authorize drive/list
-   operations. Consent alone is insufficient. Neither runtime nor ID discovery gets
-   `Sites.ReadWrite.All`, `Files.ReadWrite.All` or `Sites.FullControl.All`.
-   Any separately approved one-time fixture provisioning uses a disposable
-   administrator managed identity/job, with just-in-time permission revoked
-   immediately afterward; it is never a worker or discovery credential.
-3. Configure the actual location names and `siteUrl` in root `sharepoint.targets`,
-   name the worker app, and enable the service in `live` mode. IDs and arbitrary
-   target keys do not belong in that block. Optional stable health/messages use
-   the separately approved provider application and worker federation, not the
-   site permission.
-4. On an approved host with the worker identity attached, explicitly set its
-   actual `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `ENABLE_LIVE_M365=true`.
-   Run `npm run setup:ids -- -SharePointOnly` from `synthetic-tests/`, adding
-   `-Tenant <alias>` for multiple tenants. It only reads existing resources and
-   saves generated `.env` bindings. It performs no delegated sign-in, automatic
-   grants, site/list/library creation or certificate/secret fallback.
-5. Review the local deploy plan before a separately approved rollout. Verify real
-   document bytes, prior-version bytes, list fields, owned-artifact cleanup and
-   reporting before recurring use. The selected fixtures and site grant are not
-   proof of worker access or healthy journeys.
-
-The ordinary `setup:ids` path also invokes SharePoint discovery when enabled,
-after its existing services' administrator lookups. `-SharePointOnly` avoids
-those unrelated administrator operations and skips all access/writes when disabled.
-
-## 7. Generate the `.env` values and deploy
-
-Obtain administrator-approved [access](./cross-tenant-access.md) before enabling
-live workers. Each hosted service explicitly selects its managed identity in
-`worker.identity`; Teams participants use bot identities, never employee tokens.
-
-Set the service's `execution.mode` to `"live"` and
-`deployment.enableLiveProbes` to `true`. Deployment rejects live workers without
-that approval and sets `ENABLE_LIVE_M365=true` for them. A local live run must set
-that environment variable explicitly.
-
-OneDrive folder setup needs a separately approved `tenants[].services.onedrive.setup`
-identity and a suitable host. Review its plan before applying, following the
-[OneDrive setup guide](./onedrive-setup.md#plan-apply-and-rerun).
-SharePoint may bootstrap generated bindings from approved fixture-provisioning
-outputs. Deploy normally, then verify read-only discovery in a disposable job
-using only the worker UAMI and its deployed immutable config Blob. The compiled
-`dist/sharepoint/src/setup-command.js` checks all four IDs without writing `.env`.
-The local `-SharePointOnly` command can also populate bindings on an approved
-worker-identity host; it is never an administrator CLI lookup or health proof.
-
-```sh
-cd synthetic-tests
-npm run setup:ids
-npm run setup:reply-seeds    # only when reply-mail is selected
-npm run onedrive:setup -- --apply   # only when OneDrive is selected; see docs/onedrive-setup.md
-npm run deploy -- --plan
-npm run deploy
-```
-
-Before deploying, use the Azure subscription in `healthModel.subscriptionId`;
-its tenant must match `deployment.azureTenantId`, which defaults to the monitored
-tenant for a single-tenant config. Deployment creates the health models before
-building and rolling out the workers; see
-[deployment order and options](./deployment.md#deploy-with-one-command).
-
-## Verify monitoring
-
-Neither fixture generation nor a successful deployment proves a journey passed.
-
-Run one real cycle first and inspect completed operations, cleanup, accepted
-reports, service/root roll-up and notification delivery. Follow the
-[operational acceptance gate](./operations.md#enterprise-reliability-acceptance-gate).
-For local simulation and individual service commands, see the
-[runtime README](../synthetic-tests/README.md).
+The Container App dispatches one Function invocation per selected journey case;
+execution Functions publish results directly. Configuration and service-file
+changes require redeployment of the resolved snapshot. Before relying on recurring
+monitoring, verify actual operations, cleanup, accepted reports and notification/
+freshness behavior using [operations](./operations.md). A successful setup or
+deployment is not evidence that a Microsoft 365 journey passed.

@@ -8,7 +8,6 @@ import type { ServiceConfig } from "../configuration/service-config.js";
 
 const MAX_CONCURRENT_REPORTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
-const REPORT_BATCH_TIMEOUT_MS = 30000;
 
 export type HealthState = "Healthy" | "Degraded" | "Unhealthy" | "Unknown";
 export interface EvaluationRules {
@@ -70,7 +69,7 @@ export function createHealthReportPublisher(
       for (const report of reports) telemetry.emit("health-report-preview", { modelName, ...report });
       return;
     }
-    const deadline = AbortSignal.timeout(REPORT_BATCH_TIMEOUT_MS);
+    const deadline = AbortSignal.timeout(service.publicationTimeoutSeconds * 1000);
     const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
     let nextReport = 0;
     let failures = 0;

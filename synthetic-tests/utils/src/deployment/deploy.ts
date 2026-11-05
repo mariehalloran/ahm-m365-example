@@ -4,23 +4,21 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { ConfigurationError, parseConfigJson } from "../configuration/config.js";
-import { applyBindings, parseBindings, readBindingsText } from "../configuration/bindings.js";
-import {
-  beginMutations, buildBicep, createStateDirectory, deployFoundation, deployModels, deployWorkers, deploysWorkers, hash, nativeCertificates,
-  pinImage, preflight, previewChanges, removeSecureParameters, retireObsoleteEntities, saveProvenance, sourceFingerprint,
-  verifyRollout, writeParameterFiles, type DeploymentRun,
-} from "./deploy-phases.js";
+import { ConfigurationError } from "../configuration/config.js";
+import { readBindingsText } from "../configuration/bindings.js";
+import { readProjectDocument } from "../configuration/project-config.js";
 import { canonicalProjectFile } from "../paths.js";
 import { prepareProjectDeployment, type PreparedDeployment } from "./prepare-deployment.js";
 import {
-  deployFreshnessAlert, deployIngestionFunction, deployReportingFoundation, uploadWorkerConfiguration,
-  verifyDirectReports, verifyObservations, writeReportingParameters,
+  assertUnchanged, az, buildBicep, createCommandTempDirectory, createStateDirectory, deployStack, hash, pinCoordinatorImage,
+  preflight, saveProvenance, sourceFingerprint, verifyCoordinator, type DeploymentRun,
+} from "./deploy-phases.js";
+import {
+  deployExecutionFunctions, pauseAndDrainCoordinator, resolveFunctionEndpoint,
+  uploadConfiguration, verifyDirectReports, verifyLaneExecution, verifyObservations,
 } from "./reporting-deployment.js";
-import { prepareLogPipelineRetirement, retireLogPipeline, retireWorkerDiagnosticGrants } from "./retire-log-pipeline.js";
 
 const execFileAsync = promisify(execFile);
-const placeholderSubscriptionId = "00000000-0000-0000-0000-000000000000";
 export interface DeploymentCommand {
   tool: "az" | "git" | "npm" | "zip";
   args: string[];
@@ -37,11 +35,13 @@ export class DeploymentCommandError extends Error {
     this.name = "DeploymentCommandError";
   }
 }
+
+/** Executes one bounded CLI operation without printing tokens, real targets or raw credential errors. */
 export const runDeploymentCommand: DeploymentCommandRunner = async command => {
   try {
     return (await execFileAsync(command.tool, command.args, {
-      cwd: command.cwd, env: command.env, timeout: Math.max(1, Math.floor(command.timeoutSeconds * 1000)),
-      signal: command.signal, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+      cwd: command.cwd, env: command.env, timeout: Math.max(1, command.timeoutSeconds * 1000),
+      signal: command.signal, maxBuffer: 32 * 1024 * 1024, windowsHide: true,
     })).stdout;
   } catch (error) {
     const details = error as { code?: unknown; killed?: boolean };
@@ -51,170 +51,156 @@ export const runDeploymentCommand: DeploymentCommandRunner = async command => {
 };
 
 interface DeploymentOptions {
-  file?: string; plan?: boolean; env?: NodeJS.ProcessEnv; run?: DeploymentCommandRunner;
-  signal?: AbortSignal; sleep?: (milliseconds: number) => Promise<void>; now?: () => number;
+  file?: string;
+  plan?: boolean;
+  env?: NodeJS.ProcessEnv;
+  run?: DeploymentCommandRunner;
+  signal?: AbortSignal;
+  sleep?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
   emit?: (event: Record<string, unknown>) => void;
 }
 
-const printEvent = (event: Record<string, unknown>) => console.log(JSON.stringify(event));
-const wait = (milliseconds: number) => new Promise<void>(done => setTimeout(done, milliseconds));
-
+/** Describes the actual selected architecture without exposing configured account/resource identifiers. */
 export function deploymentPlan(prepared: PreparedDeployment) {
-  const logAnalytics = prepared.document.logAnalytics.enabled;
+  const serviceCount = new Set(prepared.owners.map(owner => owner.type)).size;
   return {
-    event: "monitoring-deployment-plan", cloudChanges: false,
-    configFile: canonicalProjectFile, subscriptionConfigured: prepared.document.healthModel.subscriptionId !== placeholderSubscriptionId,
-    stage: prepared.settings.stage, location: prepared.settings.location, models: prepared.modelNames,
-    workerCount: prepared.workers.length, reportingGroups: prepared.reportingGroups.map(({ service, id }) => ({ service, id })),
-    logAnalytics: logAnalytics ? {
-      ...prepared.document.logAnalytics,
-      workspaceName: prepared.settings.workspaceName ?? `law-${prepared.document.healthModel.name}`,
-      table: "M365Synthetic_CL", workspaceBilling: "PerGB2018",
-      transport: "Event Hubs -> managed-identity Function -> DCR Logs Ingestion API",
-    } : { enabled: false, transport: "Container -> direct Azure Monitor Health Models reports" },
-    configurationStorageAccount: prepared.settings.configurationStorageAccount,
-    workers: prepared.workers.map(worker => ({
-      tenant: worker.tenant, service: worker.type, appName: worker.appName, identityResourceId: worker.identityResourceId,
-      targetCount: worker.service.type === "teams"
-        ? worker.service.botPairs.length * (worker.service.targets.length + worker.service.callTargets.length) : worker.service.targets.length,
-      ...(worker.service.type === "teams" ? { botPairCount: worker.service.botPairs.length } : {}),
-      mode: worker.service.mode,
-    })),
-    foundationMode: prepared.settings.foundation.mode, imageMode: prepared.settings.image.mode,
-    retiredEntityCount: prepared.settings.retireEntities.length,
-    phases: ["credential-and-binding-preflight", "build-bicep", "reporting-foundation-what-if", "models-what-if", "foundation-what-if", "workers-what-if",
-      "deploy-configuration-and-selected-reporting-foundation", "deploy-models", "deploy-foundation", ...(deploysWorkers(prepared)
-        ? ["pin-image", ...(logAnalytics ? ["deploy-ingestion-function", "verify-ingestion-function"] : []),
-          "upload-worker-configuration", "deploy-exchange-pilot",
-          logAnalytics ? "verify-observations" : "verify-direct-health-reports", "deploy-workers", "verify-rollout",
-          ...(logAnalytics ? ["deploy-freshness-alert", "verify-freshness-query"] : ["retire-owned-log-pipeline-preserve-history"]),
-          "retire-obsolete-diagnostic-grants", "retire-explicit-obsolete-entities"] : [])],
-    note: "Local plan only: Azure permissions, actual Graph access, bot routes, image availability and rollout are not verified.",
+    event: "monitoring-deployment-plan", cloudChanges: false, configFile: canonicalProjectFile,
+    stage: prepared.settings.stage, modelCount: prepared.modelNames.length,
+    coordinator: { count: 1, purpose: "cron-dispatch-only", receivesResults: false, pollsExecutions: false, authentication: "selected-managed-identity" },
+    functions: {
+      runtime: "Node.js 22 / programming model v4", plan: "Flex Consumption FC1",
+      start: "Entra-authenticated durable HTTP starter; 202 after Storage acceptance",
+      state: "identity-based Azure Storage; persistent lane ownership and callback state",
+      executionOwners: prepared.owners.length, laneCount: prepared.lanes.length,
+      functionAppCount: serviceCount + 1, watchdog: "separate non-Graph managed identity and Function host; execution/publication freshness",
+      apiRegistrationConfigured: Boolean(prepared.settings.functions.apiClientId),
+    },
+    reporting: {
+      logAnalyticsEnabled: prepared.document.logAnalytics.enabled,
+      transport: prepared.document.logAnalytics.enabled
+        ? "Function -> LogsIngestionClient -> DCE/DCR -> M365Synthetic_CL -> native KQL signals"
+        : "Function -> aggregated Azure Monitor Health Models ingestHealthReport",
+      stepPublication: "during execution", finalJourneyPublication: true, perTargetModelSignals: false,
+      eventHubs: false, captureOrReplay: false, ingestionBridge: false, resultsQueue: false,
+    },
+    lanes: prepared.lanes.map(lane => {
+      const owner = prepared.owners.find(owner => owner.tenant === lane.tenant && owner.type === lane.service)!;
+      return {
+        tenantIndex: prepared.document.tenants.findIndex(tenant => tenant.id === lane.tenant),
+        service: lane.service, lane: lane.lane, intervalSeconds: lane.intervalSeconds, timeoutSeconds: lane.timeoutSeconds,
+        journey: lane.journey,
+        ...(lane.provider ? {} : { probeType: lane.probeType, testId: lane.testId }),
+        cycleTimeoutSeconds: owner.service.cycleTimeoutSeconds, cleanupTimeoutSeconds: owner.service.cleanupTimeoutSeconds,
+        cleanupGraceSeconds: owner.service.cleanupGraceSeconds, publicationTimeoutSeconds: owner.service.publicationTimeoutSeconds,
+        slotMarginSeconds: owner.service.slotMarginSeconds,
+        targetCount: lane.provider ? 0 : 1,
+        ...(lane.service === "exchange" ? {
+          actualHttpPermits: { global: owner.service.maxConcurrentRequests, perMailbox: owner.service.maxConcurrentRequestsPerMailbox },
+        } : {}),
+      };
+    }),
+    prerequisites: [
+      "Explicit one-off Function Entra setup; no function-key, secret or certificate fallback",
+      "Stop obsolete service Graph workers and the old ingestion Function before migration",
+      "Review preserved legacy Event Hubs/Capture/storage resources; no automatic deletion",
+      "Verify independent freshness monitoring and action-group notifications end to end",
+    ],
+    verification: ["indexed-durable-and-callback-functions", "Entra-policy", "dispatcher-ready-revision",
+      "all-live-lane-execution-and-publication-journals", prepared.document.logAnalytics.enabled ? "all-target-journey-log-ingestion" : "complete-journey-and-group-health-aggregates"],
+    note: "Local plan only. No Azure resource changes, authentication, Graph operations or live health ingestion were verified.",
   };
 }
 
+/** Deploys models, durable execution Functions and one dispatcher from the same authoritative root configuration. */
 export async function deployMonitoring(options: DeploymentOptions = {}) {
   const file = resolve(options.file ?? canonicalProjectFile);
   const configText = await readFile(file, "utf8");
   const bindingsText = await readBindingsText(file);
-  const prepared = prepareProjectDeployment(
-    applyBindings(parseConfigJson(configText), parseBindings(bindingsText)),
-  );
+  const prepared = prepareProjectDeployment(await readProjectDocument(file));
+  const emit = options.emit ?? (event => console.log(JSON.stringify(event)));
   if (options.plan) {
-    const plan = { ...deploymentPlan(prepared), configFile: file };
-    (options.emit ?? printEvent)(plan);
+    const plan = deploymentPlan(prepared);
+    emit(plan);
     return plan;
   }
-  if (prepared.document.healthModel.subscriptionId === placeholderSubscriptionId) {
-    throw new ConfigurationError("Configure an approved healthModel.subscriptionId before Azure deployment; --plan remains local");
+  if (prepared.document.healthModel.subscriptionId === "00000000-0000-0000-0000-000000000000") {
+    throw new ConfigurationError("Deployment requires an approved root subscription; --plan remains local");
   }
-  const run = await createRun({ file, configText, bindingsText }, prepared, options);
-  try {
-    await saveProvenance(run);
-    const { registry, retirements } = await preflight(run);
-    const logPipelineRetirement = prepared.document.logAnalytics.enabled ? undefined : await prepareLogPipelineRetirement(run);
-    await buildBicep(run);
-    await writeParameterFiles(run, registry);
-    await writeReportingParameters(run);
-    await deployReportingFoundation(run, "what-if");
-    await previewChanges(run, registry);
-    await beginMutations(run);
-    await deployReportingFoundation(run, "create");
-    await deployModels(run);
-    await deployFoundation(run);
-    if (deploysWorkers(prepared)) {
-      const image = await pinImage(run, registry);
-      if (prepared.document.logAnalytics.enabled) await deployIngestionFunction(run);
-      await uploadWorkerConfiguration(run);
-      const pilot = prepared.workers.find(worker => worker.type === "exchange") ?? prepared.workers[0]!;
-      const pilotStarted = new Date(run.now()).toISOString();
-      await deployWorkers(run, image, [pilot.type]);
-      await verifyRollout(run, image, [pilot.type]);
-      const verifyReports = prepared.document.logAnalytics.enabled ? verifyObservations : verifyDirectReports;
-      await verifyReports(run, pilot.type, pilotStarted);
-      await deployWorkers(run, image);
-      await verifyRollout(run, image);
-      for (const service of [...new Set(prepared.workers.map(worker => worker.type))]) {
-        await verifyReports(run, service, pilotStarted);
-      }
-      if (prepared.document.logAnalytics.enabled) await deployFreshnessAlert(run);
-      else await retireLogPipeline(run, logPipelineRetirement!);
-      await retireWorkerDiagnosticGrants(run);
-      await retireObsoleteEntities(run, retirements);
-    }
-    return await recordSuccess(run); // awaited so a failure while recording success is recorded as a failed run
-  } catch (error) {
-    await recordFailure(run, error);
-    throw error;
-  } finally {
-    await removeSecureParameters(run);
-  }
-}
-
-async function createRun(
-  source: { file: string; configText: string; bindingsText: string }, prepared: PreparedDeployment, options: DeploymentOptions,
-): Promise<DeploymentRun> {
-  const { file, configText, bindingsText } = source;
-  const env = options.env ?? process.env;
-  const certificates = nativeCertificates(prepared, env);
-  const sourceHash = await sourceFingerprint();
   const now = options.now ?? Date.now;
   const runId = `${new Date(now()).toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
-  if (prepared.settings.image.mode === "build" && `${prepared.settings.image.tag}-${runId}`.length > 128) {
-    throw new ConfigurationError("deployment.image.tag is too long to append a unique deployment run ID within 128 characters");
+  const run: DeploymentRun = {
+    prepared, configFile: file, configText, bindingsText, runId,
+    projectDocumentSha256: hash(JSON.stringify(prepared.document)),
+    directory: await createStateDirectory(prepared.settings.stateDirectory, runId),
+    tmpDirectory: await createCommandTempDirectory(runId),
+    sourceHash: await sourceFingerprint(), subscription: ["--subscription", prepared.document.healthModel.subscriptionId],
+    phase: "preflight", mutated: false, env: options.env ?? process.env, now,
+    signal: options.signal ?? new AbortController().signal, runner: options.run ?? runDeploymentCommand,
+    sleep: options.sleep ?? (milliseconds => new Promise(done => setTimeout(done, milliseconds))), emit,
+  };
+  try {
+    await saveProvenance(run, "preflight");
+    await preflight(run);
+    await buildBicep(run);
+    for (const stack of ["configuration", "models", "execution"]) await deployStack(run, stack, "what-if");
+    await assertUnchanged(run);
+    run.mutated = true;
+    await saveProvenance(run, "deploying");
+    await pauseAndDrainCoordinator(run);
+    await deployStack(run, "configuration", "create");
+    await deployStack(run, "models", "create");
+    await deployStack(run, "execution", "create");
+    await resolveFunctionEndpoint(run);
+    await uploadConfiguration(run);
+    await deployStack(run, "execution", "create");
+    if (run.prepared.settings.stage === "all") {
+      await deployExecutionFunctions(run);
+      run.image = await pinCoordinatorImage(run);
+      await deployStack(run, "execution", "what-if", true);
+      const verificationStart = run.now();
+      await deployStack(run, "execution", "create", true);
+      await az(run, "start-coordinator", [
+        "resource", "invoke-action", "--action", "start",
+        "--resource-type", "Microsoft.App/containerApps", "--name", run.prepared.settings.coordinator.appName,
+        "--resource-group", run.prepared.document.healthModel.resourceGroup, ...run.subscription, "--output", "none",
+      ]);
+      await verifyCoordinator(run);
+      await verifyLaneExecution(run, verificationStart);
+      if (run.prepared.document.logAnalytics.enabled) {
+        await verifyObservations(run, verificationStart);
+        await deployStack(run, "freshness", "what-if");
+        await deployStack(run, "freshness", "create");
+      } else await verifyDirectReports(run, verificationStart);
+    }
+    if (run.prepared.settings.retireEntities.length) {
+      throw new ConfigurationError("Explicit obsolete entity retirement is manual in this migration; no entities or historical resources were automatically deleted");
+    }
+    await saveProvenance(run, "succeeded", { image: run.image });
+    const result = {
+      event: "monitoring-deployment-completed", runId, stage: run.prepared.settings.stage,
+      laneCount: run.prepared.lanes.length, stateDirectory: run.directory,
+      note: "Verify operational alerts and notification delivery independently; 202 acceptance alone is not monitoring success.",
+    };
+    emit(result);
+    return result;
+  } catch (error) {
+    await saveProvenance(run, run.signal.aborted ? "cancelled" : "failed", {
+      errorType: error instanceof Error ? error.name : "unknown", remoteMayStillRun: run.mutated,
+    });
+    emit({
+      event: "monitoring-deployment-failed", phase: run.phase, stateDirectory: run.directory, remoteMayStillRun: run.mutated,
+      ...(error instanceof ConfigurationError ? { message: error.message } : {}),
+    });
+    throw error;
   }
-  const directory = await createStateDirectory(prepared.settings.stateDirectory, runId);
-  const { subscriptionId, resourceGroup } = prepared.document.healthModel;
-  return {
-    prepared, configFile: file, configText, bindingsText, sourceHash, certificates, runId, directory,
-    subscription: ["--subscription", subscriptionId],
-    provenance: {
-      runId, status: "preflight", configSha256: hash(configText), bindingsSha256: hash(bindingsText), sourceSha256: sourceHash,
-      subscriptionId, resourceGroup, models: prepared.modelNames, startedAt: new Date(now()).toISOString(),
-    },
-    phase: "preflight", mutated: false, env, now,
-    signal: options.signal ?? new AbortController().signal,
-    runner: options.run ?? runDeploymentCommand,
-    sleep: options.sleep ?? wait,
-    emit: options.emit ?? printEvent,
-  };
 }
 
-async function recordSuccess(run: DeploymentRun) {
-  run.provenance.status = "succeeded";
-  run.provenance.completedAt = new Date(run.now()).toISOString();
-  await saveProvenance(run);
-  const result = {
-    event: "monitoring-deployment-completed", runId: run.runId, stateDirectory: run.directory, stage: run.prepared.settings.stage,
-    image: run.provenance.image, workerCount: run.prepared.workers.length,
-    note: "ARM/ready-revision rollout completed; independently verify real journey reports, freshness and notifications.",
-  };
-  run.emit(result);
-  return result;
-}
-
-async function recordFailure(run: DeploymentRun, error: unknown) {
-  const { provenance } = run;
-  provenance.status = run.signal.aborted ? "cancelled" : "failed";
-  provenance.phase = error instanceof DeploymentCommandError ? error.phase : run.phase;
-  provenance.remoteMayStillRun = run.mutated;
-  provenance.errorType = error instanceof Error ? error.name : "unknown";
-  await saveProvenance(run);
-  run.emit({
-    event: "monitoring-deployment-failed", phase: provenance.phase, stateDirectory: run.directory, remoteMayStillRun: run.mutated,
-    ...(error instanceof ConfigurationError ? { message: error.message } : {}),
-  });
-}
-
+/** Accepts only the repository-root deployment and its local no-cloud preview. */
 export function parseDeployArguments(args: string[]) {
-  let plan = false;
-  let file: string | undefined;
-  for (let index = 0; index < args.length; index++) {
-    if (args[index] === "--plan" && !plan) plan = true;
-    else if (args[index] === "--config" && !file && args[index + 1] && !args[index + 1]!.startsWith("--")) file = args[++index];
-    else throw new ConfigurationError("Usage: npm --prefix synthetic-tests run deploy -- [--plan] [--config <monitoring.config.json>]");
-  }
-  return { plan, ...(file ? { file } : {}) };
+  if (args.length === 0) return { plan: false };
+  if (args.length === 1 && args[0] === "--plan") return { plan: true };
+  throw new ConfigurationError("Usage: npm --prefix synthetic-tests run deploy -- [--plan]");
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
@@ -224,8 +210,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   process.once("SIGTERM", stop);
   try { await deployMonitoring({ ...parseDeployArguments(process.argv.slice(2)), signal: controller.signal }); }
   catch (error) {
-    console.error(JSON.stringify({ event: "monitoring-deploy-command-failed", errorType: error instanceof Error ? error.name : "unknown",
-      ...(error instanceof ConfigurationError || error instanceof DeploymentCommandError ? { message: error.message } : {}) }));
+    console.error(JSON.stringify({
+      event: "monitoring-deploy-command-failed", errorType: error instanceof Error ? error.name : "unknown",
+      ...(error instanceof ConfigurationError || error instanceof DeploymentCommandError ? { message: error.message } : {}),
+    }));
     process.exitCode = controller.signal.aborted ? 130 : 1;
   } finally {
     process.off("SIGINT", stop);

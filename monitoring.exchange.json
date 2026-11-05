@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "2.0",
+  "service": "exchange",
+  "tenants": [
+    {
+      "id": "consto",
+      "config": {
+        "enabled": true,
+        "execution": {
+          "mode": "live",
+          "intervalSeconds": 300,
+          "timeoutSeconds": 240,
+          "cohort": "exchange-global",
+          "maxConcurrentRequests": 32,
+          "maxConcurrentRequestsPerMailbox": 2,
+          "serviceHealth": true,
+          "serviceMessages": true,
+          "providerIntervalSeconds": 60,
+          "serviceActivity": {
+            "enabled": true,
+            "functions": [
+              "getConnectivityMetricsForExchange",
+              "getMessageVolumeMetricsForEmailDelivery",
+              "getActiveUserMetricsForOutlookWebByReadEmail",
+              "getActiveUserMetricsForOutlookWebByAppOpening",
+              "getActiveUserMetricsForEmailByModernAuthentication",
+              "getActiveUserMetricsForDesktopMailByReadEmail",
+              "getActiveUserMetricsForOutlookMobileByReadEmail",
+              "getActiveUserMetricsForOutlookMacByReadEmail",
+              "getActiveUserMetricsForiOSOrAndroidMailByReadEmail"
+            ]
+          },
+          "cycleTimeoutSeconds": 275,
+          "cleanupTimeoutSeconds": 10,
+          "cleanupGraceSeconds": 12,
+          "publicationTimeoutSeconds": 12,
+          "slotMarginSeconds": 1
+        },
+        "scenarios": {
+          "send-receive-mail": true,
+          "edit-reopen-draft": true,
+          "attachment-mail": true,
+          "reply-mail": true,
+          "recurring-calendar": true
+        },
+        "targets": {
+          "united-kingdom-users": {
+            "userGroupName": "United Kingdom Users",
+            "users": [
+              {
+                "mailbox": "test-user-4@constosuites.onmicrosoft.com"
+              },
+              {
+                "mailbox": "test-user-5@constosuites.onmicrosoft.com"
+              }
+            ]
+          },
+          "united-states-users": {
+            "userGroupName": "United States Users",
+            "users": [
+              {
+                "mailbox": "test-user-1@constosuites.onmicrosoft.com"
+              },
+              {
+                "mailbox": "test-user-2@constosuites.onmicrosoft.com"
+              }
+            ]
+          }
+        },
+        "identity": "uami-m365-experience-consto-exchange"
+      }
+    }
+  ]
+}

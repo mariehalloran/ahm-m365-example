@@ -12,7 +12,13 @@ Confirm beta API eligibility with Microsoft; consent alone does not establish it
 These published feature minimums do not establish the cause of an observed beta 403.
 These minimums do **not** apply to stable Service Health.
 
-Each existing service container has an **independent provider lane**. It does not wait for synthetic execution and cannot change synthetic success, business-step measurements, or Experience rollup. All stable and approved beta signals for a product belong to **one** impact-suppressed `${service}-service-health` entity, reported ungrouped. There are no per-API entities or relationships. No extra container, mandatory Log Analytics workspace, or simulated live data is introduced.
+Each service has an **independent provider schedule**, executed by Azure Functions.
+Collection does not wait for synthetic execution and cannot change synthetic
+success, business-step measurements or Experience rollup. All stable and approved
+beta signals for a product belong to **one** impact-suppressed
+`${service}-service-health` entity, reported ungrouped.
+The [service READMEs](../synthetic-tests/README.md#services) explain each product's
+journeys, model image and optional provider sources.
 
 ## Short setup
 
@@ -25,8 +31,10 @@ Each existing service container has an **independent provider lane**. It does no
    Name the federated read-only provider application once per tenant as
    `providerClientId`: services enabling `serviceHealth`, `serviceMessages` or
    `serviceActivity` inherit it unless `execution.providerClientId` overrides it.
-   Each hosted worker needs its own federation trust; there is no certificate fallback.
-3. Set these in the service's `execution` block (`tenants[].services.<service>.execution`), not in root selection/target fields:
+   Each hosted execution identity needs its own federation trust; see
+   [provider authentication](#provider-authentication).
+3. Set these in the matching service file's `tenants[].config.execution`
+   (composed as `tenants[].services.<service>.execution`), not root target fields:
 
 ```json
 {
@@ -49,8 +57,8 @@ Each existing service container has an **independent provider lane**. It does no
 ```
 
 `serviceMessages` defaults **off**, independently of stable health and beta.
-Messages-only selection inherits the same provider app and uses the same worker
-and provider lane. The checked-in test configuration enables messages for all
+Messages-only selection inherits the same provider app and uses the same service
+Function and independent provider schedule. The checked-in test configuration enables messages for all
 four selected products and sets the provider cadence to 60 seconds. SharePoint
 keeps those stable selections/cadence; missing separately approved provider
 access reports Unknown and never triggers an automatic grant. Synthetic schedules
@@ -63,15 +71,81 @@ For **OneDrive and SharePoint**, enable the wanted stable health/messages switch
 `serviceActivity.enabled: false`, with no beta `functions` or `thresholds`.
 The inherited provider app does not automatically acquire Graph permissions.
 
-4. Set the explicit approvals in the `deployment` section, then run `npm run deploy`, which deploys the matching models first and then the workers:
+4. Set the explicit approvals in root `deployment`, then run `npm run deploy`,
+   which establishes matching models before enabling scheduled execution:
 
 ```json
 "deployment": { "enableLiveProbes": true, "enableBetaServiceActivity": true }
 ```
 
-`enableBetaServiceActivity: true` mounts `ENABLE_BETA_SERVICE_ACTIVITY=true` in each worker, and deployment rejects a live worker that enables `serviceActivity` without it. No environment override is required. Local live commands still require both `ENABLE_LIVE_M365=true` and `ENABLE_BETA_SERVICE_ACTIVITY=true`; beta acknowledgement is also required when explicitly testing beta-enabled simulation. `--once` settles synthetic and provider lanes before exit.
+`enableBetaServiceActivity: true` supplies `ENABLE_BETA_SERVICE_ACTIVITY=true`
+to execution Functions; deployment rejects live beta collection without it.
+Local live commands still require both `ENABLE_LIVE_M365=true` and
+`ENABLE_BETA_SERVICE_ACTIVITY=true`; beta acknowledgement is also required when
+explicitly testing beta-enabled simulation. `--once` settles synthetic and provider
+lanes before exit.
 
 5. Validate actual Graph authorization, returned buckets and accepted AHM ingestion. Permission assignment is not proof of tenant eligibility, publication latency, model evaluation or alert delivery. Beta APIs are preview/unsupported for production under their beta contract.
+
+## Provider authentication
+
+Provider read permissions belong to a **separate Entra application**, not the
+Exchange mailbox, OneDrive folder, SharePoint site or Teams bot authorization.
+This keeps tenant-wide provider consent separate from synthetic resource scopes.
+Creating a provider app or federation trust does not grant those permissions.
+
+An application administrator prepares the app/service principal and federation;
+a Privileged Role Administrator or Global Administrator approves the required
+Microsoft Graph **application** roles:
+
+| Enabled source | Role on the provider application |
+| --- | --- |
+| Stable overviews/incidents, any selected product | `ServiceHealth.Read.All` |
+| Message Center, any selected product | `ServiceMessage.Read.All` |
+| Exchange beta activity | `ServiceActivity-Exchange.Read.All` |
+| Teams beta activity | `ServiceActivity-Teams.Read.All` |
+
+These are tenant-wide read grants. Service filters select relevant data but are
+not permission boundaries. Review existing assignments before adding approved
+roles. This first-time example grants stable health on the **provider app's
+service principal**, not a worker principal:
+
+```sh
+PROVIDER_SP=$(az ad sp show --id <providerClientId> --query id -o tsv)
+GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
+ROLE_ID=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 \
+  --query "appRoles[?value=='ServiceHealth.Read.All'].id | [0]" -o tsv)
+az rest --method post \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$PROVIDER_SP/appRoleAssignments" \
+  --body "{\"principalId\":\"$PROVIDER_SP\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$ROLE_ID\"}"
+```
+
+Repeat with only the separately approved role values in the table. Configure the
+app's **client/application ID** as root `tenants[].providerClientId`, or override
+it in a service's `config.execution.providerClientId`.
+
+For each service identity that collects context, add a federated credential on
+the provider app, using its **app-registration object ID** in the URL and the
+UAMI's **principal/object ID** as `subject`:
+
+```sh
+az rest --method post \
+  --url "https://graph.microsoft.com/v1.0/applications/<provider-app-object-id>/federatedIdentityCredentials" \
+  --body '{"name":"<tenant-service-execution>","issuer":"https://login.microsoftonline.com/<actual-identity-tenant-id>/v2.0","subject":"<service-UAMI-principalId>","audiences":["api://AzureADTokenExchange"]}'
+```
+
+The Function obtains a managed-identity assertion for
+`api://AzureADTokenExchange/.default`, exchanges it as the provider app and calls
+Graph with `https://graph.microsoft.com/.default`. No client secret, uploaded
+certificate or developer-login fallback is used. Use the supported
+[same-tenant binding](./cross-tenant-access.md); relabeling tenant IDs does not
+create a cross-tenant trust.
+
+If a UAMI is recreated, update its federation subject before expecting collection
+to recover. Stop the relevant provider schedules before revocation; remove only
+owned trusts/roles after reviewing other services that share the provider app.
+Azure Health Model report-ingestion and optional annotation roles are separate
+from Graph consent; [annotation access is documented below](#notice-update-data-annotations).
 
 ## Exact endpoints and units
 

@@ -1,20 +1,22 @@
 import { z } from "zod";
+import { dirname, resolve } from "node:path";
 import { applyBindings, readBindings } from "./bindings.js";
 import { ConfigurationError, readConfigJson } from "./config.js";
 import { probeServices } from "../contracts.js";
 import { executionLanes } from "../execution/execution-lanes.js";
 import { resolveGroups, tenantGroups, userGroupTargets, type TenantGroup } from "./groups.js";
 import { expandReferences } from "./references.js";
+import { isRecord, records } from "./raw-config.js";
 import {
   hasProviderSources, parseServiceConfig, parseServiceExecution, serviceExecutionSchema, serviceTargetSchemas, teamsCallTargetsSchema, validateTeamsBotPairs,
   type ServiceConfig, type ServiceExecution,
 } from "./service-config.js";
-import { applicationAccessSchema, deploymentSettingsSchema, teamsBotPairSchema, workerSettingsSchema } from "./deployment-config.js";
+import { applicationAccessSchema, deploymentSettingsSchema, managedIdentityResourceId, teamsBotPairSchema } from "./deployment-config.js";
 import { canonicalProjectFile } from "../paths.js";
-import { CLEANUP_GRACE_MS, PUBLICATION_TIMEOUT_MS, SLOT_MARGIN_MS } from "../execution/budgets.js";
 import { sharePointTargetId } from "./sharepoint-target.js";
 
 export const serviceTypes = ["exchange", "teams", "onedrive", "sharepoint"] as const;
+const serviceTypeSchema = z.enum(serviceTypes);
 type ServiceJourney<S extends ServiceConfig["type"]> =
   Extract<(typeof probeServices)[keyof typeof probeServices], { service: S }>["journey"];
 function scenarioSelection<S extends ServiceConfig["type"]>(service: S) {
@@ -31,7 +33,8 @@ const selection = {
   enabled: z.boolean().default(true),
   execution: serviceExecutionSchema,
   access: applicationAccessSchema.default({}),
-  worker: workerSettingsSchema.optional(),
+  identityResourceId: managedIdentityResourceId.optional(),
+  identityClientId: z.string().uuid().optional(),
 };
 const actionGroupResourceId = z.string().trim().regex(
   /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/resourceGroups\/[a-z0-9_().-]{1,90}\/providers\/Microsoft\.Insights\/actionGroups\/[^\x00-\x1f<>%&\\/?#]{0,259}[^\x00-\x1f<>%&\\/?# .]$/i,
@@ -72,10 +75,7 @@ const tenantServicesSchema = z.object({
     scenarios: scenarioSelection("onedrive"),
     targets: userGroups(serviceTargetSchemas.onedrive),
     setup: z.object({
-      authentication: z.enum(["azure-cli", "managed-identity", "certificate"]),
-      workerClientId: z.string().uuid(),
-      setupClientId: z.string().uuid().optional(),
-      certificatePath: z.string().min(1).optional(),
+      identityResourceId: managedIdentityResourceId,
       concurrency: z.number().int().min(1).max(10).default(4),
       targetTimeoutSeconds: z.number().int().min(30).max(3600).default(300),
     }).strict().optional(),
@@ -84,23 +84,11 @@ const tenantServicesSchema = z.object({
     ...selection,
     scenarios: scenarioSelection("sharepoint"),
     targets: serviceTargetSchemas.sharepoint,
-  }).strict().default({
-    enabled: false,
-    execution: { mode: "live", intervalSeconds: 300, timeoutSeconds: 240, cohort: "sharepoint-global" },
-    targets: [],
-  }),
+  }).strict(),
 }).strict();
 const logAnalyticsResourcesSchema = z.object({
-  eventHubNamespace: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$/),
-  eventHubName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}[a-zA-Z0-9]$/),
-  functionStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
-  functionAppName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-  functionPlanName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-  ingestionIdentityName: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/),
   dataCollectionEndpointName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
   dataCollectionRuleName: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,58}[a-zA-Z0-9]$/),
-  captureEnabled: z.boolean().default(false),
-  archiveRetentionDays: z.number().int().min(1).max(3650).default(90),
 });
 export const projectDocumentSchema = z.object({
   schemaVersion: z.literal("2.0"),
@@ -119,6 +107,64 @@ export const projectDocumentSchema = z.object({
   }).strict()).min(1),
 }).strict();
 export type ProjectDocument = z.infer<typeof projectDocumentSchema>;
+
+const serviceFileMapSchema = z.object({
+  exchange: z.string().trim().min(1),
+  teams: z.string().trim().min(1),
+  onedrive: z.string().trim().min(1),
+  sharepoint: z.string().trim().min(1),
+}).strict();
+const projectServiceFileSchema = z.object({
+  schemaVersion: z.literal("2.0"),
+  service: serviceTypeSchema,
+  tenants: z.array(z.object({
+    id: slug,
+    config: z.unknown(),
+  }).strict()).default([]),
+}).strict();
+
+type ServiceFileEntry = z.infer<typeof projectServiceFileSchema>["tenants"][number];
+
+async function composeServiceFiles(raw: unknown, file: string): Promise<unknown> {
+  const document = structuredClone(raw);
+  if (!isRecord(document) || !isRecord(document.serviceFiles)) return document;
+  const serviceFiles = serviceFileMapSchema.safeParse(document.serviceFiles);
+  if (!serviceFiles.success) throw new ConfigurationError("serviceFiles must map exchange, teams, onedrive and sharepoint to JSON config paths");
+  const tenants = records(document.tenants);
+  if (tenants.some(tenant => tenant.services !== undefined)) {
+    throw new ConfigurationError("When serviceFiles is configured, remove tenants[].services from monitoring.config.json");
+  }
+  const tenantIds = tenants.map(tenant => tenant.id).filter((id): id is string => typeof id === "string");
+  if (tenantIds.length !== tenants.length) throw new ConfigurationError("Each main tenant entry must include a valid id when serviceFiles is configured");
+  if (new Set(tenantIds).size !== tenantIds.length) throw new ConfigurationError("Main tenant ids must be unique when serviceFiles is configured");
+  const serviceEntries = {} as Record<ServiceConfig["type"], Map<string, ServiceFileEntry["config"]>>;
+  for (const service of serviceTypes) {
+    const path = resolve(dirname(file), serviceFiles.data[service]);
+    const parsed = projectServiceFileSchema.safeParse(await readConfigJson(path));
+    if (!parsed.success || parsed.data.service !== service) {
+      throw new ConfigurationError(`Invalid ${service} service file at ${serviceFiles.data[service]}: expected schemaVersion 2.0 and service '${service}'`);
+    }
+    const ids = parsed.data.tenants.map(tenant => tenant.id);
+    if (new Set(ids).size !== ids.length) throw new ConfigurationError(`Service file ${serviceFiles.data[service]} has duplicate tenant ids`);
+    const unknownTenant = ids.find(id => !tenantIds.includes(id));
+    if (unknownTenant) throw new ConfigurationError(`Service file ${serviceFiles.data[service]} includes unknown tenant id '${unknownTenant}'`);
+    serviceEntries[service] = new Map(parsed.data.tenants.map(tenant => [tenant.id, tenant.config]));
+  }
+  for (const tenant of tenants) {
+    const id = tenant.id as string;
+    const services: Record<string, unknown> = {};
+    for (const service of serviceTypes) {
+      const config = serviceEntries[service].get(id);
+      if (config === undefined) {
+        throw new ConfigurationError(`Tenant '${id}' is missing in ${serviceFiles.data[service]}`);
+      }
+      services[service] = config;
+    }
+    tenant.services = services;
+  }
+  delete document.serviceFiles;
+  return document;
+}
 type TenantInventory = ProjectDocument["tenants"][number];
 type ProjectServices = {
   [Service in ServiceConfig["type"]]: Omit<TenantInventory["services"][Service], "targets"> & {
@@ -205,7 +251,7 @@ function validateTenants(tenants: ProjectDocument["tenants"]): void {
 export function parseProjectDocument(raw: unknown): ProjectDocument {
   const document = expandReferences(raw);
   if (document && typeof document === "object" && "schemaVersion" in document && document.schemaVersion === "1.0") {
-    throw new ConfigurationError("Migrate monitoring.config.json from schemaVersion 1.0 to 2.0: declare tenants[] with inline service execution, access and targets; configFile and separate service profiles are no longer supported");
+    throw new ConfigurationError("Migrate monitoring.config.json from schemaVersion 1.0 to 2.0 with tenant inventory and service execution settings");
   }
   const parsed = projectDocumentSchema.safeParse(document);
   if (!parsed.success) {
@@ -235,7 +281,7 @@ export function parseProjectDocument(raw: unknown): ProjectDocument {
 }
 
 export async function readProjectDocument(file: string): Promise<ProjectDocument> {
-  return parseProjectDocument(applyBindings(await readConfigJson(file), await readBindings(file)));
+  return parseProjectDocument(applyBindings(await composeServiceFiles(await readConfigJson(file), file), await readBindings(file)));
 }
 
 /** The alias may be omitted only when the document has exactly one tenant. */
@@ -277,21 +323,18 @@ export function applyProjectConfig(project: ProjectConfig, service: ServiceExecu
         const attempts = pairCount * lane.journeys.filter(journey => (selected.scenarios as Record<string, boolean>)[journey])
           .reduce((sum, journey) => sum + (service.type === "teams" && journey === "scheduled-meeting"
             ? project.services.teams.callTargets.length : selected.targets.length), 0);
-        const required = Math.ceil(attempts / service.maxConcurrentProbes) * (lane.timeoutSeconds + CLEANUP_GRACE_MS / 1000);
+        const waves = Math.ceil(attempts / service.maxConcurrentProbes);
+        const required = waves * lane.timeoutSeconds + Math.max(0, waves - 1) * service.cleanupGraceSeconds;
         if (service.cycleTimeoutSeconds < required) {
           const label = service.type === "onedrive" ? "OneDrive" : service.type === "sharepoint" ? "SharePoint" : "Teams";
-          throw new ConfigurationError(`${label} lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase concurrency within its limit or reduce the cohort to fit the 300-second cadence`);
-        }
-        if (service.cycleTimeoutSeconds * 1000 + CLEANUP_GRACE_MS + PUBLICATION_TIMEOUT_MS >
-            lane.intervalSeconds * 1000 - SLOT_MARGIN_MS) {
-          throw new ConfigurationError(`${service.type} lane ${lane.name} must fit its cycleTimeoutSeconds plus cleanup/publication inside the 300-second cadence`);
+          throw new ConfigurationError(`${label} lane ${lane.name} needs cycleTimeoutSeconds >= ${required} for ${attempts} attempts at maxConcurrentProbes ${service.maxConcurrentProbes}; increase concurrency or the configured interval and budgets`);
         }
       }
     }
     const longestInterval = Math.max(...lanes.map(lane => lane.intervalSeconds));
-    const cycleBudgetSeconds = longestInterval - SLOT_MARGIN_MS / 1000;
+    const cycleBudgetSeconds = service.cycleTimeoutSeconds + service.cleanupGraceSeconds + service.publicationTimeoutSeconds;
     const providerBudget = project.serviceHealth.enabled && hasProviderSources(service)
-      ? service.providerIntervalSeconds + 60 : 0;
+      ? service.providerIntervalSeconds * 2 : 0;
     if (project.healthModel.signalWindowMinutes * 60 <= Math.max(longestInterval + cycleBudgetSeconds, providerBudget)) {
       throw new ConfigurationError(`Signal window must exceed the service cadence plus the bounded cycle/publication budget (${cycleBudgetSeconds} seconds)`);
     }

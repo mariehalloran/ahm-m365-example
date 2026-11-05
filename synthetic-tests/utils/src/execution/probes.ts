@@ -4,11 +4,13 @@ import type { GraphFileOperations, GraphOperations } from "../integrations/graph
 import type { TeamsBotOperations } from "../integrations/teams.js";
 import { IntegrationError } from "../integrations/http.js";
 import type { LiveProbeFor } from "../configuration/resolved-probes.js";
+import type { TeamsCallState } from "../integrations/teams-callback-state.js";
 
 export interface ProbeContext {
   config: {
     SYNTHETIC_SCENARIO: Scenario;
     PROBE_TIMEOUT_MS: number;
+    CLEANUP_TIMEOUT_MS: number;
     POLL_INTERVAL_MS: number;
     TEAMS_CLEANUP_ENABLED?: "true" | "false";
     EXCHANGE_CLEANUP_ENABLED?: "true" | "false";
@@ -20,6 +22,7 @@ export interface ProbeContext {
   teamsBot?: TeamsBotOperations;
   teamsCalling?: GraphOperations;
   teamsCallingPeer?: GraphOperations;
+  teamsCallState?: TeamsCallState;
   telemetry: Telemetry;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;

@@ -1,6 +1,6 @@
 # SharePoint permissions and managed identity setup
 
-The SharePoint worker uses one explicitly selected, same-tenant user-assigned
+The SharePoint execution Function uses one explicitly selected, same-tenant user-assigned
 managed identity (UAMI). It exercises three Graph v1.0 journeys:
 `document-library-roundtrip`, `document-versions` and `list-item-lifecycle`.
 Complete the shared [Azure setup](./setup.md) and
@@ -8,7 +8,10 @@ Complete the shared [Azure setup](./setup.md) and
 
 ## Approve the site and fixtures
 
-Choose an administrator-approved existing `/sites/...` or `/teams/...` site.
+A SharePoint Administrator/site owner prepares an approved existing `/sites/...`
+or `/teams/...` site. A separately authorized Entra administrator approves Graph
+application consent and an authorized site-permission administrator assigns the
+Selected resource grant.
 A Team-backed site is supported; consent applies to the **whole selected site**,
 not only its synthetic folder/list. Use dedicated fixtures and review that scope
 with the site owner:
@@ -29,7 +32,7 @@ Provisioning and policy choices remain administrator actions, not worker behavio
 
 Both application consent and the site assignment are necessary. Consent alone
 grants no site access. An authorized administrator manages the
-[`/sites/{siteId}/permissions` assignment](https://learn.microsoft.com/en-us/graph/api/site-post-permissions?view=graph-rest-1.0)
+[`POST /sites/{siteId}/permissions` assignment](https://learn.microsoft.com/en-us/graph/api/site-post-permissions?view=graph-rest-1.0)
 for the worker's application/client ID, not its principal/object ID.
 Audit any pre-existing broad grants: runtime target checks do not narrow them.
 
@@ -42,50 +45,52 @@ not the worker, a discovery credential or a runtime fallback.
 
 ## Configure and discover IDs
 
-Use only root [`monitoring.config.json`](../monitoring.config.json):
+In the matching `tenants[].config` of
+[`monitoring.sharepoint.json`](../monitoring.sharepoint.json), referenced by root
+[`monitoring.config.json`](../monitoring.config.json):
 
-1. Select the real app and approved UAMI in
-   `tenants[].services.sharepoint.worker.appName` / `worker.identity`.
+1. Select the approved existing UAMI in `config.identity`. The deployment creates
+   the service Function host using root `deployment.functions`.
 2. Set ungrouped `targets[]` with the actual `siteUrl`, `libraryName`,
    `folderName` and `listName`. The folder name is one child, not a path.
    Do not assign target IDs or add discovered resource IDs.
 3. Keep Graph and health-report authentication `managed-identity`, then enable
    the service in `live` mode only after access and fixtures are ready.
-4. On an approved same-tenant Azure host with the worker UAMI attached, explicitly
-   set its actual `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and
-   `ENABLE_LIVE_M365=true`. From `synthetic-tests/`, run:
+4. After the shared Azure foundation, sign the operator into the configured
+   Azure CLI tenant/subscription and run from `synthetic-tests/`:
 
    ```sh
    npm run setup:ids -- -SharePointOnly
    # For several configured tenants, add -Tenant <alias>.
    ```
 
-Discovery only reads the existing selected resources. It creates no sites,
-libraries, folders, lists or grants and has no Azure CLI, delegated, certificate
-or secret credential fallback. For a compiled worker image the same entrypoint
-is `node dist/sharepoint/src/setup-command.js --tenant <alias>`.
+[`setup/discover-sharepoint.ps1`](../synthetic-tests/setup/discover-sharepoint.ps1)
+launches a disposable PowerShell job using **only the selected SharePoint UAMI
+for Graph**. The operator's Azure session creates the job, handles protected
+Blob input/output and temporary Azure role assignments; it is not a Graph
+discovery fallback. The job reads existing resources and creates no sites,
+libraries, folders, lists or Graph grants. It uses no delegated user token,
+secret or certificate.
 
-Approved fixture-provisioning outputs may bootstrap the four generated bindings
-before deployment. The canonical `npm run deploy` grants the worker its normal
-image/configuration/reporting roles. After rollout, run the compiled command in
-a disposable job using **only that worker UAMI** and the deployed immutable
-`MONITORING_CONFIG_BLOB_URL` / `MONITORING_CONFIG_SHA256`. It performs fresh
-read-only discovery, requires all four IDs to match that snapshot and writes no
-local `.env`. Administrative IDs enable bootstrap; they are not worker-access
-proof or health measurements. No extra setup identity or duplicate worker
-registry/Blob grant is needed for this verification.
+Discovery verifies the configured URL, named document library, non-root test
+folder and ordinary list before returning bindings. Job/Blob/temporary Azure-role
+cleanup failures are explicit errors. These read checks prove selected-resource
+read access, not successful writes, deletions or health measurements.
 
 Discovered `SITE_ID`, `DRIVE_ID`, `FOLDER_ID` and `LIST_ID` go in the adjacent
 gitignored [`.env`](./deployment.md#generated-ids-in-env), keyed
 `<TENANT>__SHAREPOINT_<SHA256>__<FIELD>`. The hash derives from normalized location
 choices. Deployment and commands hydrate those bindings automatically.
-Keep SharePoint disabled with no targets until real fixtures are approved.
+For a new deployment, keep SharePoint disabled until fixtures/access are approved.
+The checked-in profile already selects one real site/library/folder/list.
 
 ## Run and verify
 
 Review `npm run deploy -- --plan` before the separately approved deployment.
-Use `npm run sharepoint -- --once` for the first real cycle. All three lanes use
-a **240-second complete-journey deadline** and **300-second cadence**. The default
+For a first real cycle, use `npm run sharepoint -- --once` on an Azure host with
+the selected identity attached and `ENABLE_LIVE_M365=true`. The current config
+selects a **240-second complete-journey deadline** and **300-second cadence**;
+those values and budgets come from `config.execution`. The default
 252-second cycle budget plus 12-second cleanup-settlement and 30-second publication
 reserves fits the 299-second whole-cycle envelope. Actual cleanup has its own
 10-second budget; latency thresholds remain **15 seconds Degraded / 60 seconds
@@ -100,7 +105,7 @@ before recurring use. Worker cancellation and cleanup-only outcomes are Unknown
 without numeric samples; genuine failures and journey deadline expiry remain
 failures, preserving successful business-step evidence.
 
-The [worker reference](../synthetic-tests/sharepoint/README.md#api-reference)
+The [service README](../synthetic-tests/sharepoint/README.md#api-reference)
 lists the exact Graph v1.0 endpoints. Cleanup verifies the current attempt's
 nonce, parent and resource metadata before deleting; it never deletes the
 configured folder, library, list or site. Deleted files enter the recycle bin;
@@ -117,9 +122,12 @@ read grants, not site permissions. SharePoint has no beta activity collector.
 The stable `SharePoint` / `SharePoint Online` source reports only to the single
 suppressed `sharepoint-service-health` entity. It cannot change synthetic
 outcomes, business-step signals or Experience rollup. Follow the
-[provider runbook](./provider-monitoring.md) for independent collection schedules.
+[provider authentication runbook](./provider-monitoring.md#provider-authentication)
+and [SharePoint optional endpoints](../synthetic-tests/sharepoint/README.md#optional-provider-endpoints).
+Provider selection lives in `config.execution` with root `serviceHealth.enabled`;
+it has independent collection schedules.
 
-Stop the worker before revoking its selected-site assignment and application
+Stop service scheduling before revoking its selected-site assignment and application
 consent. Review only confirmed synthetic artifacts under the approved retention
 policy; never purge a site, library, list or recycle bin.
 

@@ -128,7 +128,7 @@ export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfol
       cleanupSignal => {
         if (!context.graph) throw new IntegrationError("collector-failure");
         return deleteOwnedFolder(context.graph, attempt, cleanupSignal);
-      }, telemetry, now, true);
+      }, telemetry, context.config.CLEANUP_TIMEOUT_MS, now, true);
   }
   return finishJourney(result, startedAt, now);
 };

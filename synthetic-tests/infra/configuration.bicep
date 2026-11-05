@@ -13,7 +13,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   location: location
   kind: 'StorageV2'
   sku: { name: 'Standard_LRS' }
-  tags: { workload: projectConfig.healthModel.name, purpose: 'worker-configuration' }
+  tags: { workload: projectConfig.healthModel.name, purpose: 'monitoring-configuration' }
   properties: {
     accessTier: 'Hot'
     allowBlobPublicAccess: false
@@ -30,11 +30,11 @@ resource service 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
 }
 resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: service
-  name: 'worker-config'
+  name: 'configuration'
   properties: { publicAccess: 'None' }
 }
 resource uploader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, deploymentPrincipalId, 'configuration-uploader')
+  name: guid(container.id, deploymentPrincipalId, 'configuration-uploader')
   scope: container
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
@@ -49,10 +49,8 @@ module pipeline './observations.bicep' = if (projectConfig.logAnalytics.enabled)
     location: location
     workspaceName: workspaceName
     applicationInsightsName: applicationInsightsName
-    deploymentPrincipalId: deploymentPrincipalId
-    deploymentPrincipalType: deploymentPrincipalType
   }
   dependsOn: [container, uploader]
 }
 
-output configContainerUrl string = 'https://${storage.name}.blob.${environment().suffixes.storage}/worker-config'
+output configContainerUrl string = 'https://${storage.name}.blob.${environment().suffixes.storage}/configuration'

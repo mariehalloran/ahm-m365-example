@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "2.0",
+  "service": "teams",
+  "tenants": [
+    {
+      "id": "consto",
+      "config": {
+        "enabled": true,
+        "execution": {
+          "mode": "live",
+          "intervalSeconds": 300,
+          "timeoutSeconds": 240,
+          "maxConcurrentProbes": 6,
+          "cohort": "teams-global",
+          "serviceHealth": true,
+          "serviceMessages": true,
+          "providerIntervalSeconds": 60,
+          "serviceActivity": {
+            "enabled": true,
+            "functions": [
+              "getUsageMetricsForTeamsByMeetingsJoined",
+              "getUsageMetricsForTeamsByLaunch",
+              "getMessageVolumeMetricsForTeamsChat",
+              "getAudioStreamQoEMetricsForTeams",
+              "getAudioStreamsOverUdpMetricsForTeams"
+            ]
+          },
+          "teamsCleanupEnabled": false,
+          "teamsReadbackClientId": "417d47e9-6ef3-40de-a8af-ac15b5438d54",
+          "executionLanes": [
+            {
+              "name": "teams",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "channel-conversation",
+                "scheduled-meeting"
+              ]
+            }
+          ],
+          "cycleTimeoutSeconds": 252,
+          "cleanupTimeoutSeconds": 10,
+          "cleanupGraceSeconds": 12,
+          "publicationTimeoutSeconds": 30,
+          "slotMarginSeconds": 1
+        },
+        "botPairs": [
+          {
+            "id": "teams-pair-001",
+            "bot": "bot-m365-consto",
+            "identity": "uami-m365-experience-consto-teams",
+            "peerBot": "ahm-m365-consto-peer",
+            "peerIdentity": "uami-m365-experience-consto-teams-peer"
+          },
+          {
+            "id": "teams-pair-002",
+            "bot": "bot-m365-consto-002",
+            "identity": "uami-m365-consto-teams-002",
+            "peerBot": "bot-m365-consto-peer-002",
+            "peerIdentity": "uami-m365-consto-teams-peer-002"
+          }
+        ],
+        "scenarios": {
+          "channel-conversation": true,
+          "scheduled-meeting": true
+        },
+        "targets": [
+          {
+            "id": "teams-probe-001",
+            "teamId": "df910f56-b46f-4411-9b77-bcf6474b13fc",
+            "channelName": "General"
+          },
+          {
+            "id": "teams-probe-002",
+            "teamId": "df910f56-b46f-4411-9b77-bcf6474b13fc",
+            "channelName": "United Kingdom Users"
+          }
+        ],
+        "callTargets": [
+          {
+            "id": "teams-bot-meeting-001",
+            "meetingThreadId": "19:meeting_ZTNkZGVlNTgtMmRiNC00ODY1LThhODAtZDY5MWM0YzI0YmNj@thread.v2",
+            "organizer": "test-user-1@constosuites.onmicrosoft.com"
+          }
+        ],
+        "identity": "uami-m365-experience-consto-teams"
+      }
+    }
+  ]
+}

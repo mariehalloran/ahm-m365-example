@@ -17,7 +17,8 @@
 param(
     [string]$Config = (Join-Path $PSScriptRoot '../../monitoring.config.json'),
     [switch]$SharePointOnly,
-    [string]$Tenant
+    [string]$Tenant,
+    [switch]$UpdateBotEndpoints
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,14 +26,8 @@ $ErrorActionPreference = 'Stop'
 
 # Runs read-only SharePoint discovery without the other services' administrator Azure CLI session.
 function Resolve-SharePointIds([string]$File, [string]$TenantAlias) {
-    $arguments = @('--import', 'tsx', (Join-Path $PSScriptRoot '../sharepoint/src/setup-command.ts'), '--config', $File)
-    if ($TenantAlias) { $arguments += @('--tenant', $TenantAlias) }
-    Push-Location (Join-Path $PSScriptRoot '..')
-    try {
-        & node @arguments
-        if ($LASTEXITCODE -ne 0) { throw 'SharePoint ID discovery failed; no resources or permissions were created.' }
-    }
-    finally { Pop-Location }
+    if ($TenantAlias) { & (Join-Path $PSScriptRoot 'discover-sharepoint.ps1') -Config $File -Tenant $TenantAlias }
+    else { & (Join-Path $PSScriptRoot 'discover-sharepoint.ps1') -Config $File }
 }
 
 if ($SharePointOnly) {
@@ -47,6 +42,17 @@ $bindings = Read-Bindings $project.EnvFile
 $key = { param($TargetId, $Field) Get-BindingKey $tenant.id $TargetId $Field }
 $subscription = $project.Document.healthModel.subscriptionId
 $resourceGroup = $project.Document.healthModel.resourceGroup
+
+$updates = @{}
+foreach ($serviceName in @('exchange','teams','onedrive','sharepoint')) {
+    $selection = $tenant.services.$serviceName
+    if ($selection.enabled -eq $false) { continue }
+    $identityId = Resolve-ResourceId ($selection.identity ?? $selection.identityResourceId) $subscription $resourceGroup 'Microsoft.ManagedIdentity' 'userAssignedIdentities'
+    $identity = az identity show --ids $identityId --only-show-errors -o json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $identity.clientId) { throw 'A selected execution identity could not be resolved.' }
+    $updates[(& $key $serviceName 'IDENTITY_CLIENT_ID')] = $identity.clientId
+}
+Merge-Bindings $project.EnvFile $bindings $updates
 
 $teams = $tenant.services.teams
 if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
@@ -75,12 +81,24 @@ if ($teams.enabled -ne $false -and $teams.execution.mode -eq 'live') {
         }
     }
     if ($teams.scenarios.'scheduled-meeting' -ne $false) {
-        $foundation = $project.Document.deployment.foundation
-        $environmentId = Resolve-ResourceId $foundation.environment $subscription $resourceGroup 'Microsoft.App' 'managedEnvironments'
-        $parts = $environmentId.Split('/')
-        $domain = az containerapp env show --name $parts[-1] --resource-group $parts[4] --subscription $parts[2] --query properties.defaultDomain -o tsv --only-show-errors 2>$null
-        if ($domain) { Set-Binding $project.EnvFile $bindings (& $key 'teams' 'CALLING_CALLBACK_URL') "https://$($teams.worker.appName).$domain/api/calls" }
-        else { Write-Warning "Container Apps environment $environmentId does not exist yet; see docs/setup.md." }
+        $baseName = $project.Document.deployment.functions.appName
+        $functionName = "$($baseName.Substring(0, [Math]::Min(57, $baseName.Length)))-tm"
+        $functions = @(az functionapp list --resource-group $resourceGroup --subscription $subscription --only-show-errors -o json |
+            ConvertFrom-Json | Where-Object name -eq $functionName)
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the deployed Function callback endpoint.' }
+        if ($functions.Count -eq 1 -and $functions[0].defaultHostName) {
+            $callback = "https://$($functions[0].defaultHostName)/api/calls"
+            Set-Binding $project.EnvFile $bindings (& $key 'teams' 'CALLING_CALLBACK_URL') $callback
+            if ($UpdateBotEndpoints) {
+                foreach ($bot in $teams.botPairs | ForEach-Object { @($_.bot ?? $_.botResourceId, $_.peerBot ?? $_.botPeerResourceId) }) {
+                    $botId = Resolve-ResourceId $bot $subscription $resourceGroup 'Microsoft.BotService' 'botServices'
+                    $parts = $botId.Split('/')
+                    az bot update --name $parts[-1] --resource-group $parts[4] --subscription $parts[2] --endpoint $callback --only-show-errors -o none
+                    if ($LASTEXITCODE -ne 0) { throw 'A selected bot registration endpoint could not be updated.' }
+                }
+            }
+        }
+        else { Write-Warning 'Deploy the foundation first, then rerun setup:ids to bind the actual Flex Function hostname.' }
         foreach ($call in $teams.callTargets | Where-Object organizer) {
             $user = Invoke-Graph GET "/users/$($call.organizer)`?`$select=id"
             Set-Binding $project.EnvFile $bindings (& $key $call.id 'ORGANIZER_USER_ID') $user.id

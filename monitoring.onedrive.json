@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "2.0",
+  "service": "onedrive",
+  "tenants": [
+    {
+      "id": "consto",
+      "config": {
+        "enabled": true,
+        "execution": {
+          "mode": "live",
+          "intervalSeconds": 300,
+          "timeoutSeconds": 240,
+          "cohort": "onedrive-global",
+          "serviceHealth": true,
+          "serviceMessages": true,
+          "providerIntervalSeconds": 60,
+          "executionLanes": [
+            {
+              "name": "user-drive",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "user-drive-roundtrip"
+              ]
+            },
+            {
+              "name": "app-folder",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "app-folder-lifecycle"
+              ]
+            },
+            {
+              "name": "versions",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "document-versions"
+              ]
+            }
+          ],
+          "cycleTimeoutSeconds": 252,
+          "cleanupTimeoutSeconds": 10,
+          "cleanupGraceSeconds": 12,
+          "publicationTimeoutSeconds": 30,
+          "slotMarginSeconds": 1
+        },
+        "setup": {
+          "identity": "id-m365-experience-consto-onedrive-setup",
+          "concurrency": 4,
+          "targetTimeoutSeconds": 300
+        },
+        "scenarios": {
+          "user-drive-roundtrip": true,
+          "app-folder-lifecycle": true,
+          "document-versions": true
+        },
+        "targets": {
+          "united-states-users": {
+            "userGroupName": "United States Users",
+            "users": [
+              {
+                "userPrincipalName": "test-user-1@constosuites.onmicrosoft.com",
+                "folderName": "AHM-Synthetic-Tests",
+                "restoreVersion": false
+              },
+              {
+                "userPrincipalName": "test-user-2@constosuites.onmicrosoft.com",
+                "folderName": "AHM-Synthetic-Tests",
+                "restoreVersion": false
+              }
+            ]
+          }
+        },
+        "identity": "uami-m365-experience-consto-onedrive"
+      }
+    }
+  ]
+}

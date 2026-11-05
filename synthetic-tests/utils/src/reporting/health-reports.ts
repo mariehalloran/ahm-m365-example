@@ -1,16 +1,16 @@
 import {
-  probeServices, reportedResult, resultSchema, type SyntheticResult, type Telemetry,
+  probeServices, reportedResult, resultSchema, type SyntheticResult,
 } from "../contracts.js";
 import { groupSignalName, tenantSignalName } from "../configuration/groups.js";
 import {
-  createHealthReportPublisher, evaluateHealthState,
-  type EvaluationRules, type HealthReport, type HealthReportClientOptions,
+  evaluateHealthState,
+  type EvaluationRules, type HealthReport,
 } from "./health-report-client.js";
 import type { ProjectConfig } from "../configuration/project-config.js";
-import type { CyclePublisher, CycleResults } from "./results.js";
+import type { CycleResults } from "./results.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
 import { resultMeasurements, type MeasurementSample } from "./measurements.js";
-import { EXCHANGE_PUBLICATION_TIMEOUT_MS, PUBLICATION_TIMEOUT_MS } from "../execution/budgets.js";
+import type { ObservedMeasurement } from "./execution-reporter.js";
 
 export type { HealthReport } from "./health-report-client.js";
 export interface DirectReportCycle extends CycleResults {
@@ -140,20 +140,26 @@ export function directHealthReports(project: ProjectConfig, service: ServiceConf
   return reports;
 }
 
-/** Publishes direct reports within the service's independently bounded publication window. */
-export function createDirectHealthReporter(
-  project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
-  options: HealthReportClientOptions = {},
-): CyclePublisher {
-  const publish = createHealthReportPublisher(project, service, telemetry, env, options);
-  return async cycle => {
-    const deadline = AbortSignal.timeout(service.type === "exchange" ? EXCHANGE_PUBLICATION_TIMEOUT_MS : PUBLICATION_TIMEOUT_MS);
-    const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
-    const reports = directHealthReports(project, service, {
-      ...cycle,
-      ...(env.MONITORING_CONFIG_SHA256 ? { configSha256: env.MONITORING_CONFIG_SHA256 } : {}),
-      ...(env.CONTAINER_APP_REVISION ? { containerRevision: env.CONTAINER_APP_REVISION } : {}),
-    });
-    await publish(reports, { ...cycle, signal });
+/** Aggregates every completed target measurement before publishing a shared entity or group signal. */
+export function measurementHealthReports(
+  project: ProjectConfig, service: ServiceConfig, cycle: DirectReportCycle, observed: ObservedMeasurement[],
+): HealthReport[] {
+  if (!observed.length) return [];
+  const first = observed[0]!.measurement;
+  const entity: EntitySamples = {
+    entityName: first.entityName, journey: first.journey, kind: first.kind, step: first.step,
+    samples: observed.map(row => row.measurement),
   };
+  const signals = first.kind !== "call-phase" ? journeySignals
+    : first.step === "connection" ? [teamsCallSignals[0], teamsCallSignals[1]] as const
+      : [teamsCallSignals[2], teamsCallSignals[3]] as const;
+  const reports = measurementReports(project, cycle, entity, signals);
+  if (first.kind === "journey" && service.type !== "teams") {
+    for (const group of project.groups.filter(group => group.service === service.type)) {
+      const members = new Set(group.targetIds);
+      const samples = observed.filter(row => members.has(row.result.testId)).map(row => row.measurement);
+      reports.push(...measurementReports(project, cycle, { ...entity, samples }, signals, group));
+    }
+  }
+  return reports;
 }

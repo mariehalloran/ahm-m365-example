@@ -10,12 +10,14 @@
    managed-identity bots. A licensed organizer prepares the meeting but does not
    answer synthetic calls. SharePoint uses approved site/library/folder/list
    fixtures, not a user account.
-3. Edit root [`monitoring.config.json`](../monitoring.config.json). Keep
+3. Edit root [`monitoring.config.json`](../monitoring.config.json) and its referenced
+   service files. Keep
    `graphAuthentication` and `healthReportAuthentication` as `managed-identity`
    in each service's `execution` block. `deployment.azureTenantId` defaults to
    the single monitored tenant's `tenantId`; it must match the actual subscription
    tenant ([configuration](./deployment.md#what-the-config-holds)).
-4. Run `npm run deploy` from `synthetic-tests/` with
+4. Complete [shared Azure/Function API preparation](./setup.md), then run
+   `npm run deploy` from `synthetic-tests/` with
    `deployment.stage: "foundation"` to create the models and worker foundation
    without live workers. This does not grant Microsoft 365 authorization.
 5. Obtain the service-specific grants:
@@ -29,16 +31,18 @@
    | Provider context | [Read-only provider application and federation](./provider-monitoring.md), independent of synthetic permissions |
    | Azure reporting | [Configuration/reporting roles](./deployment.md#identity-and-permissions), plus separately approved entity-scoped [annotation access](./provider-monitoring.md#notice-update-data-annotations) when selected |
 
-6. Follow the shared [`docs/setup.md`](./setup.md) for administrator actions,
-   including manual mailbox-scope maintenance and Teams app installation. Run
+6. Follow each service's guide above for administrator actions,
+   including [mailbox-scope maintenance](./exchange-permissions.md#maintain-the-approved-mailbox-scope)
+   and [Teams app installation](./teams-permissions.md#generated-ids-callback-and-installed-apps). Run
    `npm run setup:ids`, `npm run setup:reply-seeds` when SELF-REPLY is selected,
    and the separately approved OneDrive setup job. SharePoint-only discovery is
-   `npm run setup:ids -- -SharePointOnly` on the same-tenant worker-identity host.
+   `npm run setup:ids -- -SharePointOnly`, which launches a disposable PowerShell
+   job using the same-tenant SharePoint execution UAMI.
    Generated IDs stay in the adjacent gitignored
    [`.env`](./deployment.md#generated-ids-in-env).
-7. After allowed/denied access checks, select each approved `worker.identity`,
-   set `execution.mode: "live"` and `deployment.enableLiveProbes: true`, remove
-   `deployment.stage` (default `workers`) and deploy. Verify actual operations,
+7. After allowed/denied access checks, select each approved service `config.identity`,
+   set `execution.mode: "live"`, `deployment.enableLiveProbes: true` and
+   `deployment.stage: "all"`, then deploy. Verify actual operations,
    cleanup, accepted reports and [notifications/freshness](./operations.md#enterprise-reliability-acceptance-gate).
 
 **Same tenant does not eliminate permission or policy reviews.** Keep images,
@@ -66,7 +70,7 @@ and discovery; it has no CLI, delegated, certificate or secret fallback.
 
 ## Several tenants in one config
 
-Each `tenants[]` entry has its own workers, `access` and identity bindings. A tenant
+Each composed `tenants[]` entry has its own service execution and identity bindings. A tenant
 `id` is a label, not authorization or a cross-tenant execution mechanism. With
 several tenants, set `deployment.azureTenantId` to the actual Azure hosting tenant;
 that setting does not relax the binding requirements above.
@@ -82,4 +86,4 @@ together; old reports expire after their TTL.
 `npm run setup:ids` and `npm run setup:reply-seeds` select the configured tenant
 matching the signed-in administrator. Repeat them per tenant under its approved
 binding; they do not supply cross-tenant worker authentication. SharePoint-only
-discovery instead selects the actual managed-identity tenant.
+discovery uses the selected tenant's managed identity inside its one-off job.

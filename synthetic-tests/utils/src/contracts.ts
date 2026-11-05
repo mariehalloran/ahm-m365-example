@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { probeServices, stepNames, targetServices, testTypes, type StepName, type TestType } from "./catalog.js";
+import { probeServices, stepNames, targetServices, testTypes, type StepName } from "./catalog.js";
 import { sharePointSiteUrlSchema } from "./configuration/sharepoint-target.js";
 export { journeyStepEntities, probeServices, stepNames, testTypes } from "./catalog.js";
 export type { StepName, TestType } from "./catalog.js";
@@ -89,6 +89,8 @@ export const resultSchema = z.object({
     }).strict().optional(),
     authenticationDurationMs: z.number().finite().nonnegative().optional(),
     httpStatus: z.number().int().min(100).max(599).optional(),
+    graphRequestsStarted: z.number().int().nonnegative().optional(),
+    requestCapacityExceeded: z.boolean().optional(),
   }).strict().default({}),
 }).strict().superRefine((value, ctx) => {
   const allowedSteps: readonly string[] = probeServices[value.testType].steps;

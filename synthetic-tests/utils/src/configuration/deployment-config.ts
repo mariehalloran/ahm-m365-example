@@ -16,12 +16,6 @@ export const botResourceId = resourceId("Microsoft\\.BotService", "botServices",
 export const applicationAccessSchema = z.object({
   m365TenantId: z.string().uuid().optional(),
   m365ClientId: z.string().uuid().optional(),
-  m365CertificateSource: z.enum(["key-vault", "container-app"]).optional(),
-  m365CertificateSecretUri: z.string().regex(
-    /^https:\/\/[a-zA-Z0-9-]+\.vault\.azure\.net\/secrets\/[a-zA-Z0-9-]+(?:\/[a-zA-Z0-9]+)?$/,
-  ).optional(),
-  m365CertificateRevision: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
-  m365CertificateEnvironmentVariable: z.string().regex(/^[A-Z_][A-Z0-9_]{0,127}$/).optional(),
   m365CertificatePath: z.string().min(1).optional(),
 }).strict();
 
@@ -35,21 +29,30 @@ export const teamsBotPairSchema = z.object({
   botPeerClientId: z.string().uuid().optional(),
 }).strict();
 
-export const workerSettingsSchema = z.object({
+const coordinatorSettingsSchema = z.object({
   appName: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).min(2).max(32),
   identityResourceId: managedIdentityResourceId.optional(),
   identityName: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/).optional(),
   identityClientId: z.string().uuid().optional(),
   cpu: z.number().min(0.25).max(4).multipleOf(0.25).default(0.25),
   memory: z.enum(["0.5Gi", "1Gi", "1.5Gi", "2Gi", "3Gi", "4Gi", "6Gi", "8Gi"]).default("0.5Gi"),
+  startTimeoutSeconds: z.number().int().min(1).max(60),
 }).strict();
 
 export const deploymentSettingsSchema = z.object({
   location: z.string().regex(/^[a-z][a-z0-9]{1,39}$/),
   configurationStorageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
+  coordinator: coordinatorSettingsSchema,
+  functions: z.object({
+    appName: z.string().regex(/^[a-z][a-z0-9-]{1,58}[a-z0-9]$/),
+    storageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
+    hostIdentityName: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/),
+    apiClientId: z.string().uuid().optional(),
+    watchdogIntervalSeconds: z.number().int().min(60).max(900).refine(value => 3600 % value === 0),
+  }).strict(),
   healthModelLocation: z.string().regex(/^[a-z][a-z0-9]{1,39}$/).optional(),
   azureTenantId: z.string().uuid(),
-  stage: z.enum(["foundation", "workers"]).default("workers"),
+  stage: z.enum(["foundation", "all"]).default("all"),
   enableLiveProbes: z.boolean().default(false),
   enableBetaServiceActivity: z.boolean().default(false),
   foundation: z.discriminatedUnion("mode", [

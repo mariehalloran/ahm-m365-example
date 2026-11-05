@@ -17,7 +17,7 @@ configuration and administrative grants do not establish live worker acceptance.
 
 Exchange, Teams, OneDrive and enabled SharePoint use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
 
-Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry and journeys; shared code and Node tooling also live in that project. The single root [monitoring.config.json](../monitoring.config.json) holds user configuration; discovered IDs live in the adjacent gitignored `.env` ([details](./deployment.md#generated-ids-in-env)). Simulation makes no live mutations or Azure calls.
+Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry and journeys; shared code and Node tooling also live in that project. Root [monitoring.config.json](../monitoring.config.json) and its referenced service files hold user configuration; discovered IDs live in the adjacent gitignored `.env` ([details](./deployment.md#generated-ids-in-env)). Simulation makes no live mutations or Azure calls.
 
 ## Scheduling and shutdown
 
@@ -39,7 +39,7 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 Do not enable live mode against real-user resources.
 
 1. Obtain dedicated approved targets and an owner. Use the [Exchange permissions and administrator handoff](./exchange-permissions.md).
-2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, maintain the scope for every configured mailbox by hand using [`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access).
+2. Scope Exchange `Application Mail.ReadWrite`, `Application Mail.Send`, and calendar journeys' `Application Calendars.ReadWrite` to only approved participants using Exchange RBAC for Applications. Audit broader grants and test allowed/denied access. After that one-time approval, maintain the complete inventory using [Exchange mailbox-scope maintenance](./exchange-permissions.md#maintain-the-approved-mailbox-scope).
 3. For OneDrive, follow [worker/provisioner permissions](./onedrive-permissions.md): use `Files.SelectedOperations.Selected` with explicit write grants on approved folders and separately approved `Files.ReadWrite.AppFolder`. Use the separate administrator [bulk setup](./onedrive-setup.md) (not part of `npm run setup:ids` or `npm run setup:reply-seeds`) to create folders/grants and save real drive/folder IDs to `.env`; runtime has no broad permission or root-discovery fallback.
 4. For hosted Graph, supply explicit UUID `AZURE_CLIENT_ID` for the approved same-tenant UAMI. There is no CLI, secret or host-identity fallback. Live managed-identity runs need an Azure host with that identity attached; follow the [tenant-binding requirements](./cross-tenant-access.md).
 5. Set `execution.mode: "live"` and independently opt in with `deployment.enableLiveProbes: true`; hosted workers then receive `ENABLE_LIVE_M365=true` and a local run exports it. See the [live gates](./deployment.md#live-execution-gates).
@@ -48,8 +48,8 @@ Do not enable live mode against real-user resources.
 SharePoint requires manually prepared dedicated site/library/test-folder/list
 fixtures and application `Sites.Selected` plus an administrator-approved site
 `write` grant on the explicit worker UAMI. Run read-only
-`npm run setup:ids -- -SharePointOnly` on that identity's approved host to save
-existing bindings, then verify all three real flows. No delegated sign-in,
+`npm run setup:ids -- -SharePointOnly` to launch a read-only PowerShell job as
+that identity and save existing bindings, then verify all three real flows. No delegated sign-in,
 certificate, secret, broad-permission fallback or automatic grants are available.
 See [SharePoint permissions](./sharepoint-permissions.md). Keep it
 disabled with empty targets until those approvals and resources exist.

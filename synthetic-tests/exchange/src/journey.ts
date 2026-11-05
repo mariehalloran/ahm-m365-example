@@ -119,6 +119,7 @@ export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, c
       attempt.mutationAttempted,
       (cleanupSignal) => cleanup(context.graph!, attempt, cleanupSignal),
       telemetry,
+      config.CLEANUP_TIMEOUT_MS,
       Date.now,
       cleanupEnabled,
     );

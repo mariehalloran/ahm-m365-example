@@ -11,7 +11,7 @@ const foundationReferences: Reference[] = [
   ["environment", "environmentResourceId", "Microsoft.App/managedEnvironments"],
   ["registry", "registryResourceId", "Microsoft.ContainerRegistry/registries"],
 ];
-const workerReferences: Reference[] = [["identity", "identityResourceId", managedIdentityType]];
+const identityReferences: Reference[] = [["identity", "identityResourceId", managedIdentityType]];
 const teamsPairReferences: Reference[] = [
   ["bot", "botResourceId", botType],
   ["identity", "identityResourceId", managedIdentityType],
@@ -119,9 +119,10 @@ function expandTenant(tenant: Record<string, unknown>, index: number, scope: Sco
   delete tenant.providerClientId;
   for (const service of ["exchange", "teams", "onedrive", "sharepoint"]) {
     const where = `tenants.${index}.services.${service}`;
-    expandResourceReferences(at(tenant, "services", service, "worker"), workerReferences, scope, `${where}.worker`);
+    expandResourceReferences(at(tenant, "services", service), identityReferences, scope, where);
     inheritProviderClientId(at(tenant, "services", service, "execution"), providerClientId);
   }
+  expandResourceReferences(at(tenant, "services", "onedrive", "setup"), identityReferences, scope, `tenants.${index}.services.onedrive.setup`);
   expandTeams(at(tenant, "services", "teams"), tenant.tenantId, scope, `tenants.${index}.services.teams`);
 }
 
@@ -140,6 +141,7 @@ export function expandReferences(raw: unknown): unknown {
   const tenants = Array.isArray(document.tenants) ? document.tenants : [];
   if (isRecord(document.deployment)) {
     expandResourceReferences(document.deployment.foundation, foundationReferences, scope, "deployment.foundation");
+    expandResourceReferences(document.deployment.coordinator, identityReferences, scope, "deployment.coordinator");
     defaultAzureTenantId(document.deployment, tenants);
   }
   for (const [index, tenant] of tenants.entries()) {

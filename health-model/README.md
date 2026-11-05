@@ -1,6 +1,10 @@
 # Journey and business-step health models
 
-Health models are generated from the single root [monitoring.config.json](../monitoring.config.json) and deployed by `npm run deploy` from [synthetic-tests/](../synthetic-tests/).
+Health models are generated from root [monitoring.config.json](../monitoring.config.json)
+and its referenced service files, then deployed by `npm run deploy` from
+[synthetic-tests/](../synthetic-tests/). Each
+[service README](../synthetic-tests/README.md#services) includes its model image
+and maps the journey/business-step entities to actual API calls.
 
 ## Model shape
 
@@ -41,8 +45,9 @@ omits them.
 
 `logAnalytics.enabled` in root config selects one mode for all services:
 
-- `false`: containers publish direct aggregate health reports per cycle.
-- `true`: containers publish observations; model queries evaluate rolling windows from Log Analytics.
+- `false`: execution Functions publish direct aggregate health reports.
+- `true`: execution Functions send observations directly through the Logs
+  Ingestion API/DCR; model queries evaluate rolling windows from Log Analytics.
 
 Worker cancellations and cleanup-only failures have no numeric sample in either
 mode. Success and latency use conclusive observations; an all-Unknown cohort

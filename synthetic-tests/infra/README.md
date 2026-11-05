@@ -1,18 +1,20 @@
-# Synthetic worker infrastructure
+# Synthetic monitoring infrastructure
 
-This folder contains Bicep templates for shared worker foundation resources and per-service container apps.
+This folder contains Bicep templates for shared foundation resources, service-scoped execution Function apps, and the coordinator Container App.
 
 ## What gets deployed
 
-- One container app per enabled service per tenant in [monitoring.config.json](../../monitoring.config.json)
-- Supported workers: Exchange, Teams, OneDrive and SharePoint Online; disabled services create no app or identity
-- Shared monitoring and diagnostics resources for worker hosting
-- Explicit managed-identity and private configuration wiring consumed by worker runtime
+- One Function app per enabled service type (Exchange, Teams, OneDrive, SharePoint), shared across selected tenants
+- One watchdog Function app for independent execution/publication freshness monitoring
+- One coordinator Container App that triggers per-case starts only (no aggregation path)
+- Shared monitoring and diagnostics resources for Function hosting and direct reporting
+- Explicit managed-identity and private configuration wiring consumed by runtime
 
 ## Inputs
 
-Deployment is fully driven by root [monitoring.config.json](../../monitoring.config.json)
-and [generated `.env` bindings](../../docs/deployment.md#generated-ids-in-env):
+Deployment is fully driven by root [monitoring.config.json](../../monitoring.config.json),
+service files (`monitoring.<service>.json`), and
+[generated `.env` bindings](../../docs/deployment.md#generated-ids-in-env):
 
 - resource group, region, and tags
 - tenant/service enablement and schedules

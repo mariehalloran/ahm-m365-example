@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "2.0",
+  "service": "sharepoint",
+  "tenants": [
+    {
+      "id": "consto",
+      "config": {
+        "enabled": true,
+        "execution": {
+          "mode": "live",
+          "intervalSeconds": 300,
+          "timeoutSeconds": 240,
+          "cohort": "sharepoint-global",
+          "maxConcurrentProbes": 3,
+          "cycleTimeoutSeconds": 252,
+          "serviceHealth": true,
+          "serviceMessages": true,
+          "providerIntervalSeconds": 60,
+          "executionLanes": [
+            {
+              "name": "documents",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "document-library-roundtrip"
+              ]
+            },
+            {
+              "name": "versions",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "document-versions"
+              ]
+            },
+            {
+              "name": "list-items",
+              "intervalSeconds": 300,
+              "timeoutSeconds": 240,
+              "journeys": [
+                "list-item-lifecycle"
+              ]
+            }
+          ],
+          "cleanupTimeoutSeconds": 10,
+          "cleanupGraceSeconds": 12,
+          "publicationTimeoutSeconds": 30,
+          "slotMarginSeconds": 1
+        },
+        "scenarios": {
+          "document-library-roundtrip": true,
+          "document-versions": true,
+          "list-item-lifecycle": true
+        },
+        "targets": [
+          {
+            "siteUrl": "https://constosuites.sharepoint.com/sites/M365SyntheticUserJourneys",
+            "libraryName": "Documents",
+            "folderName": "AHM-SharePoint-Synthetics",
+            "listName": "AHM SharePoint Synthetics"
+          }
+        ],
+        "identity": "uami-m365-experience-consto-sharepoint"
+      }
+    }
+  ]
+}

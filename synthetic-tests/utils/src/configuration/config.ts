@@ -8,7 +8,6 @@ import { probeSchema, probeServices, scenarios, serviceProbeLimits, type Probe }
 import { liveProbeSchema, type LiveProbe } from "./resolved-probes.js";
 import { validateTeamsServiceUrl } from "../integrations/teams.js";
 import { canonicalProjectFile } from "../paths.js";
-import { CLEANUP_GRACE_MS, JOURNEY_TIMEOUT_SECONDS } from "../execution/budgets.js";
 
 export class ConfigurationError extends Error {
   constructor(message: string) { super(message); this.name = "ConfigurationError"; }
@@ -38,7 +37,7 @@ export async function readConfigJson(file: string): Promise<unknown> {
     catch { throw new ConfigurationError("Hosted configuration snapshot URL is invalid"); }
     if (!identity.success || !expectedHash || !/^[a-f0-9]{64}$/.test(expectedHash) ||
         url.protocol !== "https:" || !/^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) ||
-        url.pathname !== `/worker-config/${expectedHash}.json` || url.search || url.hash || url.username || url.password) {
+        url.pathname !== `/configuration/${expectedHash}.json` || url.search || url.hash || url.username || url.password) {
       throw new ConfigurationError("Hosted configuration requires a private Azure Blob snapshot, its hash and an explicit identity");
     }
     const client = new BlobClient(blobUrl, new ManagedIdentityCredential({ clientId: identity.data }));
@@ -67,17 +66,20 @@ export const teamsCallingCallbackUrlSchema = z.string().url().refine(value => {
 const runtimeSettingsSchema = z.object({
   EXECUTION_MODE: z.enum(["simulation", "live"]).default("simulation"),
   SYNTHETIC_SCENARIO: z.enum(scenarios).default("healthy"),
-  PROBE_TIMEOUT_MS: number(JOURNEY_TIMEOUT_SECONDS * 1000, 100, JOURNEY_TIMEOUT_SECONDS * 1000, true),
+  PROBE_TIMEOUT_MS: z.coerce.number().int().min(1).max(86400000),
+  INTERVAL_MS: z.coerce.number().int().min(1000).max(86400000),
+  CLEANUP_TIMEOUT_MS: z.coerce.number().int().min(1).max(3600000),
+  CLEANUP_GRACE_MS: z.coerce.number().int().min(1).max(3600000),
+  PUBLICATION_TIMEOUT_MS: z.coerce.number().int().min(1).max(3600000),
   MAX_CONCURRENT_PROBES: number(3, 1, 20, true),
   EXCHANGE_MAX_CONCURRENT_REQUESTS: number(32, 1, 1000, true),
   EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: number(2, 1, 20, true),
-  CYCLE_TIMEOUT_MS: number(JOURNEY_TIMEOUT_SECONDS * 1000 + CLEANUP_GRACE_MS, 100, 86400000, true),
+  CYCLE_TIMEOUT_MS: z.coerce.number().int().min(1).max(86400000),
   POLL_INTERVAL_MS: number(2000, 10, 10000, true),
   ENABLE_LIVE_M365: z.enum(["true", "false"]).default("false"),
   TEAMS_AUTHENTICATION: z.literal("bot").default("bot"),
   BOT_AUTHENTICATION: z.literal("managed-identity").default("managed-identity"),
   TEAMS_CALLING_CALLBACK_URL: teamsCallingCallbackUrlSchema.optional(),
-  TEAMS_CALLING_PORT: number(8080, 1024, 65535, true),
   TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: number(20, 1, 30, true),
   TEAMS_CLEANUP_ENABLED: z.enum(["true", "false"]).default("true"),
   EXCHANGE_CLEANUP_ENABLED: z.enum(["true", "false"]).default("true"),

@@ -2,7 +2,34 @@ import {
   isInconclusiveCategory, maxStepDetailLength, probeServices, type DiagnosticCategory, type StepName, type SyntheticResult, type Telemetry,
 } from "../contracts.js";
 import { categoryOf, IntegrationError, withAbort } from "../integrations/http.js";
-import { CLEANUP_TIMEOUT_MS } from "./budgets.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { StepResult } from "../contracts.js";
+
+interface StepObserver {
+  completed(result: SyntheticResult, name: StepName): Promise<void>;
+  category(category: DiagnosticCategory): DiagnosticCategory;
+  requestPermits?: { started(): void; waitingCancelled(): void };
+}
+const stepObserver = new AsyncLocalStorage<StepObserver>();
+
+/**
+ * Node async context scopes callbacks to each concurrently executing journey without changing
+ * result objects or plumbing a reporting transport through every Graph operation.
+ */
+export function withStepObserver<T>(observer: StepObserver, operation: () => Promise<T>): Promise<T> {
+  return stepObserver.run(observer, operation);
+}
+
+/** Captures the current attempt's actual-request observer when a shared permit waiter is created. */
+export function requestPermitObserver() {
+  return stepObserver.getStore()?.requestPermits;
+}
+
+/** Records the action before awaiting its independent reporting callback. */
+async function recordStep(result: SyntheticResult, step: StepResult): Promise<void> {
+  result.steps.push(step);
+  await stepObserver.getStore()?.completed(result, step.name);
+}
 
 /**
  * Runs one probe step and records step timing and diagnostics on the result object.
@@ -13,23 +40,25 @@ export async function measureStep<T>(
   classify: (error: unknown) => DiagnosticCategory = categoryOf,
 ): Promise<T> {
   const started = now();
+  let value: T;
   try {
-    const value = await operation();
-    const finished = now();
-    result.steps.push({
-      name, status: "succeeded", observedAt: new Date(finished).toISOString(),
-      durationMs: Math.max(0, finished - started),
-    });
-    return value;
+    value = await operation();
   } catch (error) {
     const finished = now();
-    result.steps.push({
+    const category = classify(error);
+    await recordStep(result, {
       name, status: "failed", observedAt: new Date(finished).toISOString(),
-      durationMs: Math.max(0, finished - started), diagnosticCategory: classify(error),
+      durationMs: Math.max(0, finished - started), diagnosticCategory: stepObserver.getStore()?.category(category) ?? category,
       ...(error instanceof IntegrationError && error.detail ? { detail: error.detail.slice(0, maxStepDetailLength) } : {}),
     });
     throw error;
   }
+  const finished = now();
+  await recordStep(result, {
+    name, status: "succeeded", observedAt: new Date(finished).toISOString(),
+    durationMs: Math.max(0, finished - started),
+  });
+  return value;
 }
 
 /**
@@ -55,7 +84,7 @@ export function journeyFailure(result: SyntheticResult, error: unknown, telemetr
  */
 export async function cleanupStep(
   result: SyntheticResult, mutationAttempted: boolean,
-  operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry,
+  operation: (signal: AbortSignal) => Promise<void>, telemetry: Telemetry, cleanupTimeoutMs: number,
   now: () => number = Date.now, enabled = true,
 ): Promise<void> {
   if (!enabled) {
@@ -72,7 +101,7 @@ export async function cleanupStep(
   }
   try {
     // Cleanup has its own budget, independent of the cancelled journey.
-    const signal = AbortSignal.timeout(CLEANUP_TIMEOUT_MS);
+    const signal = AbortSignal.timeout(cleanupTimeoutMs);
     await measureStep(result, "cleanup", () => withAbort(signal, () => operation(signal)), now, () => "cleanup-failure");
     result.diagnosticContext.cleanupSucceeded = true;
   } catch (error) {

@@ -63,6 +63,7 @@ export const createTeamsCallProbe =
     const legs: OwnedCallLeg[] = [];
     let mutationAttempted = false;
     let unknownCreation = false;
+    let callbackRegistered = false;
     let phase = "join";
     let stateDiagnostics = 0;
     const onState =
@@ -135,7 +136,7 @@ export const createTeamsCallProbe =
           const peer = context.teamsCallingPeer;
           const answerTimeoutSeconds = config.TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS;
           if (
-            !primary || !peer || primary === peer ||
+            !primary || !peer || primary === peer || !context.teamsCallState ||
             "callUserId" in probe ||
             probe.botClientId.toLowerCase() === probe.peerBotClientId.toLowerCase() ||
             !teamsCallingCallbackUrlSchema.safeParse(
@@ -146,6 +147,8 @@ export const createTeamsCallProbe =
             throw new IntegrationError("configuration-failure");
           }
           await settleBoth([primary.authenticate(executionSignal), peer.authenticate(executionSignal)]);
+          await context.teamsCallState.register(result.correlationId, [probe.botClientId, probe.peerBotClientId], executionSignal);
+          callbackRegistered = true;
           return {
             primary: { name: "primary" as const, graph: primary },
             peer: { name: "peer" as const, graph: peer },
@@ -175,7 +178,8 @@ export const createTeamsCallProbe =
               "POST",
               {
                 "@odata.type": "#microsoft.graph.call",
-                callbackUri: config.TEAMS_CALLING_CALLBACK_URL,
+                callbackUri: context.teamsCallState!.callbackUrl(result.correlationId,
+                  client.name === "primary" ? probe.botClientId : probe.peerBotClientId),
                 requestedModalities: ["audio"],
                 mediaConfig: {
                   "@odata.type": "#microsoft.graph.serviceHostedMediaConfig",
@@ -202,6 +206,8 @@ export const createTeamsCallProbe =
             };
             legs.push(leg);
             unknownCreation = false;
+            await context.teamsCallState!.bind(result.correlationId,
+              client.name === "primary" ? probe.botClientId : probe.peerBotClientId, leg.id, executionSignal);
             telemetry.emit("teams-call-created", {
               testId: result.testId,
               correlationId: result.correlationId,
@@ -409,13 +415,15 @@ export const createTeamsCallProbe =
       phase = "cleanup";
       await cleanupStep(
         result,
-        mutationAttempted &&
+        callbackRegistered || mutationAttempted &&
           (unknownCreation || legs.some((leg) => !leg.disconnected)),
         async cleanupSignal => {
-          await disconnect(AbortSignal.any([cleanupSignal, AbortSignal.timeout(5000)]), now() + 4900);
+          await disconnect(cleanupSignal, now() + config.CLEANUP_TIMEOUT_MS);
           if (unknownCreation) throw new IntegrationError("cleanup-failure");
+          if (callbackRegistered) await context.teamsCallState!.close(result.correlationId, cleanupSignal);
         },
         telemetry,
+        config.CLEANUP_TIMEOUT_MS,
         now,
         true,
       );

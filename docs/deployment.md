@@ -1,14 +1,14 @@
 # Set up and deploy
 
-The whole flow is three steps, all driven by the single root
-[monitoring.config.json](../monitoring.config.json):
+The flow is driven by root [monitoring.config.json](../monitoring.config.json)
+and the service files in its `serviceFiles` map:
 
-1. **Edit** it: tenants, accounts and targets, scenarios, cadence and the reporting
+1. **Configure** root Azure/health settings and each service's accounts, targets, scenarios, cadence and reporting
    [`groups`](./monitoring-groups.md). It names things and holds only the few IDs you
    must supply ([what the config holds](#what-the-config-holds)).
-2. **Set up Microsoft 365**: grant access by hand, then run the two small commands that
-   turn that access into `.env` values ([below](#set-up-microsoft-365)).
-3. **Deploy** the health models, foundation and workers with `npm run deploy`
+2. **Set up Azure and Microsoft 365** using the shared foundation and separate
+   service authorization/provisioning guides ([below](#set-up-microsoft-365)).
+3. **Deploy** the health models, execution Functions and scheduled dispatcher with `npm run deploy`
    ([below](#deploy-with-one-command)).
 
 The config is the real configuration of this repository's Consto test tenant and may be
@@ -23,7 +23,9 @@ snapshots remain standard JSON. Invalid syntax and trailing commas are rejected.
 ## What the config holds
 
 The config **names** things, an Azure resource by its name and an account by its address;
-IDs are derived or looked up.
+IDs are derived or looked up. Service settings below are the matching
+`tenants[].config` in each `monitoring.<service>.json`, composed into
+`tenants[].services.<service>` at load time.
 
 **Azure resources.** A bare name is a resource in `healthModel.resourceGroup` of
 `healthModel.subscriptionId`. A value starting with `/subscriptions/` is a full resource ID,
@@ -32,7 +34,7 @@ for a resource in another resource group or subscription.
 | Key | Names |
 | --- | --- |
 | `deployment.foundation` | `{ "mode": "existing", "environment": "<name or ID>", "registry": "<name or ID>" }`; `create` mode names the ones to create |
-| `worker.identity` | The existing, administrator-approved managed identity of a service's worker; `worker.identityName` instead names one the deployment creates |
+| Service `config.identity` | Existing, administrator-approved execution UAMI, attached to its service's Function app |
 | Teams `botPairs[]` | Each pair's `id`, `bot`, `identity`, `peerBot` and `peerIdentity`; existing Azure Bot registrations and managed identities |
 
 **IDs you supply.** A resource ID is needed only for a resource outside the health model's
@@ -48,8 +50,8 @@ repository, so nothing here can derive them:
 | Teams target `teamId` | The existing team that holds the channel |
 | Call target `meetingThreadId` | The dedicated meeting, created outside this project |
 
-The optional OneDrive `setup` block, read only by `npm run onedrive:setup`, also holds that
-command's own client IDs ([OneDrive setup](./onedrive-setup.md#plan-apply-and-rerun)).
+The optional OneDrive `config.setup` block selects the separate provisioning
+identity, concurrency and deadline ([OneDrive setup](./onedrive-setup.md#plan-apply-and-rerun)).
 
 **Defaults.**
 
@@ -69,32 +71,28 @@ each call target's organizer user ID (from its `organizer`, the organizer's user
 name, which only that command reads), both client IDs of each bot pair and the Teams calling
 callback URL. It writes them to `.env` ([keys](#generated-ids-in-env)).
 For SharePoint, configure actual site URL/library/folder/list names in ungrouped
-`targets[]`; the `-SharePointOnly` path discovers all four IDs as the selected
-managed identity. The active profile selects one approved SharePoint target;
-approved provisioning outputs bootstrap its private bindings, and post-deployment
-discovery/live acceptance must use its selected worker UAMI. With the deployed
-immutable config Blob, the compiled discovery command verifies all four IDs and
-does not write `.env`.
+`config.targets[]`; `-SharePointOnly` launches read-only PowerShell discovery in a
+disposable job as the selected service UAMI. It writes all four IDs to `.env`;
+resource readback alone is not proof of completed journeys.
 
 ## Set up Microsoft 365
 
-Every Microsoft 365 or Azure **access grant** is manual: follow
-[`docs/setup.md`](./setup.md), which lists each one by name, with who can do it and the
-exact `az`, Graph or PowerShell commands to run. Two small commands then generate `.env`
-values from that access — never a new grant — and are safe to automate:
+Start with [shared Azure prerequisites and Function authentication](./setup.md).
+Microsoft 365 authorization/setup is split by service:
 
-- `npm run setup:ids` looks up or creates the Teams channel, both client IDs of each pair, the
-  Teams calling callback URL, call targets' organizer user IDs and OneDrive accounts' user
-  IDs.
-  With `-SharePointOnly [-Tenant <alias>]`, it instead discovers existing
-  SharePoint site/library/folder/list IDs as the worker managed identity, without
-  Azure CLI sign-in or resource/permission creation.
-- `npm run setup:reply-seeds` provisions the retained SELF-REPLY message each `reply-mail`
-  mailbox answers (only when that scenario is selected).
+| Service | Accounts/resources, authentication and setup commands |
+| --- | --- |
+| Exchange | [Mailbox RBAC and retained reply fixtures](./exchange-permissions.md); `npm run setup:reply-seeds` |
+| Teams | [Bot registrations, readback/RSC, calling and installed apps](./teams-permissions.md); `npm run setup:ids` |
+| OneDrive | [Runtime permissions](./onedrive-permissions.md) and [separate folder provisioning](./onedrive-setup.md); explicit `-Apply -GrantTemporaryPermission` approval |
+| SharePoint | [Selected-site consent, fixtures and read-only discovery](./sharepoint-permissions.md); `npm run setup:ids -- -SharePointOnly` |
+| Optional provider data | [Separate read-only application roles and federation](./provider-monitoring.md#provider-authentication) |
 
-Both are idempotent and read the same root config; [`docs/setup.md`](./setup.md) covers
-requirements, flags and retries in full. OneDrive's drives and folders are a separate,
-separately approved command, [`npm run onedrive:setup`](./onedrive-setup.md).
+Operator Azure CLI sessions orchestrate one-off jobs; Graph calls inside those
+jobs use the explicitly selected managed identity. OneDrive alone requests an
+explicitly approved transient tenant-wide provisioning grant and revokes it
+afterward. No helper grants standing runtime Microsoft 365 consent automatically.
+Generated bindings are merged into the root-adjacent `.env`.
 
 ### Generated IDs in `.env`
 
@@ -106,14 +104,18 @@ deploy fails and names the conflict when the config sets one to a different valu
 
 | Where | Keys, each `<TENANT>__<TARGET>__…` | Fills | Written by |
 | --- | --- | --- | --- |
-| Exchange target | `REPLY_SEED_MESSAGE_ID`, `REPLY_SEED_CORRELATION_ID` | `replySeed` | `npm run setup:reply-seeds`; a local `npm run exchange:mail-test -- --apply` |
+| Exchange target | `REPLY_SEED_MESSAGE_ID`, `REPLY_SEED_CORRELATION_ID` | `replySeed` | `npm run setup:reply-seeds` |
 | Teams channel target | `CHANNEL_ID` | `channelId` | `npm run setup:ids` |
 | Teams call target | `ORGANIZER_USER_ID` | `organizerUserId` | `npm run setup:ids`, from the target's `organizer` |
 | Teams bot pair (`<TARGET>` is the pair ID) | `BOT_CLIENT_ID`, `BOT_PEER_CLIENT_ID` | `botPairs[].botClientId`, `botPairs[].botPeerClientId` | `npm run setup:ids`, from that pair's `identity` and `peerIdentity` |
-| Teams service (`<TARGET>` is `TEAMS`) | `CALLING_CALLBACK_URL` | `execution.teamsCallingCallbackUrl` | `npm run setup:ids`, from the foundation's environment |
+| Teams service (`<TARGET>` is `TEAMS`) | `CALLING_CALLBACK_URL` | `execution.teamsCallingCallbackUrl` | `npm run setup:ids`, from the deployed Teams Function hostname |
 | OneDrive target | `USER_ID` | `userId` | `npm run setup:ids`, from `userPrincipalName` |
-| OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup` |
+| OneDrive target | `DRIVE_ID`, `FOLDER_ID` | `driveId`, `folderId` | `npm run onedrive:setup -- -Apply -GrantTemporaryPermission` |
 | SharePoint target | `SITE_ID`, `DRIVE_ID`, `FOLDER_ID`, `LIST_ID` | `siteId`, `driveId`, `folderId`, `listId` | `npm run setup:ids -- -SharePointOnly` |
+
+`npm run setup:function-auth` also writes the global `FUNCTION_API_CLIENT_ID` and
+`COORDINATOR_CLIENT_ID` bindings for scheduled Function dispatch. These are
+non-secret IDs, separate from service Graph authorization.
 
 `<TENANT>` is the tenant alias, uppercased with non-alphanumeric characters replaced by `_`.
 For Exchange and OneDrive, `<TARGET>` is `ACCOUNT_<SHA256>`, derived automatically from the
@@ -141,7 +143,8 @@ From `synthetic-tests/`:
 ```sh
 npm ci
 npm run deploy -- --plan   # local preview, no Azure changes
-az login                   # the subscription in healthModel.subscriptionId
+az login                   # approved tenant/subscription in the root config
+npm run setup:function-auth # first-time Function API/dispatcher preparation
 npm run deploy
 ```
 
@@ -157,30 +160,23 @@ Graph access, bot routes, image availability and rollout are not verified.
 
 Phases, in order:
 
-1. **Preflight**, no changes: validate the config, check the Azure account, any
-   `existing` foundation, worker identity and Teams bot bindings, build both Bicep
-   templates and run `what-if` for ingestion, models, foundation and workers.
-2. **Reporting foundation:** private configuration storage in both modes.
-   Only with `logAnalytics.enabled: true`, also provision the pay-as-you-go workspace,
-   `M365Synthetic_CL`, Event Hub, optional Capture, ingestion Function, DCE and DCR.
-3. **Health models and worker foundation:** direct external-report signals when
-   off, native KQL signals/query permissions when on. Worker identities always receive
-   scoped direct-report and configuration-reader roles; Event Hub sender roles are on-only.
-4. **Build and configuration:** pin the ACR worker image by digest. Build/deploy
-   the ingestion Function only when on, then upload an immutable private Blob snapshot
-   generated from the root configuration and its resolved `.env` bindings. This is
-   a deployment artifact, not another user-maintained configuration file.
-5. **Prove Exchange first:** verify current direct health reports or live observation
-   ingestion, including the exact configuration hash and ready revision. Then roll out
-   the remaining services and verify their selected journey scopes.
-6. **Operational checks:** on enables the log-based freshness rule after ingestion
-   proof. Off verifies direct reporting, allows the old pipeline to drain, and retires
-   only owned Event Hub/Function/DCR resources and obsolete access. Existing workspace
-   history and archived data are retained. The direct mode has no log freshness watchdog.
+1. **Preflight:** verify the root-composed configuration, Azure tenant/subscription,
+   Function API, selected identities and Teams bot bindings. Build Bicep and run
+   `what-if` before cloud mutations.
+2. **Configuration/reporting foundation:** private configuration storage in both
+   modes; workspace/table/DCE/DCR only when Log Analytics is selected.
+3. **Models and Function hosts:** establish service/root health models and
+   execution infrastructure before starting recurring cases.
+4. **Resolved configuration:** upload the immutable, hash-verified snapshot
+   composed from root/service files and `.env` bindings.
+5. **Execution and dispatch (`stage: "all"`):** deploy Function packages, pin the
+   coordinator image and start scheduled case dispatch. `foundation` stops before
+   this recurring execution stage.
+6. **Verification:** check dispatcher/execution evidence and selected-mode report
+   publication; retain protected deployment provenance.
 
-Completion includes ready revisions and current reports in the selected mode, not
-proof that Microsoft 365 is healthy or notifications were delivered. Verify Capture,
-actual model evaluation and notifications under [acceptance](#acceptance-and-cleanup). Each run
+Completion does not prove Microsoft 365 is healthy or notifications were delivered.
+Verify actual model evaluation and notifications under [acceptance](#acceptance-and-cleanup). Each run
 writes a protected record (what-if results, provenance) to
 `.monitoring-deployment/<runId>/` in the repository root. The root `.gitignore`
 already excludes that default `deployment.stateDirectory`; ignore a custom one yourself.
@@ -200,7 +196,8 @@ or model visibility. With the 300-second cadence, 299-second cycle bound and def
 | `configurationStorageAccount` | Private hash-verified worker configuration store; required in both modes and independent of the logging pipeline |
 | `healthModelLocation` | Optional region for the health models, default `location` |
 | `azureTenantId` | Optional tenant that hosts the Azure resources, by default the single tenant's `tenantId` (required with several tenants); it must be the subscription's actual tenant, so set it only to host in a different tenant than Microsoft 365 |
-| `stage` | `workers` (default), or `foundation` to stop after the models and foundation, for example until administrators approve the new identities |
+| `stage` | `all` for execution packages and scheduled dispatch, or `foundation` to establish models/infrastructure before Microsoft 365 setup |
+| `functions`, `coordinator` | Function host/storage/API settings and the scheduled Container App dispatcher/identity |
 | `enableLiveProbes` | Default `false`; see the live gates below |
 | `enableBetaServiceActivity` | Default `false`; required when a service enables `serviceActivity` |
 | `foundation` | `{ "mode": "create", "environmentName", "registryName" }` or `{ "mode": "existing", "environment", "registry" }`, each name a resource in the health model's resource group or a full resource ID ([names](#what-the-config-holds)) |
@@ -213,14 +210,14 @@ or model visibility. With the 300-second cadence, 299-second cycle bound and def
 
 Live Microsoft 365 execution is off until all of these hold:
 
-- `tenants[].services.<service>.execution.mode` is `"live"`; the alternative,
+- The service file's `tenants[].config.execution.mode` is `"live"`; the alternative,
   `"simulation"`, is labeled and makes no Microsoft 365 or Azure calls.
-- `deployment.enableLiveProbes` is `true`. At the default `workers` stage, planning
-  or deploying a live worker fails without it, and it makes the worker template set
+- `deployment.enableLiveProbes` is `true`. At the `all` stage, planning
+  or deploying live execution fails without it, and it makes the Function template set
   `ENABLE_LIVE_M365=true`. The runtime refuses `mode: "live"` without that variable;
   a local live run must export it.
-- The live worker names an existing, administrator-approved identity in
-  `worker.identity` (deployment never grants Microsoft 365 access), uses
+- The live service names an existing, administrator-approved identity in
+  `config.identity` (deployment never grants Microsoft 365 access), uses
   managed-identity health-report authentication and has the bindings its journeys
   need: Teams bot references, Exchange reply seeds, OneDrive user/drive/folder
   IDs and SharePoint site/drive/folder/list IDs (the generated ones come from [`.env`](#generated-ids-in-env)).
@@ -435,16 +432,18 @@ real access.
 
 ## Root configuration
 
-The [root configuration](../monitoring.config.json) is the only file you maintain:
+The [root configuration](../monitoring.config.json) references the four
+service files. Together they are the user-maintained project configuration:
 
 | Section | Owns |
 | --- | --- |
 | `healthModel`, `serviceHealth` | Azure destination, thresholds/report TTL and optional suppressed Service Health context |
-| `logAnalytics.enabled` | The single reporting toggle: `false` for direct container health reports, `true` for the observation/KQL pipeline |
+| `logAnalytics.enabled` | The single reporting toggle: `false` for direct Function health reports, `true` for direct Logs Ingestion API/DCR observations and KQL |
 | `deployment` | Hosting region and tenant, foundation, image and live/beta opt-ins, above |
-| `tenants[]` | `id`, `displayName`, `tenantId`, optional `providerClientId`, and per service `enabled`, `execution` (mode, cadence, lanes, authentication, providers), `access` (service access bindings), `worker` (app and identity), `scenarios`, `targets` (a Teams channel target may set `channelName`, read only by setup), Teams `callTargets` (an `organizer`, read only by setup) and OneDrive `setup` |
-| `tenants[].services.exchange.targets`, `….onedrive.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
-| `tenants[].services.sharepoint.targets` | Ungrouped actual site URL/library/folder/list names, optional region; no users, arbitrary target IDs or per-target models |
+| Root `tenants[]` | `id`, `displayName`, `tenantId`, optional provider application ID |
+| `serviceFiles` | Paths to the Exchange, Teams, OneDrive and SharePoint files; each matching `tenants[].config` owns identity, enabled/scenarios, execution and targets |
+| Exchange/OneDrive `config.targets` | [User groups](./monitoring-groups.md) keyed by group ID with `userGroupName` and `users`; no root groups or Teams user groups |
+| SharePoint `config.targets` | Ungrouped actual site URL/library/folder/list names; no users, arbitrary target IDs or per-target models |
 
 It holds names, choices and the few [IDs only you can supply](#what-the-config-holds),
 never secrets. Model and worker deployment use this same file. Each worker downloads
@@ -460,7 +459,7 @@ authorization for Microsoft 365 access and health reporting.
 - **Exchange:** application RBAC scoped to the dedicated test mailboxes; see
   [Exchange permissions](./exchange-permissions.md). Both the one-time approval and
   extending the scope to every configured mailbox are manual
-  ([`docs/setup.md`, section 4](./setup.md#4-exchange-mailbox-access)).
+  ([Exchange scope maintenance](./exchange-permissions.md#maintain-the-approved-mailbox-scope)).
 - **Teams messaging:** managed-identity Bot Connector authentication and a
   separate federated application with team-scoped Graph readback permission; see
   [Teams permissions](./teams-permissions.md).
@@ -477,10 +476,10 @@ authorization for Microsoft 365 access and health reporting.
   on the designated test site; same-tenant explicit managed identity only.
   Site/library/folder/list provisioning and consent remain manual. See
   [SharePoint permissions](./sharepoint-permissions.md).
-- **Reporting:** workers have private configuration-reader and service-model report
-  roles. With logging off, these publish all aggregated journey/action reports directly.
-  When on, workers also have Event Hubs sender access; the Function has receiver,
-  host/quarantine storage and DCR ingestion roles, and model identities query the workspace.
+- **Reporting:** execution Functions have private configuration-reader and
+  service-model report roles. With logging off, they publish journey/action reports
+  directly. When on, their selected identities have DCR ingestion access and send
+  observations directly through the Logs Ingestion API; model identities query the workspace.
   The root reads its nested models in both modes.
 
 There is no silent CLI, user or credential fallback. Live managed-identity runs
@@ -489,15 +488,11 @@ that endpoint. Follow the [tenant-binding requirements](./cross-tenant-access.md
 
 ## Container Apps boundary
 
-`npm run deploy` deploys the selected reporting foundation and [health models](../health-model/README.md),
-then the [worker foundation](../synthetic-tests/infra/README.md) and image.
-Only the enabled logging mode deploys an ingestion Function.
-It proves fresh Exchange reports before rolling out the other enabled services. Workers reuse an
-existing approved environment and identities when `deployment.foundation.mode` is
-`existing`, run an immutable image digest and download the same root-config snapshot.
-Keep the image and snapshot together: pre-SharePoint images do not recognize the
-new service selection, even when disabled. The standard deployment rebuilds/pins
-the image using a fingerprint that includes SharePoint source before rollout.
+The Container App only schedules authenticated Function invocations; it does not
+run Graph journeys, collect results or aggregate health. Service Function apps
+execute cases independently and publish results using their selected identities.
+Keep deployment packages, coordinator image and the immutable resolved snapshot
+from the same approved deployment.
 
 Only scheduled Teams meetings need public HTTPS callback ingress. Background
 journey execution is not a long-lived ingress request. Lanes run independently
@@ -516,10 +511,11 @@ Actual cleanup remains independently bounded to ten
 seconds. Graceful shutdown permits bounded reporting, but cannot extend the hard
 slot deadline. These source changes have not been deployed or live-accepted.
 
-`logAnalytics.enabled` controls the entire log path, not just an exporter.
-Off reports directly from containers and does not use a logging pipeline.
-On uses Event Hubs, the managed-identity Function/DCR bridge and pay-as-you-go workspace,
-with optional Capture and the six administrator saved searches. See
+`logAnalytics.enabled` controls the reporting path, not just an exporter.
+Off reports directly from execution Functions without a logging pipeline.
+On sends observations directly through the Logs Ingestion API/DCR to the
+pay-as-you-go workspace. Neither mode uses Event Hubs, Capture or an intermediary
+ingestion Function. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 Microsoft-reported provider data
 remains separate, suppressed Service Health context; see

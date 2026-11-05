@@ -34,7 +34,7 @@ export const sharePointListProbe: ProbeHandler<"sharepoint-list-item"> = async (
     await cleanupStep(result, attempt.mutationAttempted, cleanupSignal => {
       if (!context.graph) throw new IntegrationError("collector-failure");
       return deleteOwnedListItem(context.graph, attempt, cleanupSignal);
-    }, telemetry, now);
+    }, telemetry, context.config.CLEANUP_TIMEOUT_MS, now);
   }
   return finishJourney(result, startedAt, now);
 };

@@ -684,6 +684,7 @@ function createExtendedJourneyProbe(
         attempt.mutated,
         (signal) => cleanupExtendedJourney(attempt, signal),
         context.telemetry,
+        context.config.CLEANUP_TIMEOUT_MS,
         Date.now,
         cleanupEnabled,
       );

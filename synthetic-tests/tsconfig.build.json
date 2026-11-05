@@ -5,7 +5,8 @@
     "teams/src/**/*.ts",
     "onedrive/src/**/*.ts",
     "sharepoint/src/**/*.ts",
-    "ingestion/src/**/*.ts",
+    "functions/src/**/*.ts",
+    "coordinator/src/**/*.ts",
     "utils/src/**/*.ts"
   ]
 }

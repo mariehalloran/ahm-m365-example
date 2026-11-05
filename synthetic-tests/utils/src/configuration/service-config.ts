@@ -3,9 +3,6 @@ import { exchangePollIntervalMilliseconds, maxServiceTargets, probeSchema, probe
 import { ConfigurationError, createRuntimeConfig, teamsCallingCallbackUrlSchema, type Config } from "./config.js";
 import { activityFunctionNames, activityFunctions, isPercentageActivity } from "../providers/provider-catalog.js";
 import { teamsBotPairSchema } from "./deployment-config.js";
-import {
-  CLEANUP_GRACE_MS, EXCHANGE_PUBLICATION_TIMEOUT_MS, JOURNEY_INTERVAL_SECONDS, JOURNEY_TIMEOUT_SECONDS, SLOT_MARGIN_MS,
-} from "../execution/budgets.js";
 export { activityFunctions } from "../providers/provider-catalog.js";
 
 export const serviceActivitySchema = z.object({
@@ -21,11 +18,15 @@ export const serviceActivitySchema = z.object({
 }).strict();
 const serviceFields = {
   intervalSeconds: z.number().int().min(1).max(86400),
-  timeoutSeconds: z.number().int().min(1).max(JOURNEY_TIMEOUT_SECONDS),
+  timeoutSeconds: z.number().int().min(1).max(86400),
+  cleanupTimeoutSeconds: z.number().int().min(1).max(3600),
+  cleanupGraceSeconds: z.number().int().min(1).max(3600),
+  publicationTimeoutSeconds: z.number().int().min(1).max(3600),
+  slotMarginSeconds: z.number().int().min(1).max(3600),
   maxConcurrentProbes: z.number().int().min(1).max(20).default(3),
   maxConcurrentRequests: z.number().int().min(1).max(1000).default(32),
   maxConcurrentRequestsPerMailbox: z.number().int().min(1).max(20).default(2),
-  cycleTimeoutSeconds: z.number().int().min(1).max(86400).default(JOURNEY_TIMEOUT_SECONDS + CLEANUP_GRACE_MS / 1000),
+  cycleTimeoutSeconds: z.number().int().min(1).max(86400),
   mode: z.enum(["simulation", "live"]),
   scenario: z.enum(scenarios).default("healthy"),
   cohort: probeSchema.shape.cohort,
@@ -35,17 +36,16 @@ const serviceFields = {
   teamsReadbackClientId: z.string().uuid().optional(),
   providerClientId: z.string().uuid().optional(),
   teamsCallingCallbackUrl: teamsCallingCallbackUrlSchema.optional(),
-  teamsCallingPort: z.number().int().min(1024).max(65535).default(8080),
   teamsCallingAnswerTimeoutSeconds: z.number().int().min(1).max(30).default(20),
   teamsCleanupEnabled: z.boolean().default(true),
   exchangeCleanupEnabled: z.boolean().default(true),
   executionLanes: z.array(z.object({
     name: z.string().regex(/^[a-zA-Z0-9-]{1,40}$/),
     intervalSeconds: z.number().int().min(1).max(86400),
-    timeoutSeconds: z.number().int().min(1).max(JOURNEY_TIMEOUT_SECONDS),
+    timeoutSeconds: z.number().int().min(1).max(86400),
     journeys: z.array(z.string().min(1)).min(1),
   }).strict()).min(1).max(12).optional(),
-  healthReportAuthentication: z.enum(["managed-identity", "certificate"]).default("managed-identity"),
+  healthReportAuthentication: z.literal("managed-identity").default("managed-identity"),
   serviceHealth: z.boolean().default(false),
   serviceMessages: z.boolean().default(false),
   providerIntervalSeconds: z.number().int().min(1).max(86400).default(60),
@@ -141,16 +141,21 @@ export function validateTeamsBotPairs(service: Pick<Extract<ServiceConfig, { typ
 
 /** Validates service-owned execution deadlines and independent provider selections. */
 function validateProviderSettings(service: ServiceExecution): void {
-  if (service.intervalSeconds !== JOURNEY_INTERVAL_SECONDS ||
-      service.executionLanes?.some(lane => lane.intervalSeconds !== JOURNEY_INTERVAL_SECONDS)) {
-    throw new ConfigurationError("Every Exchange, Teams, OneDrive and SharePoint journey requires a 300-second cadence");
-  }
   if (service.type === "exchange" && service.executionLanes && service.executionLanes.length !== 1) {
-    throw new ConfigurationError("Exchange requires one aligned 300-second lane for every supported journey");
+    throw new ConfigurationError("Exchange requires one aligned lane for every supported journey");
   }
-  if (service.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS ||
-      service.executionLanes?.some(lane => lane.timeoutSeconds !== JOURNEY_TIMEOUT_SECONDS)) {
-    throw new ConfigurationError("Every Exchange, Teams, OneDrive and SharePoint journey requires one 240-second complete-journey execution deadline");
+  if (service.cleanupGraceSeconds < service.cleanupTimeoutSeconds ||
+      service.cycleTimeoutSeconds < service.timeoutSeconds) {
+    throw new ConfigurationError("Cleanup grace must cover cleanup, and the cycle execution budget must cover a complete journey deadline");
+  }
+  for (const lane of service.executionLanes ?? [service]) {
+    if (lane.timeoutSeconds > service.cycleTimeoutSeconds ||
+        service.cycleTimeoutSeconds + service.cleanupGraceSeconds + service.publicationTimeoutSeconds + service.slotMarginSeconds > lane.intervalSeconds) {
+      throw new ConfigurationError("Each lane must fit its journey deadline, cycle execution, cleanup grace, publication and slot margin inside its configured interval");
+    }
+  }
+  if (service.providerIntervalSeconds <= service.slotMarginSeconds + service.publicationTimeoutSeconds) {
+    throw new ConfigurationError("The provider interval must leave collection time after publication and slot margin");
   }
   if ((service.type === "onedrive" || service.type === "sharepoint") && (service.serviceActivity.enabled ||
       service.serviceActivity.functions !== undefined || Object.keys(service.serviceActivity.thresholds).length > 0)) {
@@ -256,19 +261,20 @@ export function serviceSettings(
     TEAMS_AUTHENTICATION: service.teamsAuthentication,
     BOT_AUTHENTICATION: service.botAuthentication,
     TEAMS_CALLING_CALLBACK_URL: service.teamsCallingCallbackUrl,
-    TEAMS_CALLING_PORT: service.teamsCallingPort,
     TEAMS_CALLING_ANSWER_TIMEOUT_SECONDS: service.teamsCallingAnswerTimeoutSeconds,
     TEAMS_CLEANUP_ENABLED: service.teamsCleanupEnabled ? "true" : "false",
     EXCHANGE_CLEANUP_ENABLED: service.exchangeCleanupEnabled ? "true" : "false",
     SYNTHETIC_SCENARIO: service.scenario,
     PROBE_TIMEOUT_MS: service.timeoutSeconds * 1000,
+    INTERVAL_MS: service.intervalSeconds * 1000,
+    CLEANUP_TIMEOUT_MS: service.cleanupTimeoutSeconds * 1000,
+    CLEANUP_GRACE_MS: service.cleanupGraceSeconds * 1000,
+    PUBLICATION_TIMEOUT_MS: service.publicationTimeoutSeconds * 1000,
     ...(service.type === "exchange" ? { POLL_INTERVAL_MS: exchangePollIntervalMilliseconds } : {}),
     MAX_CONCURRENT_PROBES: service.maxConcurrentProbes,
     EXCHANGE_MAX_CONCURRENT_REQUESTS: service.maxConcurrentRequests,
     EXCHANGE_MAX_CONCURRENT_REQUESTS_PER_MAILBOX: service.maxConcurrentRequestsPerMailbox,
-    CYCLE_TIMEOUT_MS: service.type === "exchange"
-      ? service.intervalSeconds * 1000 - SLOT_MARGIN_MS - CLEANUP_GRACE_MS - EXCHANGE_PUBLICATION_TIMEOUT_MS
-      : service.cycleTimeoutSeconds * 1000,
+    CYCLE_TIMEOUT_MS: service.cycleTimeoutSeconds * 1000,
     probes: serviceProbes(service, selectedScenarios),
   }, env);
 }

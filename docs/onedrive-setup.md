@@ -1,78 +1,55 @@
 # Programmatic OneDrive setup
 
-One administrator command prepares every approved account in
-`monitoring.config.json`: discover its drive, create/reuse the named dedicated folder,
-grant the worker folder-scoped write access, verify the grant, and save the real
-drive and folder IDs to the gitignored `.env` beside the config
-([generated IDs](./deployment.md#generated-ids-in-env)). It supports up to 1,000
-configured accounts without per-account commands. The worker remains least-privilege
-and never provisions its own access. This command is separate from `npm run setup:ids`, which
-only looks up each account's user ID (`USER_ID` in `.env`) and leaves the drives and
-folders to this command ([setup](./deployment.md#set-up-microsoft-365)).
+Use the OneDrive setup command to discover every configured personal drive,
+create/reuse its dedicated test folder, verify a worker `write` grant and save
+generated user/drive/folder IDs in the adjacent gitignored `.env`.
+The runtime identity never provisions its own access. Complete
+[OneDrive account and permission approval](./onedrive-permissions.md) and the
+[shared Azure foundation](./setup.md) first.
 
 ## Prerequisites and account input
 
-Follow the [deployment order](./deployment.md#deploy-with-one-command): `npm run deploy`
-creates the health models and worker foundation/identities first
-(`deployment.stage: "foundation"` stops there until approvals are in place), then
-approve M365 access following [`docs/setup.md`](./setup.md), run `npm run setup:ids` and
-then this setup, and deploy the live workers. See
-[OneDrive permissions](./onedrive-permissions.md) for the worker/provisioner boundary.
+In the matching `tenants[].config` of
+[monitoring.onedrive.json](../monitoring.onedrive.json), configure:
 
-Generate [user groups](./monitoring-groups.md) under
-`tenants[].services.onedrive.targets` in `monitoring.config.json`, each keyed by its
-group ID with `userGroupName` and a `users` array from your approved
-account-provisioning output. Each user target needs the account's `userPrincipalName`
-and a dedicated `folderName`,
-normally `AHM-Synthetic-Tests`. Set `restoreVersion` deliberately. Leave out `userId`,
-`driveId` and `folderId`: `npm run setup:ids` looks up `userId` from the `userPrincipalName`,
-this command writes the drive and folder IDs, and deploy fills all three in using an
-account key derived automatically from the case-insensitive UPN. Do not supply a target `id`.
-The generated [binding keys](./deployment.md#generated-ids-in-env) use that account key.
-Run `npm run setup:ids` first, with the OneDrive service in `live` mode (it acts only on live
-services), because this command reads the user IDs. Shared users use the same UPN/settings
-and are provisioned only once.
-The configured user targets are the only
-account inventory; neither setup command enumerates the tenant or silently adds users.
+- `identity`: the permanent OneDrive execution UAMI.
+- `targets.<groupId>.userGroupName` and `users[]`: approved UPNs, dedicated
+  `folderName` values and a deliberate `restoreVersion` choice.
+- `setup.identity`: a **different**, dedicated setup UAMI, plus its concurrency
+  and per-target deadline.
 
-The worker application must already have administrator-approved
-`Files.SelectedOperations.Selected` and, for the app-folder journey,
-`Files.ReadWrite.AppFolder`. Setup creates the individual folder write grants;
-it does not grant application consent.
+For example:
 
-Use a **separate, explicitly approved setup identity**. Application-based setup
-needs Graph `Files.ReadWrite.All`, which is tenant-wide and belongs only to the
-provisioning identity, never the runtime worker. Use managed-identity authentication
-on the approved Azure host. Global/SharePoint administrator roles alone do not add
-Graph file permissions.
-
-Setup creates no privileged application, consent, licenses or Azure role
-assignments. Obtain those approvals through your normal administration pipeline;
-do not attach the provisioning identity to the worker or reuse its credentials
-for tests. Revoke temporary provisioning access according to that approval.
-
-`setup.workerClientId` is the worker's **application/client ID**, not its principal
-or application-object ID. The foundation identity can be queried programmatically:
-
-```sh
-az identity show --subscription '<approved-subscription>' \
-  --resource-group '<approved-resource-group>' \
-  --name '<worker.identityName>' --query clientId --output tsv
+```json
+"setup": {
+  "identity": "<dedicated-setup-identity-name>",
+  "concurrency": 4,
+  "targetTimeoutSeconds": 300
+}
 ```
+
+The helper can create a setup identity named in this resource group; an explicitly
+referenced existing identity must already exist. It refuses to use the execution
+identity as the provisioner. No client certificate, private key or user-password
+credential is used. Runtime consent to `Files.SelectedOperations.Selected` and,
+when selected, `Files.ReadWrite.AppFolder` remains a separate administrator action.
+
+Accounts must be licensed and their personal drives must already exist. These
+commands do not create accounts, assign licenses or create personal sites. The
+operator needs approved Azure job/Blob/role-assignment access and authority to
+grant/revoke the setup identity's temporary Graph application permission.
 
 ## Provision personal OneDrives
 
-Accounts must be licensed and their personal OneDrives must already exist.
-Application-only Graph setup does not create personal sites. Skip this step if
-your account-provisioning pipeline already does it.
-
-In an approved SharePoint administrator connection, queue only the root-selected
-accounts in batches of **at most 200**:
+Skip this step if the approved account-provisioning process already created the
+drives. A licensed SharePoint Administrator can queue the selected accounts with
+`Request-SPOPersonalSite` in an approved SharePoint administration connection.
+From the repository root, read the configured account inventory only:
 
 ```powershell
-$root = Get-Content -Raw -LiteralPath './monitoring.config.json' | ConvertFrom-Json
-$tenant = $root.tenants | Where-Object id -eq '<tenant id>'
-$upns = @($tenant.services.onedrive.targets.PSObject.Properties |
+$service = Get-Content -Raw -LiteralPath './monitoring.onedrive.json' | ConvertFrom-Json -Depth 100
+$selection = ($service.tenants | Where-Object id -eq '<tenant-alias>').config
+$upns = @($selection.targets.PSObject.Properties |
     ForEach-Object { $_.Value.users } |
     ForEach-Object { $_.userPrincipalName } | Sort-Object -Unique)
 for ($offset = 0; $offset -lt $upns.Count; $offset += 200) {
@@ -81,186 +58,103 @@ for ($offset = 0; $offset -lt $upns.Count; $offset += 200) {
 }
 ```
 
-This is asynchronous and ignores existing personal sites. Wait for provisioning
-before applying folder setup; a missing drive is reported as an account failure,
-not silently skipped or treated as Healthy. The administrator and target users
-need the licenses/roles documented by
+Each request has at most 200 users and is asynchronous. Wait for provisioning;
+a missing drive is a failure, not a skipped/Healthy account. The administrator
+and targets need the licenses/roles documented by
 [`Request-SPOPersonalSite`](https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/request-spopersonalsite).
 Multi-Geo tenants require the appropriate regional administration connection.
-This is resource administration, not a SharePoint synthetic workload.
+Application-only Graph setup does not create missing personal sites.
 
 ## Plan, apply and rerun
 
-Select the provisioning credential in the tenant's OneDrive service block of
-`monitoring.config.json`. The M365 tenant is that tenant entry's `tenantId`:
-
-```json
-"setup": {
-  "authentication": "managed-identity",
-  "workerClientId": "<worker-client-id>",
-  "setupClientId": "<dedicated-setup-identity-client-id>"
-}
-```
-
-`authentication: "managed-identity"` requires `setupClientId` and an approved
-managed identity attached to the host running the command. No certificate, key or
-password is used, and there is no credential fallback. Setup refuses the worker
-client ID as the setup identity; `workerClientId` must match
-`worker.identityClientId` when that is set. Use the job below rather than widening
-an operator's Azure CLI consent or adding standing worker permissions.
-
-### Run with a managed identity
-
-Managed identities only authenticate from Azure-hosted compute that has the identity
-attached, so run the command inside a short-lived
-[Azure Container Apps Job](https://learn.microsoft.com/en-us/azure/container-apps/jobs)
-using the same worker image, rather than from a workstation:
-
-1. Create a dedicated setup identity, separate from the OneDrive worker identity, and
-   grant it `AcrPull` on the registry so it can pull the worker image:
-
-   ```sh
-   az identity create --name <setup-identity-name> --resource-group <approved-resource-group>
-   az role assignment create --assignee-object-id <setup-identity-principal-id> \
-     --assignee-principal-type ServicePrincipal --role AcrPull --scope <registry-resource-id>
-   ```
-
-2. Immediately before provisioning, grant that identity's service principal the Graph
-   application role `Files.ReadWrite.All` (admin consent required):
-
-   ```sh
-   az rest --method post \
-     --url "https://graph.microsoft.com/v1.0/servicePrincipals/<setup-identity-principal-id>/appRoleAssignments" \
-     --body '{"principalId":"<setup-identity-principal-id>","resourceId":"<graph-service-principal-id>","appRoleId":"75359482-378d-4052-8f01-80520e7db3cd"}'
-   ```
-
-3. Run `node dist/onedrive/src/setup-command.js --config monitoring.config.json --tenant <id> --apply`
-   in a Container Apps Job with the setup identity attached
-   (`identity.type: UserAssigned`) and `AZURE_CLIENT_ID` set to its client ID, mounting
-   the config and `.env` text as the job's command input. Review the plan (omit
-   `--apply`) before applying, exactly as in a local run.
-
-4. Delete the disposable job and **revoke the `Files.ReadWrite.All` grant** after
-   the plan/apply, including failure: delete the app role assignment created in step 2. The setup
-   identity is left with zero standing Graph permissions between runs; only `AcrPull`
-   persists, which is low-risk read-only registry access. Re-grant `Files.ReadWrite.All`
-   only when about to provision again.
-
-This keeps the broad `Files.ReadWrite.All` grant transient and off any
-continuously-running identity, with no certificate or key ever written to disk.
-
-Run from `synthetic-tests/` with its Node dependencies installed. After a normal
-build, production-only installations can invoke
-`node dist/onedrive/src/setup-command.js` with the same arguments.
-Use that entry or `npm --silent` when consuming JSON progress in automation.
-Add `--tenant <id>` when the config has several tenants. The default is a
-**read-only plan**, including when existing folders need grants:
+Run from `synthetic-tests/` after signing the approved operator into the configured
+tenant/subscription with Azure CLI:
 
 ```sh
+npm run setup:ids
 npm run onedrive:setup
 ```
 
-Review the per-target `folderAction` / `permissionAction`, then apply:
+`setup:ids` resolves user IDs and other enabled live services' bindings.
+The OneDrive **plan prints selected folder count and intent only**. It makes no
+resource/permission changes and does not inspect existing Graph resources or
+prove authorization.
 
-```sh
-npm run onedrive:setup -- --apply
+After explicit tenant-wide provisioning approval:
+
+```powershell
+npm run onedrive:setup -- -Apply -GrantTemporaryPermission
 ```
 
-`setup.concurrency` is 1-10, default 4; `setup.targetTimeoutSeconds` bounds each
-target to 30-3,600 seconds, default 300. Credential acquisition is also bounded. Graph
-throttling uses bounded retries and honors `Retry-After` up to 60 seconds; longer
-delays fail explicitly for a later rerun. Ambiguous writes are reconciled by reading
-actual resources, not blindly resending mutations. Short bounded polling verifies
-grant propagation; an unobserved grant is never checkpointed as ready.
+[`setup/provision-onedrive.ps1`](../synthetic-tests/setup/provision-onedrive.ps1):
 
-Each successful account is checkpointed into the gitignored `.env` beside the config
-(`<TENANT>__<TARGET>__DRIVE_ID` and `…__FOLDER_ID`, merged and replaced atomically with
-mode 0600); `monitoring.config.json` is never rewritten. Other accounts continue after
-ordinary permission/provisioning failures. Authentication or checkpoint failures stop new
-scheduling. The summary includes `ready`,
-`planned`, `failed`, and `notStarted`; failure, interruption or incomplete work
-returns a nonzero exit status. Logs contain opaque target IDs/categories, not
-tokens or raw API responses.
+1. Resolves/creates the separate setup UAMI and refuses an existing standing
+   `Files.ReadWrite.All` grant.
+2. Assigns that tenant-wide application role just in time and launches
+   [`onedrive-job.ps1`](../synthetic-tests/setup/onedrive-job.ps1) in a disposable
+   managed-identity Container Apps Job using the Microsoft Azure PowerShell image.
+3. Discovers drives, creates/reuses folders, adds or upgrades only this worker's
+   direct folder grant, verifies write access and returns per-account results.
+4. Merges successful `USER_ID`, `DRIVE_ID` and `FOLDER_ID` bindings into `.env`,
+   then revokes the temporary Graph grant in `finally`, including operation failure.
 
-Rerun the same command after fixing the reported prerequisites. Existing folders
-and write grants are reused. Only this worker's direct read grant can be upgraded;
-setup does not patch unrelated or inherited permission entries.
-[Selected resource grants break permission inheritance](https://learn.microsoft.com/en-us/graph/permissions-selected-overview#how-selected-scopes-work-with-sharepoint-and-onedrive-permissions),
-so use dedicated folders and account for unique-permission limits.
-Setup never deletes resources to roll back a partial run.
-A stale folder ID (from `.env`) or mismatched drive/name
-requires explicit review rather than silently rebinding a different resource.
+The shared job helper also removes its job, uploaded inputs/results and any
+temporary Blob role it created. Cleanup/revocation failures are explicit errors:
+inspect `.monitoring-deployment/` and remove the recorded temporary grant/job
+before rerunning. The helper does not audit or revoke unrelated broad grants.
+Revocation does not invalidate already-issued access tokens immediately.
 
-There is no lock file: run one provisioning job per target set and one apply at a time
-against the same `.env`. SIGINT/SIGTERM retain completed checkpoints; rerun to
-reconcile any uncheckpointed grants.
+`setup.concurrency` is 1-10 (default 4); `targetTimeoutSeconds` is 30-3,600
+(default 300). Ordinary target failures retain successful bindings and return a
+nonzero status. Rerun after correcting prerequisites; existing matching folders
+and writable grants are reused. Stale drive/folder bindings require review
+rather than silent replacement. Run one apply per target set/`.env` at a time.
+
+Selected folder grants can break permission inheritance and consume unique
+permission capacity. Use dedicated non-root folders, as described in Microsoft's
+[Selected permissions model](https://learn.microsoft.com/en-us/graph/permissions-selected-overview).
+Do not give the execution identity `Files.ReadWrite.All` to bypass a setup failure.
+
+## Provisioning Graph endpoints
+
+Paths are relative to `https://graph.microsoft.com/v1.0`. These privileged setup
+calls are **not additional runtime worker permissions**:
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /users/{UPN}` | Resolve the configured user's ID |
+| `GET /users/{UPN}/drive` | Discover the existing OneDrive for Business drive |
+| `GET /drives/{driveId}/root` | Verify root metadata |
+| `GET /drives/{driveId}/root:/{folderName}` or `GET /drives/{driveId}/items/{folderId}` | Find/revalidate the dedicated non-root folder |
+| `POST /drives/{driveId}/root/children` | Create the folder if missing |
+| `GET`, `POST /drives/{driveId}/items/{folderId}/permissions` | Read or add the worker's application write grant |
+| `PATCH /drives/{driveId}/items/{folderId}/permissions/{permissionId}` | Upgrade this worker's existing direct grant |
+| `POST /servicePrincipals/{setupPrincipalId}/appRoleAssignments` | Operator approves the temporary application role |
+| `DELETE /servicePrincipals/{setupPrincipalId}/appRoleAssignments/{assignmentId}` | Operator revokes that role after setup |
+
+Use the [OneDrive README](../synthetic-tests/onedrive/README.md#graph-endpoints)
+for normal journey endpoints.
 
 ## Size the worker for hundreds of accounts
 
-Setup concurrency and synthetic execution concurrency are independent.
-The service's `execution` block owns `maxConcurrentProbes` (1-20, default 3) and
-`cycleTimeoutSeconds` (default 252). Every selected account executes every selected
-journey every 300 seconds with a 240-second whole-journey deadline. Setup/inventory
-can handle hundreds of accounts, but runtime admission must also fit that fixed
-cadence; a large inventory is not proof of execution capacity. Health reports remain
-aggregated by the same journey/business-step IDs, not per-account entities.
-
-Live configuration requires each lane's cycle budget to cover:
-
-```text
-ceil(selected lane attempts / maxConcurrentProbes) * (lane timeoutSeconds + 12)
-```
-
-The cycle budget plus 12 seconds of cleanup settlement and 30 seconds of publication
-must also fit the 299-second whole-cycle envelope. Thus each lane must start all
-selected attempts in one wave: two waves already require 504 seconds before
-publication. The checked-in three lanes each run two accounts within default
-concurrency three and the 252-second cycle budget; no concurrency increase is needed.
-
-For **500 accounts**, even concurrency 20 requires
-`ceil(500 / 20) * (240 + 12) = 6,300` seconds per lane, so live configuration is
-rejected. Increasing cycle timeout or TTL cannot satisfy the approved cadence.
-That cohort needs a separately approved capacity design, not additional replicas
-that duplicate work or silently skipped accounts.
-
-The unchanged 15-minute signal window exceeds cadence plus the 299-second whole-cycle
-bound; enabled providers have an independent budget too. Configuration rejects
-insufficient capacity or observation windows before live work.
-Keep existing lane assignments and the separate [live gates](./deployment.md#live-execution-gates).
-
-Concurrency is **per lane**: three simultaneous lanes at 20 can run 60 attempts.
-Lanes never overlap themselves and missed slots are skipped, not replayed.
-These bounds do **not** guarantee live throughput or outage detection.
-Do not merely extend TTL to hide missing progress. Measure Graph throttling, cycle duration, memory and
-freshness against your detection target, and obtain approval before increasing
-traffic. The default 0.25 CPU/0.5 GiB is not a tested production sizing guarantee.
-Additional Container App replicas duplicate work; they do not shard this inventory.
+Setup concurrency is separate from execution scheduling and Graph request
+capacity. A successfully provisioned inventory is not proof every journey can
+finish within its configured cadence/deadline. Review `config.execution`, the
+deployment plan and actual execution/publication freshness before increasing
+targets. Do not mask missing attempts by extending report TTLs.
 
 ## Deploy and verify the actual health flow
 
-Setup does not deploy, restart workers, run journeys or publish health. Preview with
-`npm run deploy -- --plan`, then run `npm run deploy` again: it fills the saved `.env`
-bindings into the config it mounts in a new worker revision, rebuilding the image when
-`deployment.image.mode` is `build`
-([worker rollout](./deployment.md#deploy-with-one-command)).
-Confirm the ready revision uses the expected immutable image and account bindings.
+After bindings/grants are ready, preview and redeploy from `synthetic-tests/`:
 
-On an approved host, verify a real
-[single worker cycle](../synthetic-tests/README.md#commands),
-owned-artifact cleanup, and actual accepted reports. Confirm fresh values on
-`onedrive-planned-user-drive-roundtrip`, `onedrive-planned-app-folder-lifecycle`,
-`onedrive-planned-document-versions` and their existing `step-1` through `step-4`
-entities. Do not rename those deployed IDs or suppress genuine failures.
+```sh
+npm run deploy -- --plan
+npm run deploy
+```
 
-Administrator readback does not prove worker access, healthy journeys, model
-evaluation or notification delivery. Setup does not audit or revoke pre-existing
-broad grants; separately check worker permission assignments and an approved
-out-of-scope denied-access control. Continue the independent
-[reliability acceptance checks](./operations.md#enterprise-reliability-acceptance-gate);
-TTL expiry alone is not a guaranteed Unhealthy alert.
-
-Graph contracts:
-[create folders](https://learn.microsoft.com/en-us/graph/api/driveitem-post-children?view=graph-rest-1.0),
-[grant application access](https://learn.microsoft.com/en-us/graph/api/driveitem-post-permissions?view=graph-rest-1.0),
-[list permissions](https://learn.microsoft.com/en-us/graph/api/driveitem-list-permissions?view=graph-rest-1.0),
-and [update roles](https://learn.microsoft.com/en-us/graph/api/permission-update?view=graph-rest-1.0).
+Verify real file roundtrips, app-folder updates, prior-version bytes,
+owned-artifact cleanup and accepted reports on the OneDrive journey/step entities.
+Administrator grant readback or a completed provisioning job does not prove
+runtime identity access or model/notification health. Audit existing broad
+worker grants and an approved out-of-scope denied-access control, then complete
+the [operational checks](./operations.md#enterprise-reliability-acceptance-gate).

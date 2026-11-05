@@ -1,76 +1,46 @@
-import { EventHubProducerClient } from "@azure/event-hubs";
+import { LogsIngestionClient } from "@azure/monitor-ingestion";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { z } from "zod";
 import { ConfigurationError } from "../configuration/config.js";
-import type { Telemetry } from "../contracts.js";
-import { withAbort } from "../integrations/http.js";
-import { cycleObservations } from "./observations.js";
 import type { ProjectConfig } from "../configuration/project-config.js";
-import type { CyclePublisher } from "./results.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
-import { EXCHANGE_PUBLICATION_TIMEOUT_MS, PUBLICATION_TIMEOUT_MS } from "../execution/budgets.js";
+import type { Telemetry } from "../contracts.js";
+import type { Observation } from "./observations.js";
 
-/** Publishes diagnostic and measured observations together without dropping no-sample outcomes. */
+export type ObservationSender = (observations: readonly Observation[], signal: AbortSignal) => Promise<void>;
+
+/** Sends raw observations directly to the configured DCE/DCR; no broker or ingestion bridge exists. */
 export function createObservationPublisher(
   project: ProjectConfig, service: ServiceConfig, telemetry: Telemetry, env: NodeJS.ProcessEnv,
-): { publish: CyclePublisher; close: () => Promise<void> } {
-  const pipeline = project.logAnalytics;
-  if (!pipeline.enabled) throw new ConfigurationError("Raw observation publication requires logAnalytics.enabled");
-  let client: EventHubProducerClient | undefined;
+): ObservationSender {
+  if (!project.logAnalytics.enabled) throw new ConfigurationError("Observation ingestion requires logAnalytics.enabled");
+  let client: LogsIngestionClient | undefined;
+  const rule = env.LOGS_DCR_IMMUTABLE_ID;
   if (service.mode === "live") {
     const identity = z.string().uuid().safeParse(env.AZURE_CLIENT_ID);
-    if (!identity.success) throw new ConfigurationError("Observation publication requires an explicitly selected managed identity");
-    client = new EventHubProducerClient(
-      `${pipeline.eventHubNamespace}.servicebus.windows.net`,
-      pipeline.eventHubName,
-      new ManagedIdentityCredential({ clientId: identity.data }),
-      { retryOptions: { maxRetries: 2, retryDelayInMs: 250, maxRetryDelayInMs: 2000, timeoutInMs: 5000 } },
-    );
+    const endpoint = z.string().url().safeParse(env.LOGS_INGESTION_ENDPOINT);
+    if (!identity.success || !endpoint.success || !rule?.startsWith("dcr-") ||
+        new URL(endpoint.data).protocol !== "https:" || !new URL(endpoint.data).hostname.endsWith(".ingest.monitor.azure.com")) {
+      throw new ConfigurationError("Direct Logs Ingestion requires an explicit managed identity and deployed DCE/DCR bindings");
+    }
+    client = new LogsIngestionClient(endpoint.data, new ManagedIdentityCredential({ clientId: identity.data }), {
+      retryOptions: { maxRetries: 2, retryDelayInMs: 250, maxRetryDelayInMs: 2000 },
+    });
   }
-  return {
-    async publish(cycle) {
-      const observations = cycleObservations(project, service, cycle).map(observation => ({
-        ...observation, dimensions: {
-          ...observation.dimensions,
-          configSha256: env.MONITORING_CONFIG_SHA256,
-          containerRevision: env.CONTAINER_APP_REVISION,
-        },
-      }));
-      if (observations.some(observation => Buffer.byteLength(JSON.stringify(observation)) > 65536)) {
-        throw new ConfigurationError("Observations must remain below 64 KiB; no payload was truncated or published");
-      }
-      if (!client) {
-        telemetry.emit("observation-preview", { cycleId: cycle.cycleId, observationCount: observations.length });
-        return;
-      }
-      const deadline = AbortSignal.timeout(service.type === "exchange" ? EXCHANGE_PUBLICATION_TIMEOUT_MS : PUBLICATION_TIMEOUT_MS);
-      const signal = cycle.signal ? AbortSignal.any([cycle.signal, deadline]) : deadline;
-      try {
-        let batch = await withAbort(signal, () => client!.createBatch({ abortSignal: signal }));
-        for (const observation of observations) {
-          const event = { body: observation, messageId: observation.eventId, contentType: "application/json" };
-          if (!batch.tryAdd(event)) {
-            if (!batch.count) throw new ConfigurationError("An observation exceeds the Event Hub event-size limit");
-            await withAbort(signal, () => client!.sendBatch(batch, { abortSignal: signal }));
-            batch = await withAbort(signal, () => client!.createBatch({ abortSignal: signal }));
-            if (!batch.tryAdd(event)) throw new ConfigurationError("An observation exceeds the Event Hub event-size limit");
-          }
-        }
-        if (batch.count) await withAbort(signal, () => client!.sendBatch(batch, { abortSignal: signal }));
-        telemetry.emit("observations-published", {
-          cycleId: cycle.cycleId, observationCount: observations.length,
-          destination: pipeline.eventHubName,
-        });
-      } catch (error) {
-        telemetry.emit("observation-publication-failed", {
-          cycleId: cycle.cycleId, observationCount: observations.length,
-          errorType: error instanceof Error ? error.name : "unknown",
-        });
-        throw error;
-      }
-    },
-    async close() {
-      if (client) await withAbort(AbortSignal.timeout(5000), () => client!.close());
-    },
+  return async (observations, signal) => {
+    if (!observations.length) return;
+    if (observations.some(observation => Buffer.byteLength(JSON.stringify(observation)) > 65536)) {
+      throw new ConfigurationError("An observation exceeds 64 KiB; the payload was not truncated");
+    }
+    if (client) {
+      await client.upload(rule!, "Custom-M365Synthetic", observations.map(row => ({ RawData: JSON.stringify(row) })), {
+        abortSignal: signal,
+        maxConcurrency: 1,
+        onError: async failure => { throw failure.cause; },
+      });
+    }
+    telemetry.emit(client ? "observations-published" : "observation-preview", {
+      observationCount: observations.length, destination: "DCR-LogsIngestion",
+    });
   };
 }
