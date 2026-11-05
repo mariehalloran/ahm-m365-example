@@ -5,6 +5,23 @@ scheduled Container App dispatcher and deployment code for Exchange, Teams,
 OneDrive and SharePoint Online. Setup/provisioning uses the PowerShell scripts
 in [`setup/`](./setup/).
 
+## Architecture (simple Exchange example)
+
+```mermaid
+flowchart LR
+    ca["Container App coordinator"] -->|"POST /api/lanes/start"| fx["Azure Function App (Exchange)"]
+    subgraph run["Exchange execution Function"]
+        s1["1. Validate dispatch and lock lane"]
+        s2["2. Run Exchange journey steps<br/>create-draft -> send -> confirm-delivery"]
+        s3["3. Publish outcome directly"]
+        s1 --> s2 --> s3
+    end
+    fx --> run
+```
+
+This is the same pattern for the other services: coordinator dispatch only,
+Function executes one case, Function publishes directly.
+
 ## Commands
 
 Run from this [Node project directory](./).
@@ -18,7 +35,7 @@ Run from this [Node project directory](./).
 | `npm run setup:ids -- -SharePointOnly` | Discover existing SharePoint IDs in a disposable PowerShell job as the selected service identity |
 | `npm run setup:function-auth` | Prepare secretless Function API/dispatcher authentication |
 | `npm run deploy -- --plan` | Local deployment plan preview |
-| `npm run deploy` | Deploy models, foundation, and workers |
+| `npm run deploy` | Deploy models, foundation, coordinator, and execution Functions |
 | `npm run exchange -- --once` | Run one Exchange cycle |
 | `npm run teams -- --once` | Run one Teams cycle |
 | `npm run onedrive -- --once` | Run one OneDrive cycle |
@@ -46,7 +63,7 @@ Live commands require `ENABLE_LIVE_M365=true` and approved resources/managed ide
 When Exchange/Teams beta activity is selected, also set
 `ENABLE_BETA_SERVICE_ACTIVITY=true`.
 The checked-in profile enables one approved SharePoint site/library/folder/list
-target; worker-identity discovery and live acceptance are separate required checks.
+target; execution-identity discovery and live acceptance are separate required checks.
 Before recurrence, verify a complete real cycle, owned-artifact cleanup and
 accepted reporting; successful local checks or process startup are not that proof.
 

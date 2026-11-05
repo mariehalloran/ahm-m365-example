@@ -28,6 +28,23 @@ Azure Functions execute the journeys and publish business-step results. A
 Container App only dispatches scheduled cases, keeping scheduling separate from
 execution and health reporting.
 
+## Architecture (simple Exchange example)
+
+```mermaid
+flowchart LR
+    ca["Container App coordinator"] -->|"POST /api/lanes/start"| fx["Azure Function App (Exchange)"]
+    subgraph fxrun["Exchange execution Function"]
+        a["1. Validate dispatch and lock lane"]
+        b["2. Execute journey steps<br/>create-draft -> send -> confirm-delivery"]
+        c["3. Publish outcome directly"]
+        a --> b --> c
+    end
+    fx --> fxrun
+```
+
+The coordinator only schedules and dispatches. The Exchange Function executes
+the case and publishes the result directly; it is not aggregated in the container.
+
 ## Optional Microsoft 365 service endpoints
 
 Synthetic journeys can run without Microsoft-reported context. When approved,
@@ -100,6 +117,6 @@ and five Teams function names, interval parameters, consent and federation.
 - Operations and monitoring: [docs/operations.md](./docs/operations.md)
 - Architecture diagrams: [docs/architecture.md](./docs/architecture.md)
 - Group configuration: [docs/monitoring-groups.md](./docs/monitoring-groups.md)
-- Worker details: [synthetic-tests/README.md](./synthetic-tests/README.md)
+- Coordinator and execution details: [synthetic-tests/README.md](./synthetic-tests/README.md)
 - Model details: [health-model/README.md](./health-model/README.md)
 - Optional provider endpoints: [docs/provider-monitoring.md](./docs/provider-monitoring.md)

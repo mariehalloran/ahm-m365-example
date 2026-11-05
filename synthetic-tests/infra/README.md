@@ -2,6 +2,20 @@
 
 This folder contains Bicep templates for shared foundation resources, service-scoped execution Function apps, and the coordinator Container App.
 
+## Architecture diagram
+
+```mermaid
+flowchart LR
+    ca["Container App coordinator"] -->|"POST /api/lanes/start"| fx["Azure Function App (Exchange)"]
+    subgraph run["Exchange execution Function"]
+        s1["1. Validate dispatch and lock lane"]
+        s2["2. Execute journey steps<br/>create-draft -> send -> confirm-delivery"]
+        s3["3. Publish outcome directly"]
+        s1 --> s2 --> s3
+    end
+    fx --> run
+```
+
 ## What gets deployed
 
 - One Function app per enabled service type (Exchange, Teams, OneDrive, SharePoint), shared across selected tenants
@@ -18,7 +32,7 @@ service files (`monitoring.<service>.json`), and
 
 - resource group, region, and tags
 - tenant/service enablement and schedules
-- worker identity references and app credential references
+- execution-Function identity references and app credential references
 - Teams callback and bot pair settings when Teams is enabled
 - SharePoint uses an existing approved managed identity, private ingress and the same configuration/reporting roles; Microsoft 365 permissions and site/library/list provisioning remain manual
 

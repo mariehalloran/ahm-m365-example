@@ -1,16 +1,16 @@
 # Shared runtime and deployment utilities
 
-These modules support worker runtime, configuration, reporting, provider collection
+These modules support execution-Function runtime, configuration, reporting, provider collection
 and the deployment command. They belong to the [single Node project](../README.md),
 not a separate package.
 
 ## Module map
 
 - [src/configuration/](./src/configuration/) - root config parsing, normalization, target keys and generated ID bindings
-- [src/execution/](./src/execution/) - cycle scheduler, worker loop, step timing, and status synthesis
+- [src/execution/](./src/execution/) - cycle scheduler, lane execution loop, step timing, and status synthesis
 - [src/reporting/](./src/reporting/) - direct health reports and observation payloads
 - [src/providers/](./src/providers/) - Service Health, Message Center, and approved activity collection
-- [src/deployment/](./src/deployment/) - compose and execute model/foundation/worker rollout plans
+- [src/deployment/](./src/deployment/) - compose and execute model/foundation/coordinator+Function rollout plans
 - [src/integrations/](./src/integrations/) - explicit identity, Graph/HTTP clients, ownership-checked drive-file helpers, Teams clients
 
 ## Runtime model
@@ -35,7 +35,7 @@ not a separate package.
 
 ### Measurement semantics
 
-In both modes, worker cancellations and cleanup-only failures report Unknown
+In both modes, execution cancellations and cleanup-only failures report Unknown
 without a numeric success/failure sample. They retain diagnostics but do not enter
 success-rate or service-latency denominators. Conclusive business-step evidence
 is preserved, and an all-Unknown cohort evaluates Unknown.
@@ -56,7 +56,7 @@ permissions and bounded diagnostics are in [provider monitoring](../../docs/prov
 
 1. Health model artifacts
 2. Shared foundation resources
-3. Per-service worker resources
+3. Per-service execution Function resources (+ coordinator wiring)
 
 The same command supports plan and apply:
 
@@ -75,5 +75,5 @@ npm run build
 ## Related docs
 
 - [Root overview](../../README.md)
-- [Worker entry points](../README.md)
+- [Coordinator and execution entry points](../README.md)
 - [Operations](../../docs/operations.md)

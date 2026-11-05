@@ -38,7 +38,7 @@ and maps the journey/business-step entities to actual API calls.
 [catalog.ts](../synthetic-tests/utils/src/catalog.ts) is canonical; `npm run catalog:generate`
 projects it to [catalog.json](../synthetic-tests/utils/src/catalog.json) for Bicep. SharePoint adds three journeys and
 13 business-step children only when selected. The checked-in selection includes
-its model, root reference and worker in the deployment plan. Disabling the service
+its model, root reference and execution Function in the deployment plan. Disabling the service
 omits them.
 
 ## Signal delivery modes
@@ -49,7 +49,7 @@ omits them.
 - `true`: execution Functions send observations directly through the Logs
   Ingestion API/DCR; model queries evaluate rolling windows from Log Analytics.
 
-Worker cancellations and cleanup-only failures have no numeric sample in either
+Execution cancellations and cleanup-only failures have no numeric sample in either
 mode. Success and latency use conclusive observations; an all-Unknown cohort
 evaluates Unknown. A genuine service failure is not hidden by a later cleanup error.
 `minimumSamples` counts conclusive evidence only. Queries deduplicate before
