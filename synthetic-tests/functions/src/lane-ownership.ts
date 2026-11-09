@@ -120,21 +120,34 @@ class BlobLaneOwnership implements LaneOwnership {
   /** Claims an accepted attempt once; a redelivery after an unacknowledged host failure cannot mutate. */
   async claim(dispatch: LaneDispatch): Promise<"execute" | "completed"> {
     const blob = this.container.getBlockBlobClient(`lanes/${laneInstanceId(dispatch)}.json`);
-    const current = await this.read(blob);
-    if (!current?.record || current.record.runId !== dispatchRunId(dispatch) ||
-        current.record.dispatch.attemptId !== dispatch.attemptId) throw new LaneConflictError("Activity does not own the accepted dispatch");
-    if (current.record.phase === "completed") return "completed";
-    if (!["starting", "accepted"].includes(current.record.phase)) throw new LaneConflictError("Activity delivery is duplicate or its previous execution is ambiguous");
-    const text = JSON.stringify({
-      ...current.record, phase: "running", updatedAt: new Date().toISOString(), lastExecutionStartedAt: new Date().toISOString(),
-    });
-    try {
-      await blob.upload(text, Buffer.byteLength(text), { conditions: { ifMatch: current.etag }, abortSignal: AbortSignal.timeout(10000) });
-    } catch (error) {
-      if (status(error, 409) || status(error, 412)) throw new LaneConflictError("Another delivery already owns the activity");
-      throw error;
+    const runId = dispatchRunId(dispatch);
+    let current = await this.read(blob);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!current?.record || current.record.runId !== runId ||
+          current.record.dispatch.attemptId !== dispatch.attemptId) throw new LaneConflictError("Activity does not own the accepted dispatch");
+      if (current.record.phase === "completed") return "completed";
+      if (!["starting", "accepted"].includes(current.record.phase)) throw new LaneConflictError("Activity delivery is duplicate or its previous execution is ambiguous");
+      const text = JSON.stringify({
+        ...current.record, phase: "running", updatedAt: new Date().toISOString(), lastExecutionStartedAt: new Date().toISOString(),
+      });
+      try {
+        await blob.upload(text, Buffer.byteLength(text), { conditions: { ifMatch: current.etag }, abortSignal: AbortSignal.timeout(10000) });
+        return "execute";
+      } catch (error) {
+        // startNew can wake this activity before the starter finishes recording acceptance.
+        if (status(error, 412) && attempt === 0 && current.record.phase === "starting") {
+          const accepted = await this.read(blob);
+          if (accepted?.record?.runId === runId && accepted.record.dispatch.attemptId === dispatch.attemptId &&
+              accepted.record.phase === "accepted") {
+            current = accepted;
+            continue;
+          }
+        }
+        if (status(error, 409) || status(error, 412)) throw new LaneConflictError("Another delivery already owns the activity");
+        throw error;
+      }
     }
-    return "execute";
+    throw new LaneConflictError("Activity ownership did not settle");
   }
 
   /** Releases a settled execution, but leaves uncertain in-flight operations permanently fenced. */
