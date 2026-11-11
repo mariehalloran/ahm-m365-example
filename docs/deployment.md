@@ -148,6 +148,23 @@ npm run setup:function-auth # first-time Function API/dispatcher preparation
 npm run deploy
 ```
 
+Every execution Function app uses its own on-demand Flex Consumption plan.
+There is no Premium or always-ready baseline. During upgrades, deployment
+first grants the operator Blob Data Contributor on the execution-state container,
+pauses the coordinator, and conditionally retires unclaimed starts. It waits for
+running mutations to settle and refuses ambiguous ownership. A superseded
+Durable delivery cannot claim execution or repeat its business operations.
+
+Selected synthetic journeys run every ten minutes with a four-minute journey
+deadline; provider schedules remain independent. Verification requires every
+selected case to complete and reach its reporting destination.
+
+Azure does not support moving an existing Flex app to another plan. To replace
+incorrectly shared hosting, choose a new `deployment.functions.appName`, stop the
+old apps after their executing mutations settle, and deploy replacements from
+the same root configuration. Keep old resources stopped until recovery is
+verified; do not delete journals, queues or unrelated resources.
+
 The command reads the repository-root config and the `.env` beside it (`--config <file>`
 reads another file); `--plan` names the file it read. It needs the Azure CLI (it builds
 Bicep with `az bicep` and the image with `az acr build`) and Git (it records the

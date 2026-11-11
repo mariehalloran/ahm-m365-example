@@ -6,6 +6,7 @@
   },
   "extensions": {
     "durableTask": {
+      "hubName": "%DURABLE_TASK_HUB%",
       "tracing": { "traceInputsAndOutputs": false },
       "maxConcurrentActivityFunctions": 10,
       "maxConcurrentOrchestratorFunctions": 10,
@@ -14,7 +15,12 @@
     "http": { "routePrefix": "api" }
   },
   "logging": {
-    "logLevel": { "default": "Information", "Host.Results": "Information" },
+    "logLevel": {
+      "default": "Information",
+      "Host.Results": "Information",
+      "Azure.Core": "Warning",
+      "Azure.Identity": "Warning"
+    },
     "applicationInsights": { "samplingSettings": { "isEnabled": false } }
   }
 }

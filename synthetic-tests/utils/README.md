@@ -22,8 +22,8 @@ not a separate package.
   - journey status and executed business-step evidence
   - optional provider context when enabled
 - Cancellation and deadlines are handled through `AbortSignal` and lane-specific timeout settings.
-- Every selected synthetic lane runs every 300 seconds with a 240-second whole-journey deadline. Exchange aligns to wall-clock five-minute boundaries; other synthetic lanes start immediately. Provider lanes keep their independent cadence.
-- Each whole cycle, including initialization, cleanup and reporting, ends within 299 seconds. Cleanup uses ten seconds, with 12 seconds for settlement; publication allows 12 seconds for Exchange or 30 for Teams/OneDrive/SharePoint.
+- Every selected synthetic lane runs every 600 seconds with a 240-second whole-journey deadline, aligned to wall-clock ten-minute boundaries. Provider lanes keep their independent cadence.
+- Each whole cycle, including initialization, cleanup and reporting, ends before its next slot (599 seconds with the current one-second margin). Execution budgets remain 275 seconds for Exchange and 252 for other services. Cleanup uses ten seconds, with 12 seconds for settlement; publication allows 12 seconds for Exchange or 30 for Teams/OneDrive/SharePoint.
 - Non-Exchange `cycleTimeoutSeconds` defaults to 252; capacity validation includes every selected pair/target attempt. The checked-in Teams lane needs concurrency six, while each OneDrive lane runs two attempts within its default concurrency three.
 - OneDrive and SharePoint reuse the same bounded file/download/version and owned-folder cleanup helpers.
 - SharePoint location keys derive from the site URL and library/folder/list names; they are not account IDs.
@@ -57,6 +57,16 @@ permissions and bounded diagnostics are in [provider monitoring](../../docs/prov
 1. Health model artifacts
 2. Shared foundation resources
 3. Per-service execution Function resources (+ coordinator wiring)
+
+Each service Function app has its own on-demand Flex Consumption plan; there is
+no Premium or always-ready baseline. The independent watchdog has its own host
+and identity. Durable task-hub names are resolved through the package's
+`DURABLE_TASK_HUB` setting so trigger scaling and runtime use the same queues.
+
+When dispatch is paused for an upgrade, conditional journal writes retire only
+unclaimed starts. Running or ambiguous mutations are never released by a timer.
+At runtime, a later slot can replace an unclaimed older slot; delayed deliveries
+of the replaced run cannot claim execution.
 
 The same command supports plan and apply:
 

@@ -7,6 +7,7 @@ param applicationInsightsName string = 'appi-${projectConfig.healthModel.name}'
 param deploymentPrincipalId string
 @allowed(['User', 'ServicePrincipal'])
 param deploymentPrincipalType string = 'User'
+param executionStorageExists bool = false
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: projectConfig.deployment.configurationStorageAccount
@@ -36,6 +37,26 @@ resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@20
 resource uploader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(container.id, deploymentPrincipalId, 'configuration-uploader')
   scope: container
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    principalId: deploymentPrincipalId
+    principalType: deploymentPrincipalType
+  }
+}
+resource executionStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: projectConfig.deployment.functions.storageAccount
+}
+resource executionBlobs 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+  parent: executionStorage
+  name: 'default'
+}
+resource executionState 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: executionBlobs
+  name: 'execution-state'
+}
+resource deploymentStateWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (executionStorageExists) {
+  name: guid(executionState.id, deploymentPrincipalId, 'execution-state-deployment')
+  scope: executionState
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
     principalId: deploymentPrincipalId

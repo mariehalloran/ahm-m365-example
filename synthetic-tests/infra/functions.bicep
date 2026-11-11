@@ -125,11 +125,11 @@ resource callStateWriters 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     properties: { roleDefinitionId: blobContributor, principalId: executionIdentities[index].properties.principalId, principalType: 'ServicePrincipal' }
   }
 ]
-resource deploymentStateReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(state.id, deploymentPrincipalId, 'execution-verification')
+resource deploymentStateWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(state.id, deploymentPrincipalId, 'execution-state-deployment')
   scope: state
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+    roleDefinitionId: blobContributor
     principalId: deploymentPrincipalId
     principalType: deploymentPrincipalType
   }
@@ -148,16 +148,18 @@ resource diagnosticWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   scope: insights!
   properties: { roleDefinitionId: metricsPublisher, principalId: hostPrincipalId, principalType: 'ServicePrincipal' }
 }
-resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
-  name: '${take(settings.appName, 35)}-plan'
-  location: location
-  tags: tags
-  kind: 'functionapp'
-  sku: { name: 'FC1', tier: 'FlexConsumption' }
-  properties: { reserved: true }
-}
-resource serviceFunctions 'Microsoft.Web/sites@2024-04-01' = [
+resource plans 'Microsoft.Web/serverfarms@2024-04-01' = [
   for service in selectedServices: {
+    name: '${take(settings.appName, 28)}-${serviceSuffix[service]}-plan'
+    location: location
+    tags: tags
+    kind: 'functionapp'
+    sku: { name: 'FC1', tier: 'FlexConsumption' }
+    properties: { reserved: true }
+  }
+]
+resource serviceFunctions 'Microsoft.Web/sites@2024-04-01' = [
+  for (service, index) in selectedServices: {
     name: serviceAppNames[service]
     location: location
     tags: tags
@@ -167,7 +169,7 @@ resource serviceFunctions 'Microsoft.Web/sites@2024-04-01' = [
       userAssignedIdentities: toObject(union([hostIdentityId], serviceAssignedIdentityIds[service]), id => id, id => {})
     }
     properties: {
-      serverFarmId: plan.id
+      serverFarmId: plans[index].id
       httpsOnly: true
       publicNetworkAccess: 'Enabled'
       functionAppConfig: {
@@ -201,7 +203,7 @@ resource serviceFunctions 'Microsoft.Web/sites@2024-04-01' = [
           { name: 'ENABLE_LIVE_M365', value: projectConfig.deployment.enableLiveProbes ? 'true' : 'false' }
           { name: 'ENABLE_BETA_SERVICE_ACTIVITY', value: projectConfig.deployment.enableBetaServiceActivity ? 'true' : 'false' }
           { name: 'AzureFunctionsJobHost__functionTimeout', value: hostTimeout }
-          { name: 'AzureFunctionsJobHost__extensions__durableTask__hubName', value: serviceHubNames[service] }
+          { name: 'DURABLE_TASK_HUB', value: serviceHubNames[service] }
           { name: 'FUNCTIONS_REQUEST_BODY_SIZE_LIMIT', value: '65536' }
           { name: 'WATCHDOG_CRON', value: '0 */${settings.watchdogIntervalSeconds / 60} * * * *' }
           { name: 'AzureWebJobs.monitoringWatchdog.Disabled', value: 'true' }

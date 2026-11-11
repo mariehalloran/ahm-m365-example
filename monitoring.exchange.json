@@ -8,7 +8,7 @@
         "enabled": true,
         "execution": {
           "mode": "live",
-          "intervalSeconds": 300,
+          "intervalSeconds": 600,
           "timeoutSeconds": 240,
           "cohort": "exchange-global",
           "maxConcurrentRequests": 32,

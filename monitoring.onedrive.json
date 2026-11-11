@@ -8,7 +8,7 @@
         "enabled": true,
         "execution": {
           "mode": "live",
-          "intervalSeconds": 300,
+          "intervalSeconds": 600,
           "timeoutSeconds": 240,
           "cohort": "onedrive-global",
           "serviceHealth": true,
@@ -17,7 +17,7 @@
           "executionLanes": [
             {
               "name": "user-drive",
-              "intervalSeconds": 300,
+              "intervalSeconds": 600,
               "timeoutSeconds": 240,
               "journeys": [
                 "user-drive-roundtrip"
@@ -25,7 +25,7 @@
             },
             {
               "name": "app-folder",
-              "intervalSeconds": 300,
+              "intervalSeconds": 600,
               "timeoutSeconds": 240,
               "journeys": [
                 "app-folder-lifecycle"
@@ -33,7 +33,7 @@
             },
             {
               "name": "versions",
-              "intervalSeconds": 300,
+              "intervalSeconds": 600,
               "timeoutSeconds": 240,
               "journeys": [
                 "document-versions"

@@ -7,7 +7,7 @@
     "alertActionGroupIds": [
       "/subscriptions/17A37FFF-B1EF-4AF7-9BD2-70898B286AAF/resourceGroups/rg-m365-consto/providers/microsoft.insights/actionGroups/ag-m365-experience-consto"
     ],
-    "signalWindowMinutes": 15,
+    "signalWindowMinutes": 30,
     "minimumSamples": 1,
     "successDegradedPercent": 99,
     "successUnhealthyPercent": 95,
@@ -35,7 +35,7 @@
       "tag": "monitoring"
     },
     "functions": {
-      "appName": "func-m365-experience-consto-execute",
+      "appName": "func-m365-consto-execution",
       "storageAccount": "stm365constosignalsfunc",
       "hostIdentityName": "id-m365-experience-consto-functions",
       "watchdogIntervalSeconds": 60

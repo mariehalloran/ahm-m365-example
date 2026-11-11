@@ -19,10 +19,16 @@ flowchart LR
 ## What gets deployed
 
 - One Function app per enabled service type (Exchange, Teams, OneDrive, SharePoint), shared across selected tenants
+- One on-demand Flex Consumption plan per Function app, with no always-ready instances
 - One watchdog Function app for independent execution/publication freshness monitoring
 - One coordinator Container App that triggers per-case starts only (no aggregation path)
 - Shared monitoring and diagnostics resources for Function hosting and direct reporting
 - Explicit managed-identity and private configuration wiring consumed by runtime
+
+The coordinator stays scheduled continuously; execution hosts can scale to zero
+between work. Verify completed lane journals and fresh observations, not just
+host Running status or HTTP 202 receipts. The watchdog checks every minute;
+synthetic silence is flagged after 23 minutes with the current ten-minute cadence.
 
 ## Inputs
 

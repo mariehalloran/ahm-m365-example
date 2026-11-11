@@ -197,6 +197,7 @@ module operationalAlerts './operational-alerts.bicep' = {
   params: {
     projectConfig: projectConfig
     executionFunctionId: functions.outputs.primaryAppId
+    executionFunctionIds: map(modelServices, service => functions.outputs.serviceAppIds[service])
     watchdogFunctionId: watchdog.outputs.appId
   }
 }

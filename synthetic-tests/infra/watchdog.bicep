@@ -64,6 +64,18 @@ resource metricsWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalType: 'ServicePrincipal'
   }
 }
+resource insights 'Microsoft.Insights/components@2020-02-02' existing = if (projectConfig.logAnalytics.enabled) {
+  name: projectConfig.deployment.?applicationInsightsName ?? 'appi-${projectConfig.healthModel.name}'
+}
+resource diagnosticWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (projectConfig.logAnalytics.enabled) {
+  name: guid(insights!.id, identity.id, 'watchdog-diagnostics')
+  scope: insights!
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: '${take(appName, 28)}-watch-plan'
   location: location
@@ -97,7 +109,7 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
       minTlsVersion: '1.2'
       scmMinTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      appSettings: [
+      appSettings: concat([
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
         { name: 'AzureWebJobsStorage__clientId', value: identity.properties.clientId }
@@ -108,6 +120,7 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'FUNCTION_APP_NAME', value: appName }
         { name: 'EXECUTION_METRICS_APP_NAME', value: executionFunctionName }
         { name: 'MONITORING_ROLE', value: 'watchdog' }
+        { name: 'DURABLE_TASK_HUB', value: 'M365${take(replace('${projectConfig.healthModel.name}-watchdog', '-', ''), 36)}' }
         { name: 'WATCHDOG_CRON', value: '0 */${settings.watchdogIntervalSeconds / 60} * * * *' }
         { name: 'AzureFunctionsJobHost__functionTimeout', value: '00:${padLeft(string(settings.watchdogIntervalSeconds / 60), 2, '0')}:00' }
         { name: 'AzureWebJobs.startLane.Disabled', value: 'true' }
@@ -115,7 +128,10 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'AzureWebJobs.runLane.Disabled', value: 'true' }
         { name: 'AzureWebJobs.teamsCallingCallback.Disabled', value: 'true' }
         { name: 'AzureWebJobs.about.Disabled', value: 'true' }
-      ]
+      ], projectConfig.logAnalytics.enabled ? [
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights!.properties.ConnectionString }
+        { name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', value: 'Authorization=AAD;ClientId=${identity.properties.clientId}' }
+      ] : [])
     }
   }
   dependsOn: [hostRoles, configReader, metricsWriter, packages]

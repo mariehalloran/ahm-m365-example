@@ -105,10 +105,10 @@ and five Teams function names, interval parameters, consent and federation.
 - `logAnalytics.enabled` selects direct Function health reports (`false`) or
   direct Logs Ingestion API/DCR observations evaluated through Log Analytics
   (`true`); neither path needs Event Hubs or an intermediary ingestion Function.
-- Current service settings select 300-second journeys with a 240-second
+- Current service settings select 600-second journeys with a 240-second
   whole-journey deadline; these are configurable, not hardcoded limits. Root
   latency thresholds are 15/60 seconds. Provider schedules are independent
-  (currently 60 seconds).
+  (currently 60 seconds). The model uses a 30-minute evaluation window.
 
 ## References
 

@@ -11,6 +11,7 @@ import type { DeploymentCommand, DeploymentCommandRunner } from "./deploy.js";
 import { detectLegacyResources } from "./legacy-resources.js";
 import { serviceProbes } from "../configuration/service-config.js";
 import { probeServices } from "../contracts.js";
+import { laneFreshnessSeconds } from "../../../functions/src/dispatch.js";
 
 export interface DeploymentRun {
   prepared: PreparedDeployment;
@@ -229,6 +230,7 @@ export async function stackParameters(run: DeploymentRun, stack: string, deployC
     applicationInsightsName: settings.applicationInsightsName ?? `appi-${document.healthModel.name}`,
   } : stack === "configuration" ? {
     ...shared, deploymentPrincipalId: run.deploymentPrincipalId, deploymentPrincipalType: run.deploymentPrincipalType,
+    executionStorageExists: run.previousCoordinator ?? false,
     workspaceName: settings.workspaceName ?? `law-${document.healthModel.name}`,
     applicationInsightsName: settings.applicationInsightsName ?? `appi-${document.healthModel.name}`,
   } : stack === "freshness" ? {
@@ -239,7 +241,9 @@ export async function stackParameters(run: DeploymentRun, stack: string, deployC
       return [...new Set(probes.map(probe => probe.type))].map(type => ({
         tenant: owner.tenant, service: owner.type, journey: probeServices[type].journey,
         targets: probes.filter(probe => probe.type === type).length,
-        maxAgeSeconds: document.healthModel.signalWindowMinutes * 60,
+        maxAgeSeconds: Math.max(...run.prepared.lanes.filter(lane =>
+          lane.tenant === owner.tenant && lane.service === owner.type && lane.journey === probeServices[type].journey)
+          .map(lane => laneFreshnessSeconds(document, lane))),
       }));
     }),
   } : {

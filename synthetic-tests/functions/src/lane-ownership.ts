@@ -1,6 +1,7 @@
 import { BlobServiceClient, type BlockBlobClient, type ContainerClient } from "@azure/storage-blob";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { z } from "zod";
+import { consoleTelemetry } from "../../utils/src/contracts.js";
 import { dispatchRunId, laneInstanceId, type LaneDispatch } from "./dispatch.js";
 
 export const laneRecordSchema = z.object({
@@ -33,7 +34,28 @@ function status(error: unknown, expected: number): boolean {
   return typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === expected;
 }
 
-/** Refuses overlap or replay of an uncertain mutation, including after a Function process disappears. */
+/** Reads content and its ETag in one GET; a changing journal cannot invalidate a separate size lookup. */
+export async function readLaneJournal(blob: BlockBlobClient, signal = AbortSignal.timeout(10000)) {
+  try {
+    const response = await blob.download(0, undefined, { abortSignal: signal });
+    if (!response.readableStreamBody || !response.etag) throw new Error("Lane journal response is missing content or its concurrency token");
+    if ((response.contentLength ?? 0) > 16384) throw new Error("Lane journal exceeds its storage limit");
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of response.readableStreamBody) {
+      size += Buffer.byteLength(chunk);
+      if (size > 16384) throw new Error("Lane journal exceeds its storage limit");
+      chunks.push(Buffer.from(chunk));
+    }
+    const text = Buffer.concat(chunks).toString("utf8");
+    return { record: text === "{}" ? undefined : laneRecordSchema.parse(JSON.parse(text)), etag: response.etag };
+  } catch (error) {
+    if (status(error, 404)) return undefined;
+    throw error;
+  }
+}
+
+/** Fences active mutations; an unclaimed older slot can be replaced atomically without replay. */
 function validateLaneStart(previous: LaneRecord | undefined, dispatch: LaneDispatch): "new" | "duplicate" {
   if (!previous) return "new";
   if (dispatch.slot < previous.dispatch.slot) throw new LaneConflictError("An older schedule slot cannot be replayed");
@@ -42,7 +64,7 @@ function validateLaneStart(previous: LaneRecord | undefined, dispatch: LaneDispa
     if (previous.phase === "starting") throw new LaneConflictError("Durable acceptance is uncertain; reconcile the lane before retrying");
     return "duplicate";
   }
-  if (["starting", "accepted", "running", "ambiguous"].includes(previous.phase)) {
+  if (["running", "ambiguous"].includes(previous.phase)) {
     throw new LaneConflictError("The previous lane has unconfirmed ownership; operator reconciliation is required before another slot");
   }
   return "new";
@@ -51,28 +73,6 @@ function validateLaneStart(previous: LaneRecord | undefined, dispatch: LaneDispa
 /** Uses a leased lane journal plus conditional writes to fence Durable's at-least-once activity delivery. */
 class BlobLaneOwnership implements LaneOwnership {
   constructor(private readonly container: ContainerClient) {}
-
-  /** Reads a bounded journal with its concurrency token. */
-  private async read(blob: BlockBlobClient, leaseId?: string) {
-    try {
-      const response = await blob.download(0, undefined, {
-        abortSignal: AbortSignal.timeout(10000), ...(leaseId ? { conditions: { leaseId } } : {}),
-      });
-      if ((response.contentLength ?? 0) > 16384) throw new Error("Lane journal exceeds its storage limit");
-      const chunks: Buffer[] = [];
-      let size = 0;
-      for await (const chunk of response.readableStreamBody!) {
-        size += Buffer.byteLength(chunk);
-        if (size > 16384) throw new Error("Lane journal exceeds its storage limit");
-        chunks.push(Buffer.from(chunk));
-      }
-      const text = Buffer.concat(chunks).toString("utf8");
-      return { record: text === "{}" ? undefined : laneRecordSchema.parse(JSON.parse(text)), etag: response.etag! };
-    } catch (error) {
-      if (status(error, 404)) return undefined;
-      throw error;
-    }
-  }
 
   /** Serializes start acceptance without depending on any particular Function host instance. */
   async accept(dispatch: LaneDispatch, start: () => Promise<void>) {
@@ -87,7 +87,7 @@ class BlobLaneOwnership implements LaneOwnership {
       throw error;
     }
     try {
-      const current = await this.read(blob);
+      const current = await readLaneJournal(blob);
       const decision = validateLaneStart(current?.record, dispatch);
       if (decision === "duplicate") return { runId: current!.record!.runId, duplicate: true };
       const record: LaneRecord = {
@@ -99,9 +99,20 @@ class BlobLaneOwnership implements LaneOwnership {
       await blob.upload(text, Buffer.byteLength(text), {
         conditions: current ? { ifMatch: current.etag } : { ifNoneMatch: "*" }, abortSignal: AbortSignal.timeout(10000),
       });
-      // An ambiguous start failure deliberately keeps "accepted": never blindly repeat a mailbox mutation.
+      if (current?.record && ["starting", "accepted"].includes(current.record.phase)) {
+        consoleTelemetry.emit("lane-unclaimed-start-recovered", {
+          tenant: dispatch.tenant, service: dispatch.service, lane: dispatch.lane,
+          previousRunId: current.record.runId, previousSlot: current.record.dispatch.slot,
+          previousPhase: current.record.phase, slot: dispatch.slot, runId: record.runId,
+        });
+      }
+      // The journal CAS fences a delayed older activity before any new attempt can mutate.
       await start();
-      const accepted = await this.read(blob);
+      const accepted = await readLaneJournal(blob);
+      if (!accepted?.record || accepted.record.runId !== record.runId ||
+          accepted.record.dispatch.attemptId !== dispatch.attemptId) {
+        throw new LaneConflictError("Execution ownership changed while Durable accepted the start");
+      }
       if (accepted?.record?.phase === "starting") {
         const acceptedText = JSON.stringify({ ...accepted.record, phase: "accepted", updatedAt: new Date().toISOString() });
         try {
@@ -109,7 +120,7 @@ class BlobLaneOwnership implements LaneOwnership {
             conditions: { ifMatch: accepted.etag }, abortSignal: AbortSignal.timeout(10000),
           });
         } catch (error) {
-          const claimed = status(error, 412) ? await this.read(blob) : undefined;
+          const claimed = status(error, 412) ? await readLaneJournal(blob) : undefined;
           if (!claimed?.record || claimed.record.runId !== record.runId || claimed.record.phase === "starting") throw error;
         }
       }
@@ -121,7 +132,7 @@ class BlobLaneOwnership implements LaneOwnership {
   async claim(dispatch: LaneDispatch): Promise<"execute" | "completed"> {
     const blob = this.container.getBlockBlobClient(`lanes/${laneInstanceId(dispatch)}.json`);
     const runId = dispatchRunId(dispatch);
-    let current = await this.read(blob);
+    let current = await readLaneJournal(blob);
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!current?.record || current.record.runId !== runId ||
           current.record.dispatch.attemptId !== dispatch.attemptId) throw new LaneConflictError("Activity does not own the accepted dispatch");
@@ -136,7 +147,7 @@ class BlobLaneOwnership implements LaneOwnership {
       } catch (error) {
         // startNew can wake this activity before the starter finishes recording acceptance.
         if (status(error, 412) && attempt === 0 && current.record.phase === "starting") {
-          const accepted = await this.read(blob);
+          const accepted = await readLaneJournal(blob);
           if (accepted?.record?.runId === runId && accepted.record.dispatch.attemptId === dispatch.attemptId &&
               accepted.record.phase === "accepted") {
             current = accepted;
@@ -153,7 +164,7 @@ class BlobLaneOwnership implements LaneOwnership {
   /** Releases a settled execution, but leaves uncertain in-flight operations permanently fenced. */
   async finish(dispatch: LaneDispatch, phase: "completed" | "failed" | "ambiguous"): Promise<void> {
     const blob = this.container.getBlockBlobClient(`lanes/${laneInstanceId(dispatch)}.json`);
-    const current = await this.read(blob);
+    const current = await readLaneJournal(blob);
     if (!current?.record || current.record.runId !== dispatchRunId(dispatch) || current.record.phase !== "running") {
       throw new LaneConflictError("Execution ownership changed before completion");
     }

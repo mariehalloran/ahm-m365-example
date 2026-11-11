@@ -57,7 +57,10 @@ export async function startLane(
     context.log("lane-dispatch-accepted", receipt);
     return { status: 202, headers, jsonBody: receipt };
   } catch (error) {
-    context.error("lane-dispatch-rejected", { errorType: error instanceof Error ? error.name : "unknown" });
+    context.error("lane-dispatch-rejected", {
+      errorType: error instanceof Error ? error.name : "unknown",
+      ...(error instanceof LaneConflictError || error instanceof ConfigurationError ? { reason: error.message } : {}),
+    });
     return {
       status: error instanceof LaneConflictError || error instanceof ConfigurationError ? 409 : error instanceof ZodError ? 400 : 500,
       headers, jsonBody: { error: "Lane dispatch was not accepted; inspect Function diagnostics and persistent ownership" },

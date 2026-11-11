@@ -8,7 +8,7 @@
         "enabled": true,
         "execution": {
           "mode": "live",
-          "intervalSeconds": 300,
+          "intervalSeconds": 600,
           "timeoutSeconds": 240,
           "maxConcurrentProbes": 6,
           "cohort": "teams-global",
@@ -30,7 +30,7 @@
           "executionLanes": [
             {
               "name": "teams",
-              "intervalSeconds": 300,
+              "intervalSeconds": 600,
               "timeoutSeconds": 240,
               "journeys": [
                 "channel-conversation",

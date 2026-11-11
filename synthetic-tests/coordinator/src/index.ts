@@ -66,6 +66,7 @@ async function runCoordinator(options: CoordinatorOptions): Promise<void> {
     const url = serviceStartUrls.get(selected.service);
     if (!url) throw new ConfigurationError(`Missing function start URL for service '${selected.service}'`);
     const signal = AbortSignal.any([options.signal, AbortSignal.timeout(settings.coordinator.startTimeoutSeconds * 1000)]);
+    let httpStatus: number | undefined;
     try {
       const token = await credential.getToken(`${env.FUNCTION_API_CLIENT_ID}/.default`, { abortSignal: signal });
       if (!token) throw new Error("The selected dispatcher identity did not receive an API token");
@@ -74,6 +75,7 @@ async function runCoordinator(options: CoordinatorOptions): Promise<void> {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.token}` },
         body: JSON.stringify(dispatch),
       });
+      httpStatus = response.status;
       if (response.status !== 202) {
         await response.body?.cancel();
         throw new Error(`Function starter rejected dispatch (HTTP ${response.status})`);
@@ -87,6 +89,7 @@ async function runCoordinator(options: CoordinatorOptions): Promise<void> {
       telemetry.emit("coordinator-dispatch-failed", {
         lane: selected.name, service: selected.service, slot: dispatch.slot, attemptId: dispatch.attemptId,
         errorType: error instanceof Error ? error.name : "unknown",
+        ...(httpStatus === undefined ? {} : { httpStatus }),
       });
       throw error;
     }

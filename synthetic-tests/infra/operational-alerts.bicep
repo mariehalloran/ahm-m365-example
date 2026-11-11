@@ -2,6 +2,7 @@ targetScope = 'resourceGroup'
 
 param projectConfig object
 param executionFunctionId string
+param executionFunctionIds array
 param watchdogFunctionId string
 
 var actionGroups = projectConfig.healthModel.alertActionGroupIds
@@ -74,7 +75,7 @@ resource stoppedMonitoring 'Microsoft.Insights/activityLogAlerts@2020-10-01' = i
       allOf: [
         { field: 'category', equals: 'Administrative' }
         { anyOf: [{ field: 'operationName', equals: 'Microsoft.Web/sites/stop/action' }, { field: 'operationName', equals: 'Microsoft.Web/sites/delete' }] }
-        { anyOf: [{ field: 'resourceId', equals: executionFunctionId }, { field: 'resourceId', equals: watchdogFunctionId }] }
+        { anyOf: map(concat(executionFunctionIds, [watchdogFunctionId]), id => { field: 'resourceId', equals: id }) }
       ]
     }
     actions: { actionGroups: map(actionGroups, id => { actionGroupId: id }) }

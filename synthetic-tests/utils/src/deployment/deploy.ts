@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -70,6 +70,7 @@ export function deploymentPlan(prepared: PreparedDeployment) {
     coordinator: { count: 1, purpose: "cron-dispatch-only", receivesResults: false, pollsExecutions: false, authentication: "selected-managed-identity" },
     functions: {
       runtime: "Node.js 22 / programming model v4", plan: "Flex Consumption FC1",
+      planCount: serviceCount + 1, alwaysReadyInstances: 0,
       start: "Entra-authenticated durable HTTP starter; 202 after Storage acceptance",
       state: "identity-based Azure Storage; persistent lane ownership and callback state",
       executionOwners: prepared.owners.length, laneCount: prepared.lanes.length,
@@ -78,6 +79,7 @@ export function deploymentPlan(prepared: PreparedDeployment) {
     },
     reporting: {
       logAnalyticsEnabled: prepared.document.logAnalytics.enabled,
+      signalWindowMinutes: prepared.document.healthModel.signalWindowMinutes,
       transport: prepared.document.logAnalytics.enabled
         ? "Function -> LogsIngestionClient -> DCE/DCR -> M365Synthetic_CL -> native KQL signals"
         : "Function -> aggregated Azure Monitor Health Models ingestHealthReport",
@@ -147,8 +149,8 @@ export async function deployMonitoring(options: DeploymentOptions = {}) {
     await assertUnchanged(run);
     run.mutated = true;
     await saveProvenance(run, "deploying");
-    await pauseAndDrainCoordinator(run);
     await deployStack(run, "configuration", "create");
+    await pauseAndDrainCoordinator(run);
     await deployStack(run, "models", "create");
     await deployStack(run, "execution", "create");
     await resolveFunctionEndpoint(run);
@@ -193,6 +195,8 @@ export async function deployMonitoring(options: DeploymentOptions = {}) {
       ...(error instanceof ConfigurationError ? { message: error.message } : {}),
     });
     throw error;
+  } finally {
+    await rm(run.tmpDirectory, { recursive: true, force: true });
   }
 }
 

@@ -12,7 +12,7 @@ import { nodeProjectDirectory } from "../paths.js";
 import { az, azJson, execute, runFile, runtimeConfiguration, type DeploymentRun } from "./deploy-phases.js";
 import { makePackageReadable, prepareFunctionPackage } from "./function-package.js";
 import { laneInstanceId } from "../../../functions/src/dispatch.js";
-import { laneRecordSchema } from "../../../functions/src/lane-ownership.js";
+import { readLaneJournal } from "../../../functions/src/lane-ownership.js";
 
 const serviceOrder = ["exchange", "teams", "onedrive", "sharepoint"] as const;
 const serviceSuffix = { exchange: "ex", teams: "tm", onedrive: "od", sharepoint: "sp" } as const;
@@ -182,7 +182,7 @@ function executionContainer(run: DeploymentRun) {
     new AzureCliCredential({ tenantId: run.prepared.settings.azureTenantId })).getContainerClient("execution-state");
 }
 
-/** Pauses an existing dispatcher before changing the Function snapshot, then waits for safe lane settlement. */
+/** Fences unclaimed starts after pausing dispatch, then waits for executing mutations to settle. */
 export async function pauseAndDrainCoordinator(run: DeploymentRun): Promise<void> {
   if (!run.previousCoordinator) return;
   await az(run, "pause-coordinator-for-upgrade", [
@@ -193,13 +193,38 @@ export async function pauseAndDrainCoordinator(run: DeploymentRun): Promise<void
   const deadline = run.now() + Math.max(...run.prepared.lanes.map(lane => lane.intervalSeconds)) * 1000
     + run.prepared.settings.rolloutTimeoutSeconds * 1000;
   const container = executionContainer(run);
+  const signal = AbortSignal.any([run.signal, AbortSignal.timeout(Math.max(1, deadline - run.now()))]);
   while (run.now() < deadline) {
     let active = 0;
-    for await (const item of container.listBlobsFlat({ prefix: "lanes/", abortSignal: run.signal })) {
-      const raw = await container.getBlockBlobClient(item.name).downloadToBuffer(0, undefined, { abortSignal: run.signal });
-      const record = laneRecordSchema.parse(JSON.parse(raw.toString("utf8")));
-      if (record.phase === "ambiguous") throw new ConfigurationError("An ambiguous lane must be reconciled before upgrading execution");
-      if (["starting", "accepted", "running"].includes(record.phase)) active++;
+    /** Conditional writes cannot retire an attempt that an activity has already claimed. */
+    async function settleLane(name: string): Promise<void> {
+      try {
+        const blob = container.getBlockBlobClient(name);
+        const current = await readLaneJournal(blob, signal);
+        if (!current?.record) return;
+        const record = current.record;
+        if (record.phase === "ambiguous") throw new ConfigurationError("An ambiguous lane must be reconciled before upgrading execution");
+        if (record.phase === "running") { active++; return; }
+        if (!["starting", "accepted"].includes(record.phase)) return;
+        const text = JSON.stringify({ ...record, phase: "failed", updatedAt: new Date(run.now()).toISOString() });
+        await blob.upload(text, Buffer.byteLength(text), {
+          conditions: { ifMatch: current.etag }, abortSignal: signal,
+        });
+        run.emit({
+          event: "lane-unclaimed-start-retired", service: record.dispatch.service, lane: record.dispatch.lane,
+          runId: record.runId, slot: record.dispatch.slot, previousPhase: record.phase,
+        });
+      } catch (error) {
+        const status = typeof error === "object" && error !== null && "statusCode" in error ? error.statusCode : undefined;
+        if (status !== 403 && status !== 412) throw error;
+        active++;
+        run.emit({ event: status === 403 ? "waiting-for-execution-state-rbac" : "waiting-for-lane-ownership-change", lane: name });
+      }
+    }
+    for await (const page of container.listBlobsFlat({ prefix: "lanes/", abortSignal: signal }).byPage({ maxPageSize: 100 })) {
+      for (let offset = 0; offset < page.segment.blobItems.length; offset += 8) {
+        await Promise.all(page.segment.blobItems.slice(offset, offset + 8).map(item => settleLane(item.name)));
+      }
     }
     if (!active) return;
     run.emit({ event: "waiting-for-active-lanes", activeLanes: active });
@@ -229,13 +254,9 @@ export async function verifyLaneExecution(run: DeploymentRun, since: number): Pr
     let completed = 0;
     for (const lane of expected) {
       const blob = container.getBlockBlobClient(`lanes/${laneInstanceId({ tenant: lane.tenant, service: lane.service, lane: lane.lane })}.json`);
-      let raw: Buffer;
-      try { raw = await blob.downloadToBuffer(0, undefined, { abortSignal: run.signal }); }
-      catch (error) {
-        if (typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === 404) continue;
-        throw error;
-      }
-      const record = laneRecordSchema.parse(JSON.parse(raw.toString("utf8")));
+      const current = await readLaneJournal(blob, run.signal);
+      if (!current?.record) continue;
+      const record = current.record;
       if (record.dispatch.configSha256 !== snapshot.sha256 || Date.parse(record.updatedAt) < since) continue;
       if (record.phase === "failed" || record.phase === "ambiguous") throw new ConfigurationError("A Function lane failed execution/publication; inspect its persistent run correlation and Function console diagnostics");
       if (record.phase === "completed") completed++;

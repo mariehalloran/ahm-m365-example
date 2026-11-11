@@ -28,6 +28,7 @@ async function main(): Promise<void> {
       MONITORING_CONFIG_SHA256: hash(`${JSON.stringify(document, null, 2)}\n`),
       FUNCTION_APP_NAME: functionAppName,
       MONITORING_SERVICE: localService,
+      DURABLE_TASK_HUB: "M365LocalExchange",
       FUNCTION_API_CLIENT_ID: settings.functions.apiClientId ?? "",
       COORDINATOR_CLIENT_ID: settings.coordinator.identityClientId ?? "",
       AZURE_TENANT_ID: settings.azureTenantId,

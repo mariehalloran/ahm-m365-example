@@ -184,6 +184,12 @@ export function dispatchInventory(document: ProjectDocument, configSha256: strin
     services.flatMap(service => serviceDispatchLanes(document, tenant.id, service, configSha256)));
 }
 
+/** Allows two schedule slots and three watchdog checks for execution and ingestion before alerting. */
+export function laneFreshnessSeconds(document: ProjectDocument, lane: Pick<ExecutionLane, "intervalSeconds">): number {
+  if (!document.deployment) throw new ConfigurationError("Lane freshness requires root deployment settings");
+  return 2 * lane.intervalSeconds + 3 * document.deployment.functions.watchdogIntervalSeconds;
+}
+
 /** Constructs one bounded, root-correlated start request, never an execution payload or result channel. */
 export function createDispatch(
   lane: ReturnType<typeof dispatchInventory>[number], now = Date.now(),

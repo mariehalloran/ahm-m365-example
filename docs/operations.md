@@ -2,37 +2,40 @@
 
 ## Simple execution boundary
 
-Each service process runs its selected journeys and reports settled journey and
-executed-business-step measurements. With `logAnalytics.enabled: false`, containers
-aggregate their current cycle and push health reports directly, without a log pipeline.
-With `true`, Event Hubs, optional Capture and Log Analytics retain observations and
-Azure Monitor Health Models evaluates rolling success percentages/durations with KQL.
-Workers retain no cross-cycle history or user-token cache. The checked-in 13
-selected journeys plan four Container Apps (one per enabled tenant and service).
+The coordinator Container App dispatches one Azure Function invocation per selected
+journey/target case. Each execution Function reports business steps and the final
+journey outcome directly. With `logAnalytics.enabled: false`, it publishes health
+reports without a logging pipeline. With `true`, the Logs Ingestion API/DCR writes
+observations to Log Analytics and Azure Monitor Health Models evaluates KQL.
+Each service Function app has its own on-demand Flex Consumption plan; there is
+no Premium or always-ready baseline. Persistent journals fence duplicate execution.
 The model family has five models, 75 entities, 70 relationships and 51
 business-step entities before supporting context, including Exchange's Mail and
 Calendar rollup parents. Enabled Service Health adds four entities and
 relationships. SharePoint contributes three journeys and 13 business steps;
 configuration and administrative grants do not establish live worker acceptance.
 
-Exchange, Teams, OneDrive and enabled SharePoint use separate cadences (each service's `execution` settings) and separate Container Apps. Use the [shared hosting guide](../synthetic-tests/infra/README.md) for single-revision rollout with 0.25 CPU/0.5 GiB per app, explicit managed identities and config-hash revisions. Only selected live Teams calls expose an authenticated HTTPS callback; other workers remain private.
+Exchange, Teams, OneDrive and enabled SharePoint use their own `execution` settings
+and separate Function apps. The coordinator stays scheduled at one replica with
+0.25 CPU/0.5 GiB. See the [hosting guide](../synthetic-tests/infra/README.md) for
+explicit identities, dispatch authentication and Teams callback routing.
 
 Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands and strict config fields. Each service under `synthetic-tests/` owns its entry and journeys; shared code and Node tooling also live in that project. Root [monitoring.config.json](../monitoring.config.json) and its referenced service files hold user configuration; discovered IDs live in the adjacent gitignored `.env` ([details](./deployment.md#generated-ids-in-env)). Simulation makes no live mutations or Azure calls.
 
 ## Scheduling and shutdown
 
-- Every selected Exchange, Teams, OneDrive and SharePoint journey runs every 300 seconds. Exchange continuous execution waits for an aligned five-minute boundary and runs every selected journey for every unique mailbox together: five journeys × 100 mailboxes = 500 attempts every five minutes. `--once` is an immediate single-cycle diagnostic. Other synthetic lanes start immediately; providers retain independent schedules (60 seconds in the checked-in config).
+- Every selected Exchange, Teams, OneDrive and SharePoint journey runs every 600 seconds on aligned ten-minute boundaries. Five Exchange journeys across 100 mailboxes produce 500 case starts every ten minutes. Local `--once` is an immediate single-cycle diagnostic. Providers retain independent schedules (60 seconds in the checked-in config).
 - All live journeys have a 240-second execution deadline for the entire journey, not each step. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. Latency thresholds remain 15000 ms Degraded / 60000 ms Unhealthy, independently of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share unchanged global/per-mailbox permits (32/two); there is no Exchange probe-count ceiling.
-- Every lane bounds initialization, execution, cleanup and publication within 299 seconds. Exchange reserves 12 seconds for cleanup settlement and 12 for publication; normal worst case is 264 seconds (240 + 12 + 12), with an enclosing execution budget at most 275 seconds. Teams/OneDrive/SharePoint allow 12 seconds for settlement and 30 for publication; their default 252-second cycle budget plus those reserves is 294 seconds. Initialization/late starts reduce the enclosing cycle budget rather than extending the selected journey deadline or overlapping the next cycle.
+- Every synthetic lane bounds initialization, execution, cleanup and publication before its next slot (599 seconds with the current margin). Exchange reserves 12 seconds for cleanup settlement and 12 for publication, with an execution budget at most 275 seconds. Teams/OneDrive/SharePoint allow 12 seconds for settlement and 30 for publication, with a 252-second execution budget. Initialization and late starts cannot extend the four-minute journey deadline or overlap the next slot.
 - Non-Exchange capacity validation covers every selected lane, even small Teams cohorts, and rejects budgets that cannot cover all attempts or fit the cadence. The checked-in Teams lane runs six pair/target attempts at concurrency six; each OneDrive lane runs two accounts at default concurrency three. This is bounded capacity planning, not live throughput proof.
-- SharePoint has independent document, version-history and list-item lanes, each with a 240-second journey deadline, 300-second cadence, default concurrency three and 252-second cycle budget. Review real completion/cleanup before increasing targets.
+- SharePoint has independent document, version-history and list-item lanes, each with a 240-second journey deadline, 600-second cadence, default concurrency three and 252-second cycle budget. Review real completion/cleanup before increasing targets.
 - `exchange-cycle-capacity` emits expected/started/completed/timed-out/inconclusive attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
 - Config changes require a restart.
 - SIGINT/SIGTERM stop new runs, cancel current work, and allow bounded probe cleanup and observation publication.
-- Restarting can lose unpublished results. Direct reports remain visible only until their TTL; accepted logging-mode events/history remain subject to Event Hub, archive and workspace retention.
-- Run one authoritative instance per target set. Statelessness does not prevent duplicate test emails across replicas.
+- Restarting can lose unpublished results. Direct reports remain visible until their TTL; accepted logging-mode observations follow workspace retention.
+- The journal conditionally fences each case before mutation. A newer slot may replace an older unclaimed `starting` or `accepted` record; a delayed older activity then fails ownership validation. Running and ambiguous mutations stay fenced and require settlement or operator reconciliation, never blind replay.
 
 ## Identity and permission gates
 
@@ -77,7 +80,7 @@ grants or extra app/host are created.
 Live workers require scoped service-model report and private configuration Blob reader
 roles, independently of Graph/mailbox permissions. Direct mode uses those report
 permissions for synthetic journey/action health as well as provider context.
-Event Hubs sender roles are required only when Log Analytics is enabled; see the
+Logs Ingestion DCR permissions are required when Log Analytics is enabled; see the
 [model guide](../health-model/README.md). Default bot/mail/file journeys need no user
 password or interactive sign-in. Calling's tenant-wide application permission is a
 separate approved exception, not a scoped recipient grant. Optional provider collection
@@ -92,7 +95,7 @@ Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for
 
 The single root `logAnalytics.enabled` toggle selects the reporting path:
 
-- **Off:** each container aggregates observed current-cycle results into direct
+- **Off:** execution Functions publish observed current-cycle results as direct
   health reports. Both success percentage and mean duration use conclusive attempts;
   worker cancellations and cleanup-only failures report Unknown without a numeric
   sample, and skipped/internal actions contribute no sample. Reports expire after
@@ -105,13 +108,10 @@ The [root configuration](../monitoring.config.json) owns service/scenario select
 account metadata, observation resources and model policy. Each service retains its
 independent execution cadence, authentication and provider settings.
 
-Live workers batch raw journey and executed-step observations into the shared Event
-Hub using their explicit managed identities. Capture optionally archives the original
-Avro event payloads in private Blob Storage. An event-triggered managed-identity
-Function submits `RawData` through the Logs Ingestion API and DCR to `M365Synthetic_CL`.
-The Function checkpoints after acceptance; invalid events or exhausted batches are
-preserved in private `quarantine` storage and logged as errors, never silently dropped.
-Simulation prints counts only and does not publish cloud health.
+Execution Functions submit raw journey and executed-step observations through the
+Logs Ingestion API and DCR to `M365Synthetic_CL` using their selected managed identities.
+There is no Event Hub, Capture or intermediary ingestion Function. Publication
+failures are explicit; simulation prints counts and does not publish cloud health.
 
 Health Models queries the table, deduplicates `EventId`, separates journey and step
 records, and applies root-configured thresholds over `signalWindowMinutes`. The
@@ -131,18 +131,18 @@ are separate from `ExecutionRegion` and do not establish backend placement.
 
 Publication remains bounded to 12 seconds for Exchange and 30 seconds for other
 synthetic batches. Check `observations-published`, `observation-publication-failed`
-and `service-cycle-failed`. The Function logs `observations-ingested`,
-`observation-ingestion-failed` and `observations-quarantined`. API acceptance does
-not prove model propagation or notification delivery.
+and `service-cycle-failed`. API acceptance does not prove table ingestion, model
+propagation or notification delivery; deployment verifies the actual destination.
 
-If all services stop ingesting while Event Hubs incoming messages continue but
-outgoing messages stop, check the Function host logs and indexed functions, not
-just its Running state. An `EACCES` entry-point error indicates unreadable package
+If observations stop, inspect coordinator `httpStatus` diagnostics, Function
+rejection reasons, Durable queue processing, ownership journals and indexed
+functions, not just host Running state. An `EACCES` error indicates unreadable package
 contents. The packager normalizes archive directories to `0755`, files to `0644`
 and executables to `0755`, keeping the local staging root private (`0700`).
-Redeploy the repaired Function package without resetting the consumer group or
-checkpoints, then verify fresh `ingestion_time()` values in `M365Synthetic_CL`
-and model queries returning data.
+Redeploy the repaired Function package without deleting journals or queues, then
+verify fresh `ingestion_time()` values and model queries returning data. Each app
+must have its own Flex plan and the same resolved Durable task hub in its runtime
+and trigger-scaling configuration.
 
 Initialization failures retain journey diagnostics when Azure publication is
 usable; cancellations are Unknown, while genuine authentication/configuration
@@ -150,17 +150,10 @@ failures remain failed. Unexecuted steps are not invented. Workers retry on thei
 cadence. Unsafe schemas or unusable Azure publication credentials can prevent
 observations and require independent platform/freshness detection.
 
-Incomplete cycles log `service-cycle-incomplete` and still publish settled results. Workers retain no
-cross-cycle result/outbox state, so a crash before Event Hub acceptance can lose
-observations. After acceptance, Event Hub retention and Capture support replay;
-replay must retain original `EventId` values. This is not an exactly-once guarantee.
-
-The ingestion consumer group is scoped to the Event Hub namespace identity.
-Recreating the namespace after switching logging off/on creates a fresh consumer
-group, so retained checkpoints cannot incorrectly skip the new stream's reset
-sequence numbers. Ordinary redeployments keep the existing group/checkpoints.
-New groups start from the earliest retained event; old checkpoint and archive data
-is not deleted.
+Incomplete cycles log `service-cycle-incomplete` and still publish settled results.
+There is no result outbox; a crash before Logs Ingestion acceptance can lose
+unpublished observations. Durable acceptance and execution journals prevent blind
+replay, but do not make reporting exactly once or lossless.
 
 Each conclusive attempt contributes one binary success observation (1 or 0).
 Worker cancellations and cleanup-only failures retain diagnostic observations
@@ -178,12 +171,18 @@ earlier genuine service failure remains a failed journey even if cleanup also fa
 [Shared measurement semantics](../synthetic-tests/utils/README.md#reporting-model)
 apply to raw observations. Log Analytics can now calculate percentiles and weighted
 cross-cycle statistics from individual attempts rather than precomputed means.
-In enabled logging mode, the independent freshness alert uses two service intervals plus three minutes
-(780 seconds / 13 minutes for each enabled service at the 300-second cadence). Evaluation runs
-every minute, so allow up to another minute plus ingestion, alert-processing and
-notification lag beyond that observation-silence target. The unchanged 15-minute
-model window/direct-report TTL exceeds the 300-second cadence plus the 299-second
-whole-cycle bound; it is not the freshness-alert target. The freshness rule shares
+The watchdog and logging-mode freshness alert allow two configured schedule
+intervals plus three watchdog check intervals: currently 1,380 seconds / 23 minutes
+for synthetic lanes and five minutes for provider journal checks. Watchdog metric
+alerts evaluate every minute. The complete-coverage log alert evaluates every five
+minutes because Azure does not support one-minute evaluation for this query shape.
+Allow another evaluation interval plus processing/notification lag.
+The logging rule also detects five minutes without a watchdog completion heartbeat;
+its query window uses a supported Azure alert granularity (currently 30 minutes).
+The logging rule requires every configured target to have a fresh journey report,
+across independent case-level run IDs. One active target cannot mask a stopped target.
+The 30-minute model window/direct-report TTL provides execution and ingestion
+headroom beyond the ten-minute cadence; it is not the freshness-alert target. The freshness rule shares
 the workspace dependency and does not detect every workspace/region/notification outage.
 That rule is retired when logging is turned off. Direct report expiry becomes
 Unknown rather than guaranteed Unhealthy; independent stopped/stalled-worker and
@@ -240,7 +239,7 @@ For SharePoint, filter `Service == "sharepoint"` and inspect
 `Dimensions.siteUrl`, `Dimensions.libraryName`, `Dimensions.folderName` and
 `Dimensions.listName`. `TestAccountId` is the derived location key, not a user.
 Keep these approved resource URLs/names within the same private diagnostic boundary.
-Ingestion and model evaluation are asynchronous. With the checked-in 15-minute
+Ingestion and model evaluation are asynchronous. With the checked-in 30-minute
 signal window, a failure can influence health until it ages out. Queries do not
 silently convert missing data to Healthy. Records contain dedicated test-account
 UPNs; protect workspace/archive access. Use `TenantAlias`/`M365TenantId` for the
@@ -270,7 +269,7 @@ See the [provider endpoints, diagnostics and references](./provider-monitoring.m
 
 ## Timing, retries, and cleanup
 
-- A non-Exchange cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 252); all selected attempts plus cleanup/publication must fit the 300-second cadence, not a longer TTL.
+- A non-Exchange cycle has a bounded execution budget (`cycleTimeoutSeconds`, default 252); initialization, execution, cleanup and publication must fit its 600-second cadence, not a longer TTL.
 - By default three probes execute concurrently **per lane** for Teams, OneDrive and SharePoint (`maxConcurrentProbes`, configurable 1-20); the checked-in Teams lane uses six for its six attempts. Exchange starts all selected attempts together and limits actual HTTP requests instead. Runtime Graph requests have a separate bounded request/retry budget. Administrator bulk setup uses its own request/retry budget.
 - Genuine expiry of a journey's execution deadline is a failed attempt. Enclosing worker/cycle cancellation and cleanup-only failure are Unknown. Cleanup receives ten seconds and settlement twelve seconds. Late responses cannot overwrite a published result. External shutdown does not start queued work.
 - Draft creation/send are not retried after ambiguous responses. Reads/idempotent deletes can retry; long Retry-After requests fail explicitly rather than retry too soon.
@@ -289,7 +288,7 @@ See the [provider endpoints, diagnostics and references](./provider-monitoring.m
 
 Console diagnostics contain derived target/correlation IDs, mode, timings and
 bounded failure hints, never mailbox contents, credentials or full HTTP responses.
-Private Event Hub observations, Capture files and Log Analytics deliberately retain
+Private Log Analytics observations deliberately retain
 dedicated test-account UPNs and reporting groups so administrators can identify impact.
 No message bodies, file bytes, tokens or passwords belong in that pipeline. Restrict
 archive/workspace access, use dedicated accounts and review retention and volume.
@@ -298,9 +297,10 @@ Synthetic content is fixed boilerplate or a generated correlation ID. Protect de
 
 Do not enable HTTP-body/token logging, disable TLS validation, or export business content.
 Health observations are unsampled and compact; no record is added for every retry,
-poll or SDK operation. One journey/target every five minutes produces about 8,640 journey observations
-per thirty-day month plus executed business steps. Capture adds a separate hourly
-charge when enabled. Use the ingestion-volume saved search before scaling.
+poll or SDK operation. One journey/target every ten minutes produces about 4,320
+journey observations per thirty-day month plus executed business steps.
+Provider schedules are independent. Use ingestion-volume and platform billing
+metrics before scaling; Azure SDK informational request logs are suppressed.
 
 ## Disablement and teardown
 
@@ -312,9 +312,15 @@ charge when enabled. Use the ingestion-volume saved search before scaling.
 
 ## Enterprise reliability acceptance gate
 
-Container Apps is a reasonable default for these lightweight API tests, not an assurance that the complete monitoring system is production-ready. The small single-region proof of concept does not meet an enterprise availability commitment.
+The continuously scheduled coordinator and on-demand execution Functions do not
+by themselves establish an enterprise availability commitment.
 
-Agree on a detection target before production. The logging-mode rule targets 13 minutes without a fresh service journey observation, evaluated every minute, plus ingestion/alert/notification lag; it does not guarantee a 13-minute page. Include execution time, report acceptance/model propagation, notification delivery, planned maintenance, and measured worst cases in the accepted target. A configured schedule or hosting SLA does not guarantee the same detection latency.
+The current observation-silence target is 23 minutes per synthetic case, with
+one-minute watchdog metric evaluation and five-minute complete-coverage log
+evaluation, plus processing/notification lag; it does not guarantee a 23-minute page.
+Include execution, ingestion, notification delivery, planned maintenance and
+measured worst cases in the accepted target. A hosting SLA does not establish
+end-to-end monitoring reliability.
 
 Independent monitoring must cover:
 
@@ -328,7 +334,11 @@ Independent monitoring must cover:
 
 Another check sharing the same report/model/alerting dependency is not independent protection against that dependency failing. Do not rely only on Exchange email or Teams notifications while monitoring Microsoft 365; arrange an approved alternative such as a separate incident/paging channel.
 
-The default is service-level monitoring, not individual-mailbox coverage. One active target can keep service reports arriving while another stops. That limitation must be accepted for this simple default; it is not solved by labeling an aggregate as complete coverage. Optional [reporting groups](./monitoring-groups.md) give per-group views, but a group with no fresh reports reads Unknown rather than Unhealthy, so the independent freshness checks above still apply.
+Model signals remain service/group aggregates. The independent logging-mode
+freshness query checks complete target coverage, while the watchdog checks each
+execution/publication journal. Optional [reporting groups](./monitoring-groups.md)
+provide group views; missing model samples remain Unknown rather than fabricated
+Healthy or Unhealthy.
 
 For higher availability, evaluate independently placed probe instances with explicit opaque identities and distinct target assignments. Zone redundancy requires a suitable environment and enough replicas to span failure domains; simply adding a replica can duplicate tests. Regional redundancy, active revisions, rollouts, and replica ownership must be designed without introducing worker health state. Do not claim that `minReplicas: 1` is high availability.
 

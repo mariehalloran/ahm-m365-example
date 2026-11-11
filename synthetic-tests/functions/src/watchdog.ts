@@ -2,8 +2,8 @@ import type { InvocationContext } from "@azure/functions";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { BlobServiceClient } from "@azure/storage-blob";
 import { z } from "zod";
-import { dispatchInventory, laneInstanceId } from "./dispatch.js";
-import { laneRecordSchema, type LaneRecord } from "./lane-ownership.js";
+import { dispatchInventory, laneFreshnessSeconds, laneInstanceId } from "./dispatch.js";
+import { readLaneJournal, type LaneRecord } from "./lane-ownership.js";
 import { runtimeDocument } from "./runtime.js";
 
 interface LaneFreshness { missingExecution: boolean; missingPublication: boolean; failed: boolean }
@@ -38,18 +38,10 @@ export async function monitoringWatchdog(_timer: unknown, context: InvocationCon
   async function inspectNext(): Promise<void> {
     while (next < lanes.length) {
       const lane = lanes[next++]!;
-      let record: LaneRecord | undefined;
-      try {
-        const bytes = await container.getBlockBlobClient(`lanes/${laneInstanceId({
-          tenant: lane.tenant, service: lane.service, lane: lane.lane,
-        })}.json`).downloadToBuffer(0, undefined, { abortSignal: signal });
-        if (bytes.length > 16384) throw new Error("Lane journal exceeds its storage limit");
-        record = laneRecordSchema.parse(JSON.parse(bytes.toString("utf8")));
-      } catch (error) {
-        const missing = typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === 404;
-        if (!missing) throw error;
-      }
-      const freshness = laneFreshness(record, document.healthModel.signalWindowMinutes * 60000);
+      const record = (await readLaneJournal(container.getBlockBlobClient(`lanes/${laneInstanceId({
+        tenant: lane.tenant, service: lane.service, lane: lane.lane,
+      })}.json`), signal))?.record;
+      const freshness = laneFreshness(record, laneFreshnessSeconds(document, lane) * 1000);
       if (freshness.missingExecution) totals.MissingExecutionLanes++;
       if (freshness.missingPublication) totals.MissingPublications++;
       if (freshness.failed) totals.FailedLanes++;
