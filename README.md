@@ -107,7 +107,9 @@ and five Teams function names, interval parameters, consent and federation.
   (`true`); neither path needs Event Hubs or an intermediary ingestion Function.
 - Current service settings select 600-second journeys with a 240-second
   whole-journey deadline; these are configurable, not hardcoded limits. Root
-  latency thresholds are 15/60 seconds. Provider schedules are independent
+  latency defaults are 15/60 seconds; Teams channel conversation and its steps
+  use the configured 30/60-second [journey override](./health-model/README.md#latency-thresholds).
+  Provider schedules are independent
   (currently 60 seconds). The model uses a 30-minute evaluation window.
 
 ## References

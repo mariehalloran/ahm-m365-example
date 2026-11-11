@@ -12,7 +12,15 @@
     "successDegradedPercent": 99,
     "successUnhealthyPercent": 95,
     "latencyDegradedMilliseconds": 15000,
-    "latencyUnhealthyMilliseconds": 60000
+    "latencyUnhealthyMilliseconds": 60000,
+    "journeyLatencyOverrides": {
+      "teams": {
+        "channel-conversation": {
+          "latencyDegradedMilliseconds": 30000,
+          "latencyUnhealthyMilliseconds": 60000
+        }
+      }
+    }
   },
   "logAnalytics": {
     "enabled": true,

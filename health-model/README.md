@@ -56,6 +56,29 @@ evaluates Unknown. A genuine service failure is not hidden by a later cleanup er
 excluding inconclusive records, including legacy zero-valued cancellation/cleanup
 rows; the `inconclusive-by-group` saved search retains their diagnostics.
 
+## Latency thresholds
+
+Root `healthModel.latencyDegradedMilliseconds` and
+`healthModel.latencyUnhealthyMilliseconds` are the defaults. Use
+`healthModel.journeyLatencyOverrides` to change one service/journey without
+relaxing other journeys:
+
+```json
+"journeyLatencyOverrides": {
+  "teams": {
+    "channel-conversation": {
+      "latencyDegradedMilliseconds": 30000,
+      "latencyUnhealthyMilliseconds": 60000
+    }
+  }
+}
+```
+
+An override applies to that journey's duration signals and business steps in
+both reporting modes, including any reporting-group signals. Success-rate
+thresholds, failed requests, execution deadlines and cadence are unchanged.
+Unlisted journeys retain the global 15/60-second defaults in this configuration.
+
 ## Group signals
 
 - Exchange and OneDrive groups are defined under each service `targets` object.

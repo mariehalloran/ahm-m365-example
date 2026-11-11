@@ -39,6 +39,10 @@ const selection = {
 const actionGroupResourceId = z.string().trim().regex(
   /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/resourceGroups\/[a-z0-9_().-]{1,90}\/providers\/Microsoft\.Insights\/actionGroups\/[^\x00-\x1f<>%&\\/?#]{0,259}[^\x00-\x1f<>%&\\/?# .]$/i,
 );
+const latencyThresholdSchema = z.object({
+  latencyDegradedMilliseconds: z.number().int().nonnegative(),
+  latencyUnhealthyMilliseconds: z.number().int().nonnegative(),
+}).strict();
 const healthModelSchema = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,31}[a-zA-Z0-9]$/),
   subscriptionId: z.string().uuid(),
@@ -48,8 +52,8 @@ const healthModelSchema = z.object({
   minimumSamples: z.number().int().min(1).max(1000000).default(1),
   successDegradedPercent: z.number().min(0).max(100),
   successUnhealthyPercent: z.number().min(0).max(100),
-  latencyDegradedMilliseconds: z.number().int().nonnegative(),
-  latencyUnhealthyMilliseconds: z.number().int().nonnegative(),
+  ...latencyThresholdSchema.shape,
+  journeyLatencyOverrides: z.record(serviceTypeSchema, z.record(z.string().min(1), latencyThresholdSchema)).default({}),
 }).strict();
 const slug = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(40);
 const displayName = z.string().trim().min(1).max(260);
@@ -199,6 +203,23 @@ function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
   if (new Set(policy.alertActionGroupIds.map(id => id.toLowerCase())).size !== policy.alertActionGroupIds.length) {
     throw new ConfigurationError("healthModel.alertActionGroupIds must contain unique action group resource IDs (case-insensitive)");
   }
+  for (const [service, overrides] of Object.entries(policy.journeyLatencyOverrides)) {
+    const journeys = new Set<string>(Object.values(probeServices)
+      .filter(definition => definition.service === service).map(definition => definition.journey));
+    for (const [journey, thresholds] of Object.entries(overrides)) {
+      if (!journeys.has(journey)) throw new ConfigurationError(`Unknown latency override journey '${service}/${journey}'`);
+      if (thresholds.latencyUnhealthyMilliseconds < thresholds.latencyDegradedMilliseconds) {
+        throw new ConfigurationError(`Latency thresholds for '${service}/${journey}' must order Degraded before Unhealthy`);
+      }
+    }
+  }
+}
+
+/** Uses only the selected journey's explicit latency override, otherwise preserving global defaults. */
+export function journeyLatencyThresholds(
+  policy: ProjectDocument["healthModel"], service: ServiceConfig["type"], journey: string,
+) {
+  return policy.journeyLatencyOverrides[service]?.[journey] ?? policy;
 }
 
 function validateServiceSelection(services: ProjectConfig["services"], tenantId: string): void {

@@ -75,7 +75,7 @@ accepted reporting; successful local checks or process startup are not that proo
 - Service selection, scenarios, execution, and deployment are composed from the root file plus the four service files.
 - `logAnalytics.enabled` controls reporting path.
 - `serviceHealth.enabled` controls provider context collection.
-- All selected journeys run every 300 seconds with a 240-second whole-journey deadline; Exchange aligns to five-minute boundaries. Cleanup/reporting are separately bounded, and latency thresholds stay at 15/60 seconds.
+- All selected journeys run every 600 seconds on aligned ten-minute boundaries with a 240-second whole-journey deadline. Cleanup/reporting are separately bounded. Latency defaults are 15/60 seconds; the scoped Teams channel-conversation override uses 30/60 seconds for the journey and its business steps.
 
 ## Services
 

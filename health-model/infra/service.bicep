@@ -34,6 +34,9 @@ func observationSignalName(name string, scope object, multiTenant bool) string =
   !empty(scope.group) ? 'group-${scope.group}--tenant-${scope.tenant}--${name}'
     : multiTenant ? 'tenant-${scope.tenant}--${name}' : name
 
+func journeyLatencyPolicy(policy object, service string, journey string) object =>
+  ((policy.?journeyLatencyOverrides ?? {})[?service] ?? {})[?journey] ?? policy
+
 // One aggregation group per reporting group with a scope for this journey. Members are the per-tenant
 // signals (group-<id>--tenant-<alias>--<signal>) that each tenant worker publishes.
 func reportingGroupEntries(groups array, service string, journey string, signals string[]) array =>
@@ -285,7 +288,16 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                       dataUnit: metric.dataUnit
                       refreshInterval: 'PT1M'
                       timeGrain: 'PT${policy.signalWindowMinutes}M'
-                      evaluationRules: metric.evaluationRules
+                      evaluationRules: metric.dataUnit == 'Milliseconds' ? {
+                        degradedRule: {
+                          operator: 'GreaterThan'
+                          threshold: journeyLatencyPolicy(policy, service.service, node.journey).latencyDegradedMilliseconds
+                        }
+                        unhealthyRule: {
+                          operator: 'GreaterThan'
+                          threshold: journeyLatencyPolicy(policy, service.service, node.journey).latencyUnhealthyMilliseconds
+                        }
+                      } : metric.evaluationRules
                     })))
                 } : null
               }

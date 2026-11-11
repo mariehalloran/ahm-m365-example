@@ -113,9 +113,12 @@ npm run teams -- --tenant <alias> --once
 Also set `ENABLE_BETA_SERVICE_ACTIVITY=true` when beta provider collection is
 selected, as in the checked-in profile.
 
-Current configuration selects a 300-second cadence and 240-second whole-journey
+Current configuration selects a 600-second cadence and 240-second whole-journey
 deadline, with separately bounded cleanup/reporting. Cadence and budgets come
-from `config.execution`; root latency thresholds are 15/60 seconds.
+from `config.execution`. The root
+[journey latency override](../../health-model/README.md#latency-thresholds) uses
+30 seconds Degraded / 60 seconds Unhealthy for channel conversation and its
+business steps. Scheduled meetings retain the global 15/60-second defaults.
 Cancellations and cleanup-only failures are Unknown, not invented failed
 business departures. Check Function callback diagnostics, both call legs,
 retained/cleaned posts and accepted reports using [operations](../../docs/operations.md).

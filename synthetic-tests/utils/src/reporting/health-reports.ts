@@ -6,7 +6,7 @@ import {
   evaluateHealthState,
   type EvaluationRules, type HealthReport,
 } from "./health-report-client.js";
-import type { ProjectConfig } from "../configuration/project-config.js";
+import { journeyLatencyThresholds, type ProjectConfig } from "../configuration/project-config.js";
 import type { CycleResults } from "./results.js";
 import type { ServiceConfig } from "../configuration/service-config.js";
 import { resultMeasurements, type MeasurementSample } from "./measurements.js";
@@ -53,12 +53,13 @@ function collectEntitySamples(results: SyntheticResult[], level: "journey" | "al
 
 /** Evaluates only conclusive samples; insufficient evidence explicitly replaces the signal with Unknown. */
 function measurementReports(
-  project: ProjectConfig, cycle: DirectReportCycle, entity: EntitySamples,
+  project: ProjectConfig, service: ServiceConfig["type"], cycle: DirectReportCycle, entity: EntitySamples,
   signals: readonly [string, string], group?: ReportingGroup,
 ): HealthReport[] {
   const { entityName, samples } = entity;
   if (!samples.length) return [];
   const policy = project.healthModel;
+  const latency = journeyLatencyThresholds(policy, service, entity.journey);
   const conclusive = samples.filter(sample => sample.success !== null);
   const available = conclusive.length >= policy.minimumSamples;
   const succeeded = conclusive.filter(sample => sample.success).length;
@@ -89,8 +90,8 @@ function measurementReports(
       signalName: signals[1], unit: "Milliseconds",
       value: available ? conclusive.reduce((sum, sample) => sum + sample.durationMs, 0) / conclusive.length : undefined,
       rules: {
-        degradedRule: { operator: "GreaterThan", threshold: policy.latencyDegradedMilliseconds },
-        unhealthyRule: { operator: "GreaterThan", threshold: policy.latencyUnhealthyMilliseconds },
+        degradedRule: { operator: "GreaterThan", threshold: latency.latencyDegradedMilliseconds },
+        unhealthyRule: { operator: "GreaterThan", threshold: latency.latencyUnhealthyMilliseconds },
       },
     },
   ];
@@ -116,7 +117,7 @@ function callMeasurementReports(project: ProjectConfig, cycle: DirectReportCycle
   ] as const;
   return phases.flatMap(phase => {
     const entity = entities.find(entity => entity.step === phase.name);
-    return entity ? measurementReports(project, cycle, entity, phase.signals) : [];
+    return entity ? measurementReports(project, "teams", cycle, entity, phase.signals) : [];
   });
 }
 
@@ -128,13 +129,13 @@ export function directHealthReports(project: ProjectConfig, service: ServiceConf
     throw new Error("Health report service does not match its execution lane");
   }
   const reports = collectEntitySamples(results, "all").flatMap(entity =>
-    measurementReports(project, cycle, entity, journeySignals));
+    measurementReports(project, service.type, cycle, entity, journeySignals));
   if (service.type === "teams") return [...reports, ...callMeasurementReports(project, cycle, results)];
   for (const group of project.groups.filter(group => group.service === service.type)) {
     const members = new Set(group.targetIds);
     const groupResults = results.filter(result => members.has(result.testId));
     for (const entity of collectEntitySamples(groupResults, "journey")) {
-      reports.push(...measurementReports(project, cycle, entity, journeySignals, group));
+      reports.push(...measurementReports(project, service.type, cycle, entity, journeySignals, group));
     }
   }
   return reports;
@@ -153,12 +154,12 @@ export function measurementHealthReports(
   const signals = first.kind !== "call-phase" ? journeySignals
     : first.step === "connection" ? [teamsCallSignals[0], teamsCallSignals[1]] as const
       : [teamsCallSignals[2], teamsCallSignals[3]] as const;
-  const reports = measurementReports(project, cycle, entity, signals);
+  const reports = measurementReports(project, service.type, cycle, entity, signals);
   if (first.kind === "journey" && service.type !== "teams") {
     for (const group of project.groups.filter(group => group.service === service.type)) {
       const members = new Set(group.targetIds);
       const samples = observed.filter(row => members.has(row.result.testId)).map(row => row.measurement);
-      reports.push(...measurementReports(project, cycle, { ...entity, samples }, signals, group));
+      reports.push(...measurementReports(project, service.type, cycle, { ...entity, samples }, signals, group));
     }
   }
   return reports;
