@@ -75,7 +75,7 @@ export const simulate = async (
   result.success = scenario === "healthy" || scenario === "slow" || scenario === "stale";
   result.durationMs = scenario === "slow" ? 30000 : scenario === "timeout" ? 65000 : 3200;
   result.diagnosticCategory = scenario === "failed"
-    ? metadata.service === "onedrive" || metadata.service === "sharepoint" || probe.type === "exchange-draft" ? "read-failure" : "send-failure"
+    ? metadata.service === "onedrive" || metadata.service === "sharepoint" ? "read-failure" : "send-failure"
     : scenario === "timeout" ? "delivery-timeout" : null;
   result.diagnosticContext.testStage = "simulated";
   if (!retainArtifacts) result.diagnosticContext.cleanupSucceeded = true;
@@ -83,21 +83,21 @@ export const simulate = async (
     result.observedAt = new Date(now() - 30 * 60 * 1000).toISOString();
   }
   const failureSteps = {
-    "exchange-mail-flow": "send", "exchange-draft": "update-draft",
+    "exchange-mail-flow": "send",
     "exchange-attachment": "send-attachment", "exchange-reply": "reply-mail",
     "exchange-recurring-calendar": "update-event",
     "teams-channel-message": "post-message", "teams-call": "place-call",
-    "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
-    "sharepoint-roundtrip": "verify-document-content", "sharepoint-versions": "read-prior-document-version",
+    "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data",
+    "sharepoint-roundtrip": "verify-document-content",
     "sharepoint-list-item": "verify-list-item",
   } as const;
   const completionSteps = {
-    "exchange-mail-flow": "confirm-delivery", "exchange-draft": "read-draft",
+    "exchange-mail-flow": "confirm-delivery",
     "exchange-attachment": "verify-attachment", "exchange-reply": "confirm-reply-mail",
     "exchange-recurring-calendar": "verify-event",
     "teams-channel-message": "confirm-reply", "teams-call": "end-call",
-    "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data", "onedrive-versions": "read-prior-version",
-    "sharepoint-roundtrip": "verify-document-content", "sharepoint-versions": "read-prior-document-version",
+    "onedrive-roundtrip": "verify-file-hash", "onedrive-appfolder": "update-app-data",
+    "sharepoint-roundtrip": "verify-document-content",
     "sharepoint-list-item": "verify-list-item",
   } as const;
   const failedStep = scenario === "failed" ? failureSteps[probe.type]

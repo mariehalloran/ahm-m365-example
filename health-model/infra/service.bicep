@@ -18,7 +18,7 @@ param tenantScopes array
 param reportingGroups array = []
 
 func bindObservationQuery(query string, service string, node object, scope object, metric object, policy object) string =>
-  replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
+  replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
     query, '__SERVICE__', service),
     '__JOURNEY__', node.journey),
     '__STEP__', empty(metric.phase) ? node.step : metric.phase),
@@ -26,6 +26,7 @@ func bindObservationQuery(query string, service string, node object, scope objec
     '__TENANT__', scope.tenant),
     '__GROUP__', scope.group),
     '__AGGREGATION__', metric.aggregation),
+    '__GRAPH_ERROR_COUNT_SIGNAL__', metric.name == 'observed-graph-server-error-count' ? 'true' : 'false'),
     '__WINDOW__', string(policy.signalWindowMinutes)),
     '__MINIMUM__', string(policy.minimumSamples)),
     '\r', '')
@@ -36,6 +37,12 @@ func observationSignalName(name string, scope object, multiTenant bool) string =
 
 func journeyLatencyPolicy(policy object, service string, journey string) object =>
   ((policy.?journeyLatencyOverrides ?? {})[?service] ?? {})[?journey] ?? policy
+
+// The API requires an Unhealthy rule; nonnegative durations can never satisfy this one.
+func latencyEvaluationRules(degradedMilliseconds int) object => {
+  degradedRule: { operator: 'GreaterThan', threshold: degradedMilliseconds }
+  unhealthyRule: { operator: 'LessThan', threshold: 0 }
+}
 
 // One aggregation group per reporting group with a scope for this journey. Members are the per-tenant
 // signals (group-<id>--tenant-<alias>--<signal>) that each tenant worker publishes.
@@ -80,7 +87,7 @@ var rootChildPositions = concat(
     journey => journeyPositions[indexOf(service.journeys, journey)]
   )
 )
-// The query deduplicates first, excludes inconclusive/legacy cancellation samples and returns no value below minimumSamples.
+// Deduplicate first; inconclusive attempts have no sample unless a real Graph 5xx was received.
 var observationQuery = loadTextContent('../queries/synthetic.kql')
 var signalScopes = concat(
   map(tenantScopes, scope => { tenant: scope.id, group: '', journeys: scope.journeys }),
@@ -108,9 +115,17 @@ var observationMetrics = [
     dataUnit: 'Milliseconds'
     aggregation: 'avg(DurationMs)'
     phase: ''
+    evaluationRules: latencyEvaluationRules(policy.latencyDegradedMilliseconds)
+  }
+  {
+    name: 'observed-graph-server-error-count'
+    displayName: 'Observed Graph server error count'
+    dataUnit: 'Count'
+    aggregation: 'sum(GraphServerErrorCount)'
+    phase: ''
     evaluationRules: {
-      degradedRule: { operator: 'GreaterThan', threshold: policy.latencyDegradedMilliseconds }
-      unhealthyRule: { operator: 'GreaterThan', threshold: policy.latencyUnhealthyMilliseconds }
+      degradedRule: { operator: 'GreaterThan', threshold: 0 }
+      unhealthyRule: { operator: 'GreaterThan', threshold: 0 }
     }
   }
 ]
@@ -207,7 +222,7 @@ var nodes = concat(
         journey: journey.name
         step: step.?telemetryName ?? step.name
         rollup: false
-        impact: suppressOneDriveRestore && service.service == 'onedrive' && journey.name == 'document-versions' && step.name == 'step-4' ? 'Suppressed' : 'Standard'
+        impact: suppressOneDriveRestore && service.service == 'onedrive' && journey.name == 'user-drive-roundtrip' && step.name == 'restore-version' ? 'Suppressed' : 'Standard'
         x: journeyPositions[indexOf(service.journeys, journey)]
         y: (journey.?group != null ? 640 : 440) + indexOf(journey.steps, step) * 170
       })
@@ -288,16 +303,9 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
                       dataUnit: metric.dataUnit
                       refreshInterval: 'PT1M'
                       timeGrain: 'PT${policy.signalWindowMinutes}M'
-                      evaluationRules: metric.dataUnit == 'Milliseconds' ? {
-                        degradedRule: {
-                          operator: 'GreaterThan'
-                          threshold: journeyLatencyPolicy(policy, service.service, node.journey).latencyDegradedMilliseconds
-                        }
-                        unhealthyRule: {
-                          operator: 'GreaterThan'
-                          threshold: journeyLatencyPolicy(policy, service.service, node.journey).latencyUnhealthyMilliseconds
-                        }
-                      } : metric.evaluationRules
+                      evaluationRules: metric.dataUnit == 'Milliseconds' ? latencyEvaluationRules(
+                        journeyLatencyPolicy(policy, service.service, node.journey).latencyDegradedMilliseconds
+                      ) : metric.evaluationRules
                     })))
                 } : null
               }
@@ -310,7 +318,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey'
         ? aggregationGroupsProperty(service.service == 'teams' ? [] : reportingGroupEntries(
             reportingGroups, service.service, node.journey,
-            ['observed-success-percentage', 'observed-mean-duration']
+            ['observed-success-percentage', 'observed-mean-duration', 'observed-graph-server-error-count']
           ))
         : {}
     )

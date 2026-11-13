@@ -30,14 +30,6 @@
               "journeys": [
                 "app-folder-lifecycle"
               ]
-            },
-            {
-              "name": "versions",
-              "intervalSeconds": 600,
-              "timeoutSeconds": 240,
-              "journeys": [
-                "document-versions"
-              ]
             }
           ],
           "cycleTimeoutSeconds": 252,
@@ -53,8 +45,7 @@
         },
         "scenarios": {
           "user-drive-roundtrip": true,
-          "app-folder-lifecycle": true,
-          "document-versions": true
+          "app-folder-lifecycle": true
         },
         "targets": {
           "united-states-users": {

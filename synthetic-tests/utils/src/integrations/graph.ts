@@ -4,6 +4,7 @@ import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-grap
 import { z } from "zod";
 import { IntegrationError, readResponseBody, requestWithRetry, withAbort, type HttpOptions } from "./http.js";
 import type { GraphRequestPermits } from "../execution/graph-request-permits.js";
+import { observeGraphResponse } from "../execution/steps.js";
 
 const graphOrigin = "https://graph.microsoft.com";
 const graphScope = `${graphOrigin}/.default`;
@@ -122,8 +123,14 @@ export class GraphClient {
           const target = new URL(typeof context.request === "string" ? context.request : context.request.url);
           if (target.origin !== url.origin || target.pathname !== url.pathname) throw new IntegrationError("collector-failure");
           const permits = this.options.requestPermits;
-          context.response = await requestWithRetry(context.request, { ...context.options, redirect }, signal, retrySafe, {
+          // A mutation may have completed even when Graph returns 5xx or the connection is lost.
+          const retryRead = retrySafe && ["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+          context.response = await requestWithRetry(context.request, { ...context.options, redirect }, signal, retryRead, {
             ...this.options,
+            onResponse: diagnostics => {
+              observeGraphResponse(diagnostics);
+              this.options.onResponse?.(diagnostics);
+            },
             ...(permits && mailbox ? {
               withRequestPermit: (signal, send) => permits.request(mailbox, signal, send),
             } : {}),

@@ -174,6 +174,9 @@ change unless `az` can show that subscription and its actual tenant equals
 `deployment.azureTenantId` (by default the single tenant's `tenantId`). `--plan`
 checks only the config: Azure permissions,
 Graph access, bot routes, image availability and rollout are not verified.
+Operator Graph, Blob and Function publishing requests explicitly use the root
+subscription's signed-in account; no global Azure CLI account switch or basic
+publishing credentials are required.
 
 Phases, in order:
 
@@ -514,19 +517,21 @@ from the same approved deployment.
 Only scheduled Teams meetings need public HTTPS callback ingress. Background
 journey execution is not a long-lived ingress request. Lanes run independently
 with bounded execution and cleanup. All selected Exchange, Teams, OneDrive and SharePoint
-journeys run every five minutes and allow 240 seconds per complete journey.
-Latency thresholds stay at 15000/60000 ms and provider lanes remain at 60 seconds.
+journeys run every ten minutes and allow 240 seconds per complete journey.
+Latency becomes Degraded above 15000 ms, with a 30000 ms Teams
+channel-conversation override; latency alone never becomes Unhealthy.
+Provider lanes remain at 60 seconds.
 Genuine journey deadline expiry is a failed attempt; worker cancellations and
 cleanup-only failures report Unknown. Unexecuted dependent steps are not extra
 failed requests, and confirmed business-step evidence is preserved.
 Exchange reserves 12 seconds for cleanup settlement and 12 for publication;
-Teams/OneDrive/SharePoint reserve 12 and 30. All use a 299-second whole-cycle envelope,
+Teams/OneDrive/SharePoint reserve 12 and 30. All use a 599-second whole-cycle envelope,
 including initialization. The non-Exchange cycle budget defaults to 252 seconds;
 the checked-in Teams concurrency is six so all six attempts fit one wave, while
 OneDrive's two accounts per lane fit its default concurrency three.
 Actual cleanup remains independently bounded to ten
 seconds. Graceful shutdown permits bounded reporting, but cannot extend the hard
-slot deadline. These source changes have not been deployed or live-accepted.
+slot deadline.
 
 `logAnalytics.enabled` controls the reporting path, not just an exporter.
 Off reports directly from execution Functions without a logging pipeline.

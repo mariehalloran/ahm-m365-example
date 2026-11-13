@@ -1,8 +1,8 @@
 # SharePoint permissions and managed identity setup
 
 The SharePoint execution Function uses one explicitly selected, same-tenant user-assigned
-managed identity (UAMI). It exercises three Graph v1.0 journeys:
-`document-library-roundtrip`, `document-versions` and `list-item-lifecycle`.
+managed identity (UAMI). It exercises two Graph v1.0 journeys:
+`document-library-roundtrip` (including version checks) and `list-item-lifecycle`.
 Complete the shared [Azure setup](./setup.md) and
 [tenant-binding checks](./cross-tenant-access.md) first.
 
@@ -89,12 +89,12 @@ The checked-in profile already selects one real site/library/folder/list.
 Review `npm run deploy -- --plan` before the separately approved deployment.
 For a first real cycle, use `npm run sharepoint -- --once` on an Azure host with
 the selected identity attached and `ENABLE_LIVE_M365=true`. The current config
-selects a **240-second complete-journey deadline** and **300-second cadence**;
+selects a **240-second complete-journey deadline** and **600-second cadence**;
 those values and budgets come from `config.execution`. The default
 252-second cycle budget plus 12-second cleanup-settlement and 30-second publication
-reserves fits the 299-second whole-cycle envelope. Actual cleanup has its own
-10-second budget; latency thresholds remain **15 seconds Degraded / 60 seconds
-Unhealthy**. Capacity validation includes every configured target.
+reserves fits the 599-second whole-cycle envelope. Actual cleanup has its own
+10-second budget; latency above **15 seconds is Degraded only**.
+Capacity validation includes every configured target.
 
 Verify actual document bytes, prior-version bytes, persisted list fields,
 owned-artifact cleanup, accepted reports and

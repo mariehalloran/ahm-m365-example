@@ -30,30 +30,21 @@ function documentPayload(probe: SharePointDocumentProbe, correlationId: string, 
   };
 }
 
-/** Completes persisted upload, enumeration, byte verification and verified removal. */
-async function documentRoundtrip({ graph, attempt, result, signal, now, initial }: DocumentWorkflow): Promise<void> {
+/** Verifies current and prior revisions on one owned document before removing its scratch folder. */
+async function documentRoundtrip(
+  { graph, attempt, result, signal, now, initial, updated }: DocumentWorkflow,
+  context: Pick<ProbeContext, "config" | "sleep">,
+): Promise<void> {
   const written = await measureStep(result, "upload-document", async () => {
     const folder = await createOwnedFolder(graph, attempt, signal);
     return Object.assign(folder, { fileId: await writeFile(graph, folder, initial, signal) });
   }, now);
   const bytes = await measureStep(result, "reopen-document", () => reopenOwnedFile(graph, written, signal), now);
   await measureStep(result, "verify-document-content", async () => verifyBytes(bytes, initial), now);
-  await measureStep(result, "delete-document", () => deleteOwnedFolder(graph, attempt, signal), now);
-}
-
-/** Requires real version history and exact prior bytes after verifying two distinct persisted revisions. */
-async function documentVersions(
-  { graph, attempt, result, signal, now, initial, updated }: DocumentWorkflow,
-  context: Pick<ProbeContext, "config" | "sleep">,
-): Promise<void> {
-  const written = await measureStep(result, "write-document-revisions", async () => {
-    const folder = await createOwnedFolder(graph, attempt, signal);
-    const written = Object.assign(folder, { fileId: await writeFile(graph, folder, initial, signal) });
-    verifyBytes(await downloadFile(graph, written, written.fileId, signal), initial);
+  await measureStep(result, "write-document-revisions", async () => {
     const fileId = await writeFile(graph, written, updated, signal);
     if (fileId !== written.fileId) throw new IntegrationError("read-failure");
     verifyBytes(await downloadFile(graph, written, fileId, signal), updated);
-    return written;
   }, now);
   const versions = await measureStep(result, "list-document-versions", () => listVersions(graph, written, signal), now);
   await measureStep(result, "read-prior-document-version", async () => {
@@ -65,11 +56,11 @@ async function documentVersions(
       observed = await listVersions(graph, written, signal);
     }
   }, now);
-  await measureStep(result, "delete-version-document", () => deleteOwnedFolder(graph, attempt, signal), now);
+  await measureStep(result, "delete-document", () => deleteOwnedFolder(graph, attempt, signal), now);
 }
 
 /** Executes a complete document journey using shared file operations and an independent cleanup window. */
-export const sharePointDocumentProbe: ProbeHandler<"sharepoint-roundtrip" | "sharepoint-versions"> = async (probe, context) => {
+export const sharePointDocumentProbe: ProbeHandler<"sharepoint-roundtrip"> = async (probe, context) => {
   const { signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const result = context.result ?? baseResult(probe, startedAt);
@@ -92,8 +83,7 @@ export const sharePointDocumentProbe: ProbeHandler<"sharepoint-roundtrip" | "sha
       initial: documentPayload(probe, result.correlationId, 1),
       updated: documentPayload(probe, result.correlationId, 2),
     };
-    if (probe.type === "sharepoint-roundtrip") await documentRoundtrip(workflow);
-    else await documentVersions(workflow, context);
+    await documentRoundtrip(workflow, context);
     result.success = true;
     result.diagnosticContext.testStage = "complete";
   } catch (error) {

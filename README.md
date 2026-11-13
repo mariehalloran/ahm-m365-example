@@ -6,16 +6,16 @@ The health model helps administrators monitor Microsoft 365 in terms of complete
 
 ## Monitored services
 
-Each service README includes its health-model image, completed user journeys,
+Each service README includes its completed user journeys,
 design rationale, exact Graph endpoints and authentication summary. Setup and
 permission requirements are separate for each service:
 
 | Service and health model | Journeys | Authentication and setup |
 | --- | --- | --- |
-| [Exchange](./synthetic-tests/exchange/README.md) | Self-mail delivery, draft editing, attachment integrity, self-reply and private recurring calendar | [Mailbox-scoped Exchange application RBAC](./docs/exchange-permissions.md) |
+| [Exchange](./synthetic-tests/exchange/README.md) | Four journeys: draft editing and self-mail delivery, attachment integrity, self-reply, private recurring calendar | [Mailbox-scoped Exchange application RBAC](./docs/exchange-permissions.md) |
 | [Teams](./synthetic-tests/teams/README.md) | Bot channel conversation and bot-only scheduled meeting | [Managed-identity bots, team-scoped readback and calling](./docs/teams-permissions.md) |
-| [OneDrive](./synthetic-tests/onedrive/README.md) | Personal-drive roundtrip, app-folder lifecycle and document versions | [Selected-folder/AppFolder access](./docs/onedrive-permissions.md) and [folder provisioning](./docs/onedrive-setup.md) |
-| [SharePoint Online](./synthetic-tests/sharepoint/README.md) | Document-library roundtrip, document versions and list-item lifecycle | [Selected-site access and fixture setup](./docs/sharepoint-permissions.md) |
+| [OneDrive](./synthetic-tests/onedrive/README.md) | Two journeys: personal-drive roundtrip with versions, app-folder lifecycle | [Selected-folder/AppFolder access](./docs/onedrive-permissions.md) and [folder provisioning](./docs/onedrive-setup.md) |
+| [SharePoint Online](./synthetic-tests/sharepoint/README.md) | Two journeys: document-library roundtrip with versions, list-item lifecycle | [Selected-site access and fixture setup](./docs/sharepoint-permissions.md) |
 
 Exchange and OneDrive use dedicated, licensed accounts as resource owners, not
 sign-in credentials. Teams uses bot pairs and a pre-created meeting; SharePoint
@@ -107,8 +107,9 @@ and five Teams function names, interval parameters, consent and federation.
   (`true`); neither path needs Event Hubs or an intermediary ingestion Function.
 - Current service settings select 600-second journeys with a 240-second
   whole-journey deadline; these are configurable, not hardcoded limits. Root
-  latency defaults are 15/60 seconds; Teams channel conversation and its steps
-  use the configured 30/60-second [journey override](./health-model/README.md#latency-thresholds).
+  latency becomes Degraded above 15 seconds; Teams channel conversation and its steps
+  use the configured 30-second [journey override](./health-model/README.md#latency-thresholds).
+  Latency alone never becomes Unhealthy.
   Provider schedules are independent
   (currently 60 seconds). The model uses a 30-minute evaluation window.
 

@@ -3,8 +3,8 @@
 Health models are generated from root [monitoring.config.json](../monitoring.config.json)
 and its referenced service files, then deployed by `npm run deploy` from
 [synthetic-tests/](../synthetic-tests/). Each
-[service README](../synthetic-tests/README.md#services) includes its model image
-and maps the journey/business-step entities to actual API calls.
+[service README](../synthetic-tests/README.md#services) maps the journey/business-step
+entities to actual API calls.
 
 ## Model shape
 
@@ -22,7 +22,6 @@ and maps the journey/business-step entities to actual API calls.
 | Service | Scenario -> entity |
 | --- | --- |
 | Exchange | `send-receive-mail` -> `exchange-global` |
-| Exchange | `edit-reopen-draft` -> `exchange-draft` |
 | Exchange | `attachment-mail` -> `exchange-attachment` |
 | Exchange | `reply-mail` -> `exchange-reply` |
 | Exchange | `recurring-calendar` -> `exchange-recurring` |
@@ -30,14 +29,14 @@ and maps the journey/business-step entities to actual API calls.
 | Teams | `scheduled-meeting` -> `teams-call` |
 | OneDrive | `user-drive-roundtrip` -> `onedrive-planned-user-drive-roundtrip` |
 | OneDrive | `app-folder-lifecycle` -> `onedrive-planned-app-folder-lifecycle` |
-| OneDrive | `document-versions` -> `onedrive-planned-document-versions` |
 | SharePoint Online | `document-library-roundtrip` -> `sharepoint-document-roundtrip` |
-| SharePoint Online | `document-versions` -> `sharepoint-document-versions` |
 | SharePoint Online | `list-item-lifecycle` -> `sharepoint-list-item` |
 
 [catalog.ts](../synthetic-tests/utils/src/catalog.ts) is canonical; `npm run catalog:generate`
-projects it to [catalog.json](../synthetic-tests/utils/src/catalog.json) for Bicep. SharePoint adds three journeys and
-13 business-step children only when selected. The checked-in selection includes
+projects it to [catalog.json](../synthetic-tests/utils/src/catalog.json) for Bicep. SharePoint adds two journeys and
+12 business-step children only when selected. Draft editing belongs to Exchange
+send/receive; document versions belong to the OneDrive/SharePoint roundtrips.
+The checked-in selection includes
 its model, root reference and execution Function in the deployment plan. Disabling the service
 omits them.
 
@@ -58,8 +57,8 @@ rows; the `inconclusive-by-group` saved search retains their diagnostics.
 
 ## Latency thresholds
 
-Root `healthModel.latencyDegradedMilliseconds` and
-`healthModel.latencyUnhealthyMilliseconds` are the defaults. Use
+Latency alone can be Healthy or Degraded, never Unhealthy. Root
+`healthModel.latencyDegradedMilliseconds` is the default. Use
 `healthModel.journeyLatencyOverrides` to change one service/journey without
 relaxing other journeys:
 
@@ -67,8 +66,7 @@ relaxing other journeys:
 "journeyLatencyOverrides": {
   "teams": {
     "channel-conversation": {
-      "latencyDegradedMilliseconds": 30000,
-      "latencyUnhealthyMilliseconds": 60000
+      "latencyDegradedMilliseconds": 30000
     }
   }
 }
@@ -77,7 +75,9 @@ relaxing other journeys:
 An override applies to that journey's duration signals and business steps in
 both reporting modes, including any reporting-group signals. Success-rate
 thresholds, failed requests, execution deadlines and cadence are unchanged.
-Unlisted journeys retain the global 15/60-second defaults in this configuration.
+Unlisted journeys retain the global 15-second Degraded threshold in this configuration.
+The API requires an Unhealthy rule; latency uses `LessThan 0`, which cannot match
+valid nonnegative durations. Genuine failures remain eligible for Unhealthy.
 
 ## Group signals
 

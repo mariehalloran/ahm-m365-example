@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { AzureCliCredential } from "@azure/identity";
 import { BlobServiceClient } from "@azure/storage-blob";
@@ -64,7 +64,7 @@ export async function resolveFunctionEndpoint(run: DeploymentRun): Promise<strin
 /** Uploads the complete immutable root snapshot with Entra data-plane authentication, without target truncation. */
 export async function uploadConfiguration(run: DeploymentRun): Promise<void> {
   const snapshot = runtimeConfiguration(run);
-  const credential = new AzureCliCredential({ tenantId: run.prepared.settings.azureTenantId });
+  const credential = new AzureCliCredential({ subscription: run.prepared.document.healthModel.subscriptionId });
   const blob = new BlobServiceClient(
     `https://${run.prepared.settings.configurationStorageAccount}.blob.core.windows.net`, credential,
   ).getContainerClient("configuration").getBlockBlobClient(`${snapshot.sha256}.json`);
@@ -85,7 +85,57 @@ export async function uploadConfiguration(run: DeploymentRun): Promise<void> {
   }
 }
 
-/** Packages and deploys execution Functions through Entra-authenticated Azure CLI, with basic publishing disabled. */
+/** Uses the configured operator account for Flex publishing; the CLI SCM helper uses its global default account. */
+async function publishFunctionZip(run: DeploymentRun, appName: string, archive: string): Promise<void> {
+  const hostnames = z.array(z.string()).parse(await azJson<unknown>(run, "execution-publishing-host", [
+    "functionapp", "show", "--resource-group", run.prepared.document.healthModel.resourceGroup,
+    "--name", appName, ...run.subscription, "--query", "properties.enabledHostNames",
+  ]));
+  const hosts = hostnames.filter(host => /^[a-zA-Z0-9.-]+\.azurewebsites\.net$/.test(host) && host.includes(".scm."));
+  if (hosts.length !== 1) throw new ConfigurationError("Function app must expose exactly one trusted publishing hostname");
+  const base = `https://${hosts[0]}`;
+  const token = await new AzureCliCredential({ subscription: run.prepared.document.healthModel.subscriptionId })
+    .getToken("https://management.azure.com/.default", { abortSignal: run.signal });
+  if (!token) throw new ConfigurationError("The configured operator could not obtain a Function publishing token");
+  const signal = AbortSignal.any([run.signal, AbortSignal.timeout(run.prepared.settings.commandTimeoutSeconds * 1000)]);
+  const headers = { Authorization: `Bearer ${token.token}` };
+  const statusSchema = z.object({ id: z.string().min(1), status: z.number().int() });
+  const readStatus = async () => {
+    const response = await fetch(`${base}/api/deployments/latest`, { headers, signal, redirect: "error" });
+    if (response.status === 404) { await response.body?.cancel(); return undefined; }
+    if ([429, 502, 503, 504].includes(response.status)) {
+      await response.body?.cancel();
+      run.emit({ event: "function-publishing-status-unavailable", appName, httpStatus: response.status });
+      return undefined;
+    }
+    if (!response.ok) throw new ConfigurationError(`Function publishing status failed with HTTP ${response.status}`);
+    return statusSchema.parse(await response.json());
+  };
+  run.phase = "deploy-execution-functions";
+  run.emit({ event: "monitoring-deployment-phase", phase: run.phase, appName });
+  const previous = await readStatus();
+  const response = await fetch(`${base}/api/publish?RemoteBuild=false&Deployer=monitoring`, {
+    method: "POST", headers: { ...headers, "Content-Type": "application/zip", "Cache-Control": "no-cache" },
+    body: new Uint8Array(await readFile(archive)), signal, redirect: "error",
+  });
+  await response.body?.cancel();
+  if (response.status !== 202) throw new ConfigurationError(`Function package publication failed with HTTP ${response.status}`);
+  const deadline = run.now() + run.prepared.settings.rolloutTimeoutSeconds * 1000;
+  while (run.now() < deadline) {
+    const deployment = await readStatus();
+    if (deployment && deployment.id !== previous?.id) {
+      if (deployment.status === 3) throw new ConfigurationError("Function package publication reached Failed status");
+      if (deployment.status === 4) {
+        run.emit({ event: "function-package-published", appName, deploymentId: deployment.id });
+        return;
+      }
+    }
+    await run.sleep(Math.min(5000, deadline - run.now()));
+  }
+  throw new ConfigurationError("Function package publication did not complete within the configured rollout budget");
+}
+
+/** Packages and deploys execution Functions through the Entra-authenticated Flex API, with basic publishing disabled. */
 export async function deployExecutionFunctions(run: DeploymentRun): Promise<void> {
   await execute(run, "npm", "build-execution-functions", ["run", "build"]);
   const directory = join(nodeProjectDirectory, ".function-package", run.runId);
@@ -96,12 +146,7 @@ export async function deployExecutionFunctions(run: DeploymentRun): Promise<void
     await makePackageReadable(directory);
     await execute(run, "zip", "archive-execution-functions", ["-q", "-r", archive, "."], directory);
     const appNames = [...Object.values(executionServiceAppNames(run)), `${run.prepared.settings.functions.appName.slice(0, 54)}-watch`];
-    for (const appName of appNames) await az(run, "deploy-execution-functions", [
-        "functionapp", "deployment", "source", "config-zip",
-        "--resource-group", run.prepared.document.healthModel.resourceGroup, "--name", appName,
-        ...run.subscription, "--src", archive, "--build-remote", "false",
-        "--timeout", String(run.prepared.settings.commandTimeoutSeconds), "--output", "none",
-      ]);
+    for (const appName of appNames) await publishFunctionZip(run, appName, archive);
     await verifyExecutionFunctions(run, archive);
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
@@ -129,12 +174,7 @@ async function verifyExecutionFunctions(run: DeploymentRun, archive: string): Pr
     let indexed = await waitForIndexedFunctions("verify-indexed-execution-functions", appName,
       run.now() + run.prepared.settings.rolloutTimeoutSeconds * 1000);
     if (!indexed) {
-      await az(run, "redeploy-unindexed-execution-functions", [
-        "functionapp", "deployment", "source", "config-zip",
-        "--resource-group", healthModel.resourceGroup, "--name", appName,
-        ...run.subscription, "--src", archive, "--build-remote", "false",
-        "--timeout", String(run.prepared.settings.commandTimeoutSeconds), "--output", "none",
-      ]);
+      await publishFunctionZip(run, appName, archive);
       indexed = await waitForIndexedFunctions("verify-indexed-execution-functions-retry", appName,
         run.now() + run.prepared.settings.rolloutTimeoutSeconds * 1000);
     }
@@ -179,7 +219,7 @@ async function verifyExecutionFunctions(run: DeploymentRun, archive: string): Pr
 /** Reads the independently persisted execution journal using the operator's data-plane role. */
 function executionContainer(run: DeploymentRun) {
   return new BlobServiceClient(`https://${run.prepared.settings.functions.storageAccount}.blob.core.windows.net`,
-    new AzureCliCredential({ tenantId: run.prepared.settings.azureTenantId })).getContainerClient("execution-state");
+    new AzureCliCredential({ subscription: run.prepared.document.healthModel.subscriptionId })).getContainerClient("execution-state");
 }
 
 /** Fences unclaimed starts after pausing dispatch, then waits for executing mutations to settle. */
@@ -334,7 +374,7 @@ export async function verifyDirectReports(run: DeploymentRun, since: number): Pr
           group: group.id, attempts: selected.filter(probe => group.targetIds.includes(probe.id)).length,
         })),
       ].filter(scope => scope.attempts > 0)) {
-        for (const metric of ["observed-success-percentage", "observed-mean-duration"]) {
+        for (const metric of ["observed-success-percentage", "observed-mean-duration", "observed-graph-server-error-count"]) {
           const signal = scope.group ? groupSignalName(scope.group, owner.tenant, metric)
             : owner.project.multiTenant ? tenantSignalName(owner.tenant, metric) : metric;
           expected.set(`${owner.type}/${probeServices[type].entityName}/${signal}`, scope.attempts);

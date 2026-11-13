@@ -11,22 +11,14 @@ const exchangeCalendarGroup = { entityName: "exchange-calendar", displayName: "C
 export const journeyCatalog = {
   "exchange-mail-flow": {
     service: "exchange", journey: "send-receive-mail", entityName: "exchange-global",
-    displayName: "Send email to self and verify Inbox receipt", group: exchangeMailGroup,
+    displayName: "Save, edit, reopen and send email to self", group: exchangeMailGroup,
     steps: {
       "create-draft": { displayName: "Create email" },
-      send: { displayName: "Send email" },
-      "confirm-delivery": { displayName: "Confirm receipt in own Inbox" },
-    },
-  },
-  "exchange-draft": {
-    service: "exchange", journey: "edit-reopen-draft", entityName: "exchange-draft",
-    displayName: "Save, edit and reopen draft", group: exchangeMailGroup,
-    steps: {
-      "create-draft": { displayName: "Create draft" },
       "read-initial-draft": { displayName: "Read saved draft" },
       "update-draft": { displayName: "Edit draft" },
       "read-draft": { displayName: "Reopen and verify draft" },
-      "delete-draft": { displayName: "Delete draft" },
+      send: { displayName: "Send email" },
+      "confirm-delivery": { displayName: "Confirm receipt in own Inbox" },
     },
   },
   "exchange-attachment": {
@@ -79,11 +71,15 @@ export const journeyCatalog = {
   },
   "onedrive-roundtrip": {
     service: "onedrive", journey: "user-drive-roundtrip", entityName: "onedrive-planned-user-drive-roundtrip",
-    displayName: "Create, reopen, verify and delete user-drive file",
+    displayName: "Create, verify, version and delete user-drive file",
     steps: {
       "create-folder-file": { entityName: "step-1", displayName: "Create owned folder and file in selected folder" },
       "reopen-file": { entityName: "step-2", displayName: "Enumerate and download owned file" },
       "verify-file-hash": { entityName: "step-3", displayName: "Verify exact content hash" },
+      "update-document": { displayName: "Update the document and verify current bytes" },
+      "list-versions": { displayName: "Enumerate actual document version history" },
+      "read-prior-version": { displayName: "Download prior version and verify bytes" },
+      "restore-version": { displayName: "Optional: restore prior bytes and verify" },
       "delete-owned-artifacts": { entityName: "step-4", displayName: "Delete owned artifacts and verify removal" },
     },
   },
@@ -97,34 +93,17 @@ export const journeyCatalog = {
       "delete-app-scratch": { entityName: "step-4", displayName: "Delete cycle-owned folder and verify removal" },
     },
   },
-  "onedrive-versions": {
-    service: "onedrive", journey: "document-versions", entityName: "onedrive-planned-document-versions",
-    displayName: "Update document and retrieve prior version",
-    steps: {
-      "update-document": { entityName: "step-1", displayName: "Write and verify two document revisions" },
-      "list-versions": { entityName: "step-2", displayName: "Enumerate actual document version history" },
-      "read-prior-version": { entityName: "step-3", displayName: "Download prior version and verify bytes" },
-      "restore-version": { entityName: "step-4", displayName: "Optional: restore downloaded prior bytes and verify" },
-    },
-  },
   "sharepoint-roundtrip": {
     service: "sharepoint", journey: "document-library-roundtrip", entityName: "sharepoint-document-roundtrip",
-    displayName: "Upload, reopen, verify and delete library document",
+    displayName: "Upload, verify, version and delete library document",
     steps: {
       "upload-document": { displayName: "Create owned folder and upload document" },
       "reopen-document": { displayName: "Enumerate and download saved document" },
       "verify-document-content": { displayName: "Verify exact document bytes" },
-      "delete-document": { displayName: "Delete owned artifacts and verify removal" },
-    },
-  },
-  "sharepoint-versions": {
-    service: "sharepoint", journey: "document-versions", entityName: "sharepoint-document-versions",
-    displayName: "Update library document and retrieve prior version",
-    steps: {
-      "write-document-revisions": { displayName: "Write and verify two document revisions" },
+      "write-document-revisions": { displayName: "Update the document and verify current bytes" },
       "list-document-versions": { displayName: "Enumerate persisted version history" },
       "read-prior-document-version": { displayName: "Download and verify prior-version bytes" },
-      "delete-version-document": { displayName: "Delete owned artifacts and verify removal" },
+      "delete-document": { displayName: "Delete owned artifacts and verify removal" },
     },
   },
   "sharepoint-list-item": {

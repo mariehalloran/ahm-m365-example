@@ -7,9 +7,11 @@ $script:GraphDeadline = [DateTimeOffset]::UtcNow.AddSeconds(1)
 # Uses the selected job identity; no Azure CLI, certificate, secret or delegated credential fallback exists.
 function Get-JobGraphToken {
     if (-not $script:JobToken -or $script:JobToken.ExpiresOn -le [DateTimeOffset]::UtcNow.AddMinutes(2)) {
-        $script:JobToken = $script:JobAzureContext
-            ? (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com/' -DefaultProfile $script:JobAzureContext -ErrorAction Stop)
-            : (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com/' -ErrorAction Stop)
+        if ($script:JobAzureContext) {
+            $script:JobToken = Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com/' -DefaultProfile $script:JobAzureContext -ErrorAction Stop
+        } else {
+            $script:JobToken = Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com/' -ErrorAction Stop
+        }
     }
     ConvertFrom-SecureString $script:JobToken.Token -AsPlainText
 }

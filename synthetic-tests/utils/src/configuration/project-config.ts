@@ -41,7 +41,6 @@ const actionGroupResourceId = z.string().trim().regex(
 );
 const latencyThresholdSchema = z.object({
   latencyDegradedMilliseconds: z.number().int().nonnegative(),
-  latencyUnhealthyMilliseconds: z.number().int().nonnegative(),
 }).strict();
 const healthModelSchema = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{1,31}[a-zA-Z0-9]$/),
@@ -196,9 +195,8 @@ function runtimeServices(services: TenantInventory["services"]): ProjectServices
 }
 
 function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
-  if (policy.successUnhealthyPercent > policy.successDegradedPercent ||
-      policy.latencyUnhealthyMilliseconds < policy.latencyDegradedMilliseconds) {
-    throw new ConfigurationError("Health thresholds must order Degraded before Unhealthy");
+  if (policy.successUnhealthyPercent > policy.successDegradedPercent) {
+    throw new ConfigurationError("Success thresholds must order Degraded before Unhealthy");
   }
   if (new Set(policy.alertActionGroupIds.map(id => id.toLowerCase())).size !== policy.alertActionGroupIds.length) {
     throw new ConfigurationError("healthModel.alertActionGroupIds must contain unique action group resource IDs (case-insensitive)");
@@ -206,11 +204,8 @@ function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
   for (const [service, overrides] of Object.entries(policy.journeyLatencyOverrides)) {
     const journeys = new Set<string>(Object.values(probeServices)
       .filter(definition => definition.service === service).map(definition => definition.journey));
-    for (const [journey, thresholds] of Object.entries(overrides)) {
+    for (const journey of Object.keys(overrides)) {
       if (!journeys.has(journey)) throw new ConfigurationError(`Unknown latency override journey '${service}/${journey}'`);
-      if (thresholds.latencyUnhealthyMilliseconds < thresholds.latencyDegradedMilliseconds) {
-        throw new ConfigurationError(`Latency thresholds for '${service}/${journey}' must order Degraded before Unhealthy`);
-      }
     }
   }
 }

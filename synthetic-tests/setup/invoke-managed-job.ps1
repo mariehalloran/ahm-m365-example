@@ -6,7 +6,7 @@ function Invoke-MonitoringManagedJob($Project, $Tenant, [string]$IdentityResourc
     $subscription = $document.healthModel.subscriptionId
     $resourceGroup = $document.healthModel.resourceGroup
     $storage = $document.deployment.configurationStorageAccount
-    $identity = az identity show --ids $IdentityResourceId --only-show-errors -o json | ConvertFrom-Json
+    $identity = az identity show --ids $IdentityResourceId --subscription $subscription --only-show-errors -o json | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or -not $identity.clientId) { throw 'The explicitly selected setup/job identity could not be resolved.' }
     if ($identity.tenantId -ine $Tenant.tenantId) { throw 'This one-off operation requires a tenant-local managed identity.' }
     $environment = $document.deployment.foundation.environment ?? $document.deployment.foundation.environmentResourceId
@@ -47,7 +47,7 @@ function Invoke-MonitoringManagedJob($Project, $Tenant, [string]$IdentityResourc
         foreach ($entry in $files.GetEnumerator()) {
             $blob = "oneoff/$run/$($entry.Key)"
             az storage blob upload --account-name $storage --container-name configuration --name $blob --file $entry.Value `
-                --auth-mode login --overwrite false --only-show-errors -o none
+                --subscription $subscription --auth-mode login --overwrite false --only-show-errors -o none
             if ($LASTEXITCODE -ne 0) { throw 'Cannot upload one-off input; deploy the configuration foundation and verify its data-plane role first.' }
             $uploaded.Add($blob)
         }
@@ -131,7 +131,7 @@ exit $status
         } while ($true)
         $output = Join-Path $directory 'result.json'
         az storage blob download --account-name $storage --container-name configuration --name "oneoff/$run/result.json" `
-            --file $output --auth-mode login --overwrite true --only-show-errors -o none
+            --subscription $subscription --file $output --auth-mode login --overwrite true --only-show-errors -o none
         if ($LASTEXITCODE -ne 0) { throw "Setup did not produce its required durable result. Inspect the protected job definition in $directory." }
         $uploaded.Add("oneoff/$run/result.json")
         if (-not $IsWindows) { chmod 600 $output }
@@ -149,7 +149,7 @@ exit $status
         }
         foreach ($blob in $uploaded) {
             try {
-                az storage blob delete --account-name $storage --container-name configuration --name $blob --auth-mode login --only-show-errors -o none
+                az storage blob delete --account-name $storage --container-name configuration --name $blob --subscription $subscription --auth-mode login --only-show-errors -o none
                 if ($LASTEXITCODE -ne 0) { throw 'A generated one-off input/output Blob could not be deleted.' }
             } catch { $cleanup.Add($_.Exception) }
         }

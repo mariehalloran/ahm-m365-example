@@ -56,7 +56,7 @@ function validateHostedAccess(owner: ExecutionOwner): void {
     throw new ConfigurationError("SELF-REPLY requires retained self-addressed fixture bindings for every mailbox; run npm run setup:reply-seeds");
   }
   if (service.type === "onedrive" &&
-      (project.services.onedrive.scenarios["user-drive-roundtrip"] || project.services.onedrive.scenarios["document-versions"]) &&
+      project.services.onedrive.scenarios["user-drive-roundtrip"] &&
       project.services.onedrive.targets.some(target => !target.driveId || !target.folderId)) {
     throw new ConfigurationError("Selected OneDrive folders require generated drive/folder bindings; run npm run onedrive:setup");
   }
@@ -64,7 +64,7 @@ function validateHostedAccess(owner: ExecutionOwner): void {
     throw new ConfigurationError("Every selected Teams bot pair requires its generated managed-identity client IDs; run npm run setup:ids");
   }
   if (service.type === "sharepoint" && service.targets.some(target => !target.siteId ||
-      ((project.services.sharepoint.scenarios["document-library-roundtrip"] || project.services.sharepoint.scenarios["document-versions"]) &&
+      (project.services.sharepoint.scenarios["document-library-roundtrip"] &&
         (!target.driveId || !target.folderId)) || (project.services.sharepoint.scenarios["list-item-lifecycle"] && !target.listId))) {
     throw new ConfigurationError("SharePoint requires discovered selected-site/library/folder/list IDs; run npm run setup:ids -- -SharePointOnly");
   }

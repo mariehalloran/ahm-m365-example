@@ -46,7 +46,7 @@ folder grants are separate.
 
 | Worker Graph application permission | Selected journey and resource grant |
 | --- | --- |
-| `Files.SelectedOperations.Selected` | `user-drive-roundtrip` and `document-versions`: an explicit application `write` grant on each dedicated test folder |
+| `Files.SelectedOperations.Selected` | `user-drive-roundtrip`, including version checks: an explicit application `write` grant on each dedicated test folder |
 | `Files.ReadWrite.AppFolder` | Only `app-folder-lifecycle`: the application's special app folder in the selected user's drive |
 
 Selected permission consent **alone** grants no folder access: the separate folder
@@ -94,7 +94,7 @@ consent or silently skip failed accounts.
 ## Implemented Graph endpoints
 
 The [OneDrive README](../synthetic-tests/onedrive/README.md#graph-endpoints)
-lists exact runtime Graph v1.0 paths and maps them to the three journeys.
+lists exact runtime Graph v1.0 paths and maps them to the two journeys.
 
 When `restoreVersion` is enabled, the journey rewrites verified prior-version bytes
 through the current-content `PUT`; it does not call a server-side version-restore API.
@@ -113,9 +113,9 @@ requires an Azure host with the selected identity attached and the
 permissions are [separate](./deployment.md#identity-and-permissions).
 
 The current service config selects a **240-second complete-journey deadline**;
-root latency thresholds remain **15 seconds Degraded / 60 seconds Unhealthy**,
+latency above **15 seconds is Degraded only**,
 with separately bounded cleanup.
-All selected OneDrive lanes currently run every **300 seconds**; cadence and
+All selected OneDrive lanes currently run every **600 seconds**; cadence and
 budgets come from `config.execution`, not hardcoded runtime limits.
 Provider schedules remain independent. Worker cancellation and cleanup-only outcomes are
 Unknown without numeric samples; genuine service failures/deadline expiry remain

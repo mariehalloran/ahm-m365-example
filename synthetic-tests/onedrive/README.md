@@ -6,8 +6,6 @@ retrieved?** They use real personal OneDrive for Business drives through
 Microsoft Graph v1.0. Shared site libraries/lists use the separate
 [SharePoint service](../sharepoint/README.md).
 
-![OneDrive health model: personal-drive roundtrip, app-folder lifecycle and document-version business steps with separate Service Health context](../../docs/images/onedrive-health-model.png)
-
 Each journey rolls up its business-step measurements. **Service Health** is
 separate supporting context. Exchange/OneDrive reporting groups aggregate
 configured users' measurements without creating a health-model entity per user.
@@ -16,11 +14,14 @@ configured users' measurements without creating a health-model entity per user.
 
 | Scenario | Completed journey | Why this check |
 | --- | --- | --- |
-| `user-drive-roundtrip` | Create a scratch folder/file beneath the approved folder, enumerate/download, verify exact content hash, delete and verify absence | Proves durable content and cleanup, not just upload acceptance; selected-folder grants limit normal access |
+| `user-drive-roundtrip` | Create a scratch folder/file beneath the approved folder, enumerate/reopen and hash-verify, update/read the same file, list history, verify earlier bytes, optionally rewrite/verify those bytes, then delete and verify absence | Proves current and prior content persistence, not just upload acceptance or version metadata; selected-folder grants limit normal access |
 | `app-folder-lifecycle` | Resolve the app folder, write/read data, update/reread, delete the cycle-owned folder and verify removal | Exercises the separate application-data permission and persistence path |
-| `document-versions` | Write/verify two revisions, enumerate actual history and download/verify prior bytes | Proves prior content exists and is retrievable, not just that version metadata was returned |
 
-When `restoreVersion` is true, the last journey also writes the verified older
+Both journeys run concurrently; Graph requests within each journey remain
+sequential, including polling, retries and cleanup. Deletion is the last action
+after all content/version checks.
+
+When `restoreVersion` is true, the user-drive roundtrip also writes the verified older
 bytes back as current content and verifies them. This is a new content write,
 **not** the server-side version-restore API. Scratch folders have per-attempt
 ownership markers; cleanup never deletes the configured parent folder.
@@ -55,7 +56,7 @@ their passwords and refresh tokens are not runtime credentials.
 
 | Identity | Authorization |
 | --- | --- |
-| OneDrive execution UAMI | `Files.SelectedOperations.Selected` **plus** an explicit `write` grant on each dedicated folder for roundtrip/version journeys |
+| OneDrive execution UAMI | `Files.SelectedOperations.Selected` **plus** an explicit `write` grant on each dedicated folder for the roundtrip journey |
 | Same UAMI, when app-folder journey is selected | Separately approved `Files.ReadWrite.AppFolder`; this is not constrained by the selected-folder grants |
 | Separate one-off setup UAMI | Just-in-time `Files.ReadWrite.All` for provisioning; revoked after the tracked job |
 

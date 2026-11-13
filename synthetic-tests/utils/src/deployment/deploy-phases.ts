@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { AzureCliCredential } from "@azure/identity";
 import { ConfigurationError } from "../configuration/config.js";
 import { readBindingsText } from "../configuration/bindings.js";
 import { readProjectDocument } from "../configuration/project-config.js";
@@ -11,6 +12,7 @@ import type { DeploymentCommand, DeploymentCommandRunner } from "./deploy.js";
 import { detectLegacyResources } from "./legacy-resources.js";
 import { serviceProbes } from "../configuration/service-config.js";
 import { probeServices } from "../contracts.js";
+import { GraphClient } from "../integrations/graph.js";
 import { laneFreshnessSeconds } from "../../../functions/src/dispatch.js";
 
 export interface DeploymentRun {
@@ -136,24 +138,33 @@ export async function preflight(run: DeploymentRun): Promise<void> {
     throw new ConfigurationError("Azure account does not match the root subscription and Azure tenant");
   }
   const token = await azJson<{ accessToken: string }>(run, "deployment-identity", [
-    "account", "get-access-token", "--resource", "https://management.azure.com/", "--tenant", settings.azureTenantId,
+    "account", "get-access-token", "--resource", "https://management.azure.com/", ...run.subscription,
   ]);
   const claims = z.object({ oid: z.string().uuid(), tid: z.string().uuid(), idtyp: z.string().optional() })
     .parse(JSON.parse(Buffer.from(token.accessToken.split(".")[1]!, "base64url").toString("utf8")));
   if (claims.tid.toLowerCase() !== settings.azureTenantId.toLowerCase()) throw new ConfigurationError("Deployment token tenant mismatch");
   run.deploymentPrincipalId = claims.oid;
   run.deploymentPrincipalType = claims.idtyp === "app" ? "ServicePrincipal" : "User";
-  const app = await azJson<{ signInAudience: string; api: { requestedAccessTokenVersion: number } }>(run, "function-api-binding", [
-    "ad", "app", "show", "--id", settings.functions.apiClientId,
-    "--query", "{signInAudience:signInAudience,api:api}",
-  ]);
+  // A tenant can contain several signed-in accounts; bind operator reads to the configured subscription.
+  const graph = new GraphClient(new AzureCliCredential({ subscription: document.healthModel.subscriptionId }));
+  const signal = AbortSignal.any([run.signal, AbortSignal.timeout(settings.commandTimeoutSeconds * 1000)]);
+  run.phase = "function-api-binding";
+  run.emit({ event: "monitoring-deployment-phase", phase: run.phase });
+  const app = await graph.json(
+    `/applications(appId='${settings.functions.apiClientId}')?$select=signInAudience,api`,
+    z.object({ signInAudience: z.string(), api: z.object({ requestedAccessTokenVersion: z.number().int().nullable() }) }),
+    signal,
+  );
   if (app.signInAudience !== "AzureADMyOrg" || app.api.requestedAccessTokenVersion !== 2) {
     throw new ConfigurationError("Function API registration must be single-tenant with v2 application tokens for its client-ID audience");
   }
-  const assignmentRequired = await azJson<boolean>(run, "function-api-enterprise-application", [
-    "ad", "sp", "show", "--id", settings.functions.apiClientId, "--query", "appRoleAssignmentRequired",
-  ]);
-  if (assignmentRequired) throw new ConfigurationError("The explicitly selected Function API enterprise application must allow roleless application tokens; the Function enforces its single caller ACL");
+  run.phase = "function-api-enterprise-application";
+  run.emit({ event: "monitoring-deployment-phase", phase: run.phase });
+  const principal = await graph.json(
+    `/servicePrincipals(appId='${settings.functions.apiClientId}')?$select=appRoleAssignmentRequired`,
+    z.object({ appRoleAssignmentRequired: z.boolean() }), signal,
+  );
+  if (principal.appRoleAssignmentRequired) throw new ConfigurationError("The explicitly selected Function API enterprise application must allow roleless application tokens; the Function enforces its single caller ACL");
   await detectLegacyResources(run);
   const coordinatorId = settings.coordinator.identityResourceId ??
     `/subscriptions/${document.healthModel.subscriptionId}/resourceGroups/${document.healthModel.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${settings.coordinator.identityName}`;

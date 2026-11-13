@@ -43,6 +43,29 @@ Console results use `outcome: "unknown"` and `success: null`; observations retai
 `value: null` and `dimensions.outcome: "unknown"`. Direct Unknown reports omit
 `value` and evaluation rules. `minimumSamples` counts only conclusive evidence.
 
+### HTTP diagnostics
+
+Executed steps carry their own `httpStatus`, independent of later journey errors.
+Graph response headers are observed before body parsing, retries or request-permit
+cleanup. Each received 500–599 increments `observedGraphServerErrorCount` on its
+step and journey, even when a read retry succeeds. Completed business actions
+remain recorded as completed; their health sample and the attempt are failures
+when they observed a Graph 5xx. Other successful steps are not relabelled.
+
+`observed-graph-server-error-count` is published on existing journey/step entities
+and journey reporting groups. Any positive count is Unhealthy, including below
+`minimumSamples`; zero requires enough conclusive samples, otherwise it is
+Unknown. Native queries deduplicate observations before aggregation. Legacy
+HTTP 500–599 is a fallback only when the explicit count is absent; explicit zero
+wins. Cancellation and cleanup-only interruptions without Graph 5xx remain
+Unknown. `diagnosticContext.interruptionCategory` retains an interruption when
+observed Graph failure takes precedence.
+
+Diagnostics retain the first 5xx status and, when available, validated
+`serviceErrorCode`, `requestId` and `retryAfter`. Only bounded error codes/request
+IDs are read from error bodies; response messages, resource content, arbitrary
+headers and credentials are not logged.
+
 ## Optional provider collectors
 
 Stable Service Health and Message Center use the independently approved provider

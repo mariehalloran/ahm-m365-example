@@ -1,5 +1,5 @@
 import {
-  probeServices, reportedResult, resultSchema, type SyntheticResult,
+  observedGraphServerErrors, probeServices, reportedResult, resultSchema, type SyntheticResult,
 } from "../contracts.js";
 import { groupSignalName, tenantSignalName } from "../configuration/groups.js";
 import {
@@ -22,6 +22,7 @@ export const teamsCallSignals = [
   "observed-call-disconnection-success-percentage", "observed-call-mean-disconnection-duration",
 ] as const;
 const journeySignals = ["observed-success-percentage", "observed-mean-duration"] as const;
+export const graphServerErrorSignal = "observed-graph-server-error-count";
 
 interface EntitySamples {
   entityName: string;
@@ -51,7 +52,7 @@ function collectEntitySamples(results: SyntheticResult[], level: "journey" | "al
   return [...entities.values()];
 }
 
-/** Evaluates only conclusive samples; insufficient evidence explicitly replaces the signal with Unknown. */
+/** Evaluates conclusive samples; a real Graph 5xx overrides the minimum only for its error-count signal. */
 function measurementReports(
   project: ProjectConfig, service: ServiceConfig["type"], cycle: DirectReportCycle, entity: EntitySamples,
   signals: readonly [string, string], group?: ReportingGroup,
@@ -60,9 +61,11 @@ function measurementReports(
   if (!samples.length) return [];
   const policy = project.healthModel;
   const latency = journeyLatencyThresholds(policy, service, entity.journey);
-  const conclusive = samples.filter(sample => sample.success !== null);
+  const graphServerErrors = samples.reduce((sum, sample) => sum + observedGraphServerErrors(sample), 0);
+  const conclusive = samples.filter(sample => sample.success !== null || observedGraphServerErrors(sample) > 0);
   const available = conclusive.length >= policy.minimumSamples;
-  const succeeded = conclusive.filter(sample => sample.success).length;
+  const succeeded = conclusive.filter(sample => sample.success && observedGraphServerErrors(sample) === 0).length;
+  const serverError = samples.find(sample => observedGraphServerErrors(sample) > 0);
   const observedAt = samples.reduce((latest, sample) =>
     Date.parse(sample.observedAt) > Date.parse(latest.observedAt) ? sample : latest).observedAt;
   const context = {
@@ -72,6 +75,11 @@ function measurementReports(
     tenantAlias: project.tenant.id, journey: entity.journey, kind: entity.kind, step: entity.step,
     groupId: group?.id ?? "", samples: conclusive.length, attempts: samples.length,
     inconclusive: samples.length - conclusive.length, minimumSamples: policy.minimumSamples, succeeded, observedAt,
+    observedGraphServerErrorCount: graphServerErrors,
+    ...(serverError?.httpStatus === undefined ? {} : { httpStatus: serverError.httpStatus }),
+    ...(serverError?.serviceErrorCode ? { serviceErrorCode: serverError.serviceErrorCode } : {}),
+    ...(serverError?.requestId ? { requestId: serverError.requestId } : {}),
+    ...(serverError?.retryAfter ? { retryAfter: serverError.retryAfter } : {}),
     diagnosticCategories: [...new Set(samples.flatMap(sample => [
       ...(sample.diagnosticCategory ? [sample.diagnosticCategory] : []),
       ...(sample.cleanupFailed ? ["cleanup-failure"] : []),
@@ -91,10 +99,20 @@ function measurementReports(
       value: available ? conclusive.reduce((sum, sample) => sum + sample.durationMs, 0) / conclusive.length : undefined,
       rules: {
         degradedRule: { operator: "GreaterThan", threshold: latency.latencyDegradedMilliseconds },
-        unhealthyRule: { operator: "GreaterThan", threshold: latency.latencyUnhealthyMilliseconds },
+        // The API requires this rule; valid nonnegative durations can never breach it.
+        unhealthyRule: { operator: "LessThan", threshold: 0 },
       },
     },
   ];
+  if (entity.kind !== "call-phase") {
+    measurements.push({
+      signalName: graphServerErrorSignal, unit: "Count", value: available || graphServerErrors > 0 ? graphServerErrors : undefined,
+      rules: {
+        degradedRule: { operator: "GreaterThan", threshold: 0 },
+        unhealthyRule: { operator: "GreaterThan", threshold: 0 },
+      },
+    });
+  }
   return measurements.map(measurement => ({
     entityName,
     body: {

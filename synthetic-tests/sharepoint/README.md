@@ -5,8 +5,6 @@ document, retrieve its previous revision and maintain a list item?** The service
 uses real approved SharePoint Online sites through Microsoft Graph v1.0,
 independently of personal [OneDrive](../onedrive/README.md).
 
-![SharePoint health model: library roundtrip, document versions and list-item business steps with separate Service Health context](../../docs/images/sharepoint-health-model.png)
-
 Each journey has business-step children so a library read, version retrieval
 or list update can be distinguished. The suppressed **Service Health** branch
 adds Microsoft-reported context without changing the Experience rollup.
@@ -15,9 +13,12 @@ adds Microsoft-reported context without changing the Experience rollup.
 
 | Scenario | Completed journey | Why this check |
 | --- | --- | --- |
-| `document-library-roundtrip` | Create scratch folder/document, enumerate/download, verify exact bytes, delete and verify absence | Confirms content persistence, not just a successful upload status |
-| `document-versions` | Write/verify two revisions, enumerate history, download/verify the prior revision and clean up | Confirms actual older bytes are retrievable, not merely a version count |
+| `document-library-roundtrip` | Create scratch folder/document, enumerate/reopen and verify exact bytes, update/read the same document, list history and verify prior bytes, then delete and verify absence | Confirms current and prior content persistence, not just upload acceptance or a version count |
 | `list-item-lifecycle` | Create an item, read its Title, update, reopen/verify, delete and confirm absence | Separately exercises structured list persistence and updates |
+
+Both journeys run concurrently; Graph requests within each journey remain
+sequential, including polling, retries and cleanup. Document deletion follows
+all content/version checks.
 
 Dedicated fixtures keep synthetic writes away from business documents. Site,
 library and list bindings are checked before mutation; per-attempt correlation,
@@ -110,7 +111,7 @@ selected identity attached and `ENABLE_LIVE_M365=true`, run:
 npm run sharepoint -- --tenant <alias> --once
 ```
 
-Current `config.execution` selects independent document/version/list lanes at
+Current `config.execution` selects independent document/list lanes at
 300 seconds with 240-second whole-journey deadlines and separate cleanup/report
 budgets; root latency thresholds remain 15/60 seconds. Genuine failures/deadline
 expiry are failures. Worker cancellations and cleanup-only failures are Unknown

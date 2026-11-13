@@ -27,7 +27,7 @@ function draftPath(attempt: MailAttempt, draftId: string): string {
  * Formats the expected body text written when updating a synthetic draft message.
  */
 export function editedDraftContent(attempt: MailAttempt): string {
-  return `Edited synthetic draft ${attempt.correlationId}. Safe to delete.`;
+  return `${mailMarker(attempt)}. Edited synthetic draft. Safe to delete.`;
 }
 
 /**
@@ -88,17 +88,4 @@ export async function readDraft(
   if (!hasMatchingId || !hasMatchingSubject || !draft.isDraft || !hasMatchingBody) {
     throw new IntegrationError("read-failure");
   }
-}
-
-/**
- * Deletes the synthetic draft message from Exchange and removes its ID from the owned set.
- */
-export async function deleteDraft(
-  graph: GraphOperations,
-  attempt: MailAttempt,
-  draftId: string,
-  signal: AbortSignal,
-): Promise<void> {
-  await graph.request(draftPath(attempt, draftId), signal, "DELETE");
-  attempt.ownedMessageIds.delete(draftId);
 }

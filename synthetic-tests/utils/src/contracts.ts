@@ -39,14 +39,36 @@ export function isReportedStep(name: StepName): name is ReportedStepName {
   return name !== "authenticate" && name !== "cleanup";
 }
 export const maxStepDetailLength = 200;
+const httpStatusSchema = z.number().int().min(100).max(599);
+const httpMetadata = {
+  serviceErrorCode: z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/).optional(),
+  requestId: z.string().uuid().optional(),
+  retryAfter: z.string().max(128).optional(),
+};
+export const httpResponseDiagnosticsSchema = z.object({
+  httpStatus: httpStatusSchema, ...httpMetadata,
+}).strict();
+export type HttpResponseDiagnostics = z.infer<typeof httpResponseDiagnosticsSchema>;
+const httpEvidence = {
+  httpStatus: httpStatusSchema.optional(), ...httpMetadata,
+  observedGraphServerErrorCount: z.number().int().nonnegative().optional(),
+};
+
+/** Uses legacy status evidence only when an explicit Graph error count is absent. */
+export function observedGraphServerErrors(evidence: { observedGraphServerErrorCount?: number | undefined; httpStatus?: number | undefined }): number {
+  return evidence.observedGraphServerErrorCount
+    ?? (evidence.httpStatus !== undefined && evidence.httpStatus >= 500 && evidence.httpStatus <= 599 ? 1 : 0);
+}
+
 export const stepResultSchema = z.discriminatedUnion("status", [
   z.object({
     name: z.enum(stepNames), status: z.literal("succeeded"), observedAt: isoDate,
-    durationMs: z.number().finite().nonnegative(),
+    durationMs: z.number().finite().nonnegative(), ...httpEvidence,
   }).strict(),
   z.object({
     name: z.enum(stepNames), status: z.literal("failed"), observedAt: isoDate,
     durationMs: z.number().finite().nonnegative(), diagnosticCategory: z.enum(categories),
+    ...httpEvidence,
     // A short, value-free hint such as `schema:@odata.nextLink(too_big)`; never message or Graph content.
     detail: z.string().max(maxStepDetailLength).optional(),
   }).strict(),
@@ -83,12 +105,12 @@ export const resultSchema = z.object({
     testStage: z.enum(["simulated", "initialization", "authentication", "send", "poll", "delivery-confirmed", "download", "update", "read", "reply", "cleanup", "complete", "execution"]).optional(),
     cleanupSucceeded: z.boolean().optional(),
     cleanupFailure: z.object({
-      category: z.enum(categories),
-      httpStatus: z.number().int().min(100).max(599).optional(),
+      category: z.enum(categories), ...httpEvidence,
       detail: z.string().max(maxStepDetailLength).optional(),
     }).strict().optional(),
     authenticationDurationMs: z.number().finite().nonnegative().optional(),
-    httpStatus: z.number().int().min(100).max(599).optional(),
+    ...httpEvidence,
+    interruptionCategory: z.enum(["cancelled", "cleanup-failure"]).optional(),
     graphRequestsStarted: z.number().int().nonnegative().optional(),
     requestCapacityExceeded: z.boolean().optional(),
   }).strict().default({}),
@@ -98,7 +120,7 @@ export const resultSchema = z.object({
       value.steps.some(step => step.status === "skipped" && step.reason === "cleanup-disabled" &&
         (step.name !== "cleanup" || !["teams", "exchange"].includes(probeServices[value.testType].service))) ||
       value.steps.some(step => step.status === "skipped" && step.reason === "variant-disabled" &&
-        (value.testType !== "onedrive-versions" || step.name !== "restore-version")) ||
+        (value.testType !== "onedrive-roundtrip" || step.name !== "restore-version")) ||
       value.steps.some((step, index) => !allowedSteps.includes(step.name) ||
         (index > 0 && allowedSteps.indexOf(step.name) <= allowedSteps.indexOf(value.steps[index - 1]!.name))) ||
       (value.success && value.steps.some(step => step.status === "failed"))) {
@@ -114,7 +136,7 @@ export const resultSchema = z.object({
   }
   if (value.deliveryDurationMs !== undefined &&
       (value.testType !== "exchange-mail-flow" || value.deliveryDurationMs > value.durationMs ||
-       (!value.success && !isInconclusiveCategory(value.diagnosticCategory)))) {
+       (!value.success && !isInconclusiveCategory(value.diagnosticCategory) && observedGraphServerErrors(value.diagnosticContext) === 0))) {
     ctx.addIssue({ code: "custom", message: "Invalid delivery duration" });
   }
   if (value.sendDurationMs !== undefined &&
@@ -125,7 +147,7 @@ export const resultSchema = z.object({
   }
   if (value.publicationDurationMs !== undefined &&
       (probeServices[value.testType].service !== "teams" || value.publicationDurationMs > value.durationMs ||
-       (!value.success && !isInconclusiveCategory(value.diagnosticCategory)))) {
+       (!value.success && !isInconclusiveCategory(value.diagnosticCategory) && observedGraphServerErrors(value.diagnosticContext) === 0))) {
     ctx.addIssue({ code: "custom", message: "Invalid publication duration" });
   }
 });

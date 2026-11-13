@@ -5,9 +5,7 @@ save work in a draft, retrieve an intact attachment, reply in the same
 conversation and maintain a recurring appointment?** They use real Exchange
 Online mailboxes through Microsoft Graph v1.0.
 
-![Exchange health model: Mail and Calendar journeys, business-step children and separate Service Health context](../../docs/images/exchange-health-model.png)
-
-The model groups the first four journeys under **Mail** and recurrence under
+The model groups the three mail journeys under **Mail** and recurrence under
 **Calendar**. Business-step children show where a journey failed or slowed;
 Microsoft-reported Service Health is separate, impact-suppressed context.
 
@@ -15,8 +13,7 @@ Microsoft-reported Service Health is separate, impact-suppressed context.
 
 | Scenario | Completed journey | Why this check |
 | --- | --- | --- |
-| `send-receive-mail` | Create a draft, send to self and poll the same Inbox for the correlated delivery | Submission alone does not prove delivery; one mailbox avoids a second account dependency |
-| `edit-reopen-draft` | Create, read, edit, reopen/verify and delete a draft | Checks saved state independently of mail transport |
+| `send-receive-mail` | Create, read, edit and reopen a draft, then send to self and verify Inbox delivery | Checks saved draft state and completed delivery in one compose-and-send journey |
 | `attachment-mail` | Send an attachment to self, retrieve it and verify size and SHA-256 | Checks delivered content, not just a successful message response |
 | `reply-mail` | Reply to a retained received self-addressed fixture; verify Inbox delivery, conversation and `In-Reply-To` | Isolates actual reply behavior without a second mailbox; fixture creation stays outside timed execution |
 | `recurring-calendar` | Create a private three-occurrence series, expand occurrences, update/verify and delete it | Checks recurrence and update persistence without inviting or notifying people |
@@ -45,7 +42,7 @@ the configured mailbox. Queries filter correlation markers or occurrence windows
 | `GET`, `PATCH`, `DELETE /users/{mailbox}/events/{eventId}` | Verify/update/delete the owned series |
 | `GET /users/{mailbox}/events/{eventId}/instances` | Verify occurrence expansion and propagated edits |
 
-Implementation: [mail steps](./src/steps.ts), [draft journey](./src/draft-journey.ts)
+Implementation: [mail journey](./src/journey.ts), [draft steps](./src/draft-steps.ts)
 and [attachment/reply/calendar journeys](./src/extended-journeys.ts).
 
 ## Authentication and setup
@@ -117,7 +114,7 @@ npm run exchange -- --tenant <alias> --once
 Also set `ENABLE_BETA_SERVICE_ACTIVITY=true` when beta provider collection is
 selected, as in the checked-in profile.
 
-The current config aligns all selected journeys/mailboxes every 300 seconds
+The current config aligns all four journeys/mailboxes every 600 seconds
 with a 240-second complete-journey deadline. Cadence, request concurrency and
 cleanup/reporting budgets come from `config.execution`; root latency thresholds
 remain 15 seconds Degraded / 60 seconds Unhealthy. Genuine failures/deadline
@@ -125,3 +122,8 @@ expiry remain failures; worker cancellations and cleanup-only failures are
 Unknown without numeric samples. Check step timings, sanitized Graph operation
 errors, cleanup and accepted health reports using the
 [operations runbook](../../docs/operations.md).
+
+The four journeys run concurrently for each mailbox, with sequential Graph
+requests inside each journey, including polling, retries and cleanup. This keeps
+scheduled mailbox activity within Outlook's four-concurrent-request limit
+without a distributed request ledger.

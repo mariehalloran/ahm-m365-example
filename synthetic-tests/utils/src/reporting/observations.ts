@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { categories, isInconclusiveCategory, probeServices, reportedResult, type SyntheticResult } from "../contracts.js";
+import {
+  categories, httpResponseDiagnosticsSchema, isInconclusiveCategory, observedGraphServerErrors,
+  probeServices, reportedResult, type SyntheticResult,
+} from "../contracts.js";
 import { executionLanes } from "../execution/execution-lanes.js";
 import { resultContext } from "../configuration/groups.js";
 import type { ProjectConfig } from "../configuration/project-config.js";
@@ -25,6 +28,9 @@ const syntheticDimensions = z.object({
   reportingGroupNames: z.array(z.string()),
   failureCategory: z.enum(categories).optional(),
   outcome: z.enum(["success", "failure", "unknown"]).optional(),
+  ...httpResponseDiagnosticsSchema.partial().shape,
+  observedGraphServerErrorCount: z.number().int().nonnegative().optional(),
+  interruptionCategory: z.enum(["cancelled", "cleanup-failure"]).optional(),
 }).passthrough();
 
 export const observationSchema = z.object({
@@ -49,7 +55,7 @@ export const observationSchema = z.object({
   if (!parsed.success) {
     for (const issue of parsed.error.issues) context.addIssue({ ...issue, path: ["dimensions", ...issue.path] });
   } else {
-    const inconclusive = isInconclusiveCategory(parsed.data.failureCategory);
+    const inconclusive = isInconclusiveCategory(parsed.data.failureCategory) && observedGraphServerErrors(parsed.data) === 0;
     if (value.value === null && (!inconclusive || value.unit !== "success")) {
       context.addIssue({ code: "custom", path: ["value"], message: "Unavailable samples require cancellation or cleanup-failure diagnostics" });
     }
@@ -104,6 +110,7 @@ export function resultObservations(
     };
     return measurements.map(({
       kind, step, success, durationMs, observedAt, diagnosticCategory: failureCategory, cleanupFailed, cleanupFailure, detail,
+      httpStatus, serviceErrorCode, requestId, retryAfter, observedGraphServerErrorCount, interruptionCategory,
     }) => observationSchema.parse({
       eventId: createHash("sha256").update([
         project.tenant.id, service.type, cycleId, result.correlationId, result.testType, result.testId, kind, step,
@@ -113,13 +120,18 @@ export function resultObservations(
       period: period(lane.intervalSeconds), unit: "success", version: "1", value: success === null ? null : success ? 1 : 0,
       dimensions: {
         ...dimensions, kind, step, durationMs, outcome: success === null ? "unknown" : success ? "success" : "failure",
+        observedGraphServerErrorCount,
         ...(cleanupFailed ? { cleanupSucceeded: false } : {}),
         ...(cleanupFailure ? { cleanupFailure } : {}),
         ...(failureCategory ? { failureCategory } : {}),
         ...(failureCategory ? {
           errorMessage: detail ?? `${failureCategory} during ${service.type}.${definition.journey}${step ? `.${step}` : ""}`,
         } : {}),
-        ...(result.diagnosticContext.httpStatus ? { httpStatus: result.diagnosticContext.httpStatus } : {}),
+        ...(httpStatus === undefined ? {} : { httpStatus }),
+        ...(serviceErrorCode ? { serviceErrorCode } : {}),
+        ...(requestId ? { requestId } : {}),
+        ...(retryAfter ? { retryAfter } : {}),
+        ...(interruptionCategory ? { interruptionCategory } : {}),
         ...(result.diagnosticContext.requestCapacityExceeded ? { requestCapacityExceeded: true } : {}),
         ...(result.diagnosticContext.graphRequestsStarted === undefined ? {} : { graphRequestsStarted: result.diagnosticContext.graphRequestsStarted }),
         ...(result.call ? {

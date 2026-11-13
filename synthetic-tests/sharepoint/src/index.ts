@@ -5,6 +5,5 @@ import { sharePointListProbe } from "./list-journey.js";
 export { sharePointProviders as providers } from "./providers.js";
 export const handler = dispatchProbeHandlers({
   "sharepoint-roundtrip": sharePointDocumentProbe,
-  "sharepoint-versions": sharePointDocumentProbe,
   "sharepoint-list-item": sharePointListProbe,
 });

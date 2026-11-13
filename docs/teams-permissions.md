@@ -156,9 +156,10 @@ administrator `GET /teams/{teamId}/channels`, `POST` to that collection only if
 the named channel is missing, and `GET /users/{organizerUPN}?$select=id`.
 Those setup operations are not runtime worker permissions.
 
-The current config selects a **300-second cadence**, a **240-second deadline
-per complete journey**, separately bounded cleanup and unchanged **15-second
-Degraded / 60-second Unhealthy latency thresholds**. The checked-in lane starts all
+The current config selects a **600-second cadence**, a **240-second deadline
+per complete journey** and separately bounded cleanup. Latency is **Degraded only
+above 15 seconds**, or **30 seconds** for channel conversation and its steps.
+The checked-in lane starts all
 six selected pair/target attempts concurrently to fit the cycle. Worker cancellation and cleanup-only outcomes report
 Unknown without numeric samples; genuine service failures/deadline expiry remain
 failures. Cancelled internal teardown is not a measured business departure.

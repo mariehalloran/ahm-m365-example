@@ -26,14 +26,6 @@
               ]
             },
             {
-              "name": "versions",
-              "intervalSeconds": 600,
-              "timeoutSeconds": 240,
-              "journeys": [
-                "document-versions"
-              ]
-            },
-            {
               "name": "list-items",
               "intervalSeconds": 600,
               "timeoutSeconds": 240,
@@ -49,7 +41,6 @@
         },
         "scenarios": {
           "document-library-roundtrip": true,
-          "document-versions": true,
           "list-item-lifecycle": true
         },
         "targets": [

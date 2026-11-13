@@ -1,6 +1,7 @@
 import type { DiagnosticCategory, SyntheticResult } from "../../utils/src/contracts.js";
 import { categoryOf } from "../../utils/src/integrations/http.js";
 import { baseResult, type ProbeHandler } from "../../utils/src/execution/probes.js";
+import { readDraft, updateDraft } from "./draft-steps.js";
 import {
   cleanupStep,
   finishJourney,
@@ -36,7 +37,7 @@ function classifyMailFlowError(
 
 /**
  * Executes the Exchange self-addressed mail-flow probe by creating a draft,
- * sending it to the same mailbox, polling the inbox for delivery, and cleaning up.
+ * reading/editing/reopening it, sending it to the same mailbox, confirming delivery, and cleaning up.
  */
 export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, context) => {
   const { config, signal, telemetry } = context;
@@ -78,7 +79,17 @@ export const exchangeProbe: ProbeHandler<"exchange-mail-flow"> = async (probe, c
       Date.now,
       classify,
     );
+    result.diagnosticContext.testStage = "read";
+    await measureStep(result, "read-initial-draft",
+      () => readDraft(graph, attempt, draftId, signal, false), Date.now, classify);
+    result.diagnosticContext.testStage = "update";
+    await measureStep(result, "update-draft",
+      () => updateDraft(graph, attempt, draftId, signal), Date.now, classify);
+    result.diagnosticContext.testStage = "read";
+    await measureStep(result, "read-draft",
+      () => readDraft(graph, attempt, draftId, signal), Date.now, classify);
 
+    result.diagnosticContext.testStage = "send";
     const sendStarted = Date.now();
     try {
       await measureStep(

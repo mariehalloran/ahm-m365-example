@@ -19,44 +19,21 @@ interface FileWorkflow {
   updated: Payload;
 }
 
-async function runRoundtrip({ result, graph, attempt, signal, now, initial }: FileWorkflow): Promise<void> {
+/** Verifies current and prior bytes on the same owned document before deleting its scratch folder. */
+async function runRoundtrip(
+  { result, graph, attempt, signal, now, initial, updated }: FileWorkflow,
+  context: Pick<ProbeContext, "config" | "sleep">, startedAt: number,
+): Promise<void> {
   const written = await measureStep(result, "create-folder-file", async () => {
     const folder = await createOwnedFolder(graph, attempt, signal);
     return Object.assign(folder, { fileId: await writeFile(graph, folder, initial, signal) });
   }, now);
   const bytes = await measureStep(result, "reopen-file", () => reopenOwnedFile(graph, written, signal), now);
   await measureStep(result, "verify-file-hash", async () => verifyBytes(bytes, initial), now);
-  await measureStep(result, "delete-owned-artifacts", () => deleteOwnedFolder(graph, attempt, signal), now);
-}
-
-async function runAppFolder({ result, graph, attempt, signal, now, initial, updated }: FileWorkflow): Promise<void> {
-  const written = await measureStep(result, "write-app-data", async () => {
-    const folder = await openAppFolder(graph, attempt, signal);
-    return Object.assign(folder, { fileId: await writeFile(graph, folder, initial, signal, "state.json") });
-  }, now);
-  await measureStep(result, "read-app-data", async () => {
-    verifyBytes(await downloadFile(graph, written, written.fileId, signal), initial);
-  }, now);
-  await measureStep(result, "update-app-data", async () => {
-    const fileId = await writeFile(graph, written, updated, signal, "state.json");
-    if (fileId !== written.fileId) throw new IntegrationError("read-failure");
-    verifyBytes(await downloadFile(graph, written, fileId, signal), updated);
-  }, now);
-  await measureStep(result, "delete-app-scratch", () => deleteOwnedFolder(graph, attempt, signal), now);
-}
-
-async function runVersionHistory(
-  { result, graph, attempt, signal, now, initial, updated }: FileWorkflow,
-  context: Pick<ProbeContext, "config" | "sleep">, startedAt: number,
-): Promise<void> {
-  const written = await measureStep(result, "update-document", async () => {
-    const folder = await createOwnedFolder(graph, attempt, signal);
-    const written = Object.assign(folder, { fileId: await writeFile(graph, folder, initial, signal) });
-    verifyBytes(await downloadFile(graph, written, written.fileId, signal), initial);
+  await measureStep(result, "update-document", async () => {
     const fileId = await writeFile(graph, written, updated, signal);
     if (fileId !== written.fileId) throw new IntegrationError("read-failure");
     verifyBytes(await downloadFile(graph, written, fileId, signal), updated);
-    return written;
   }, now);
   const versions = await measureStep(result, "list-versions", () => listVersions(graph, written, signal), now);
   const earlier = await measureStep(result, "read-prior-version", async () => {
@@ -81,10 +58,27 @@ async function runVersionHistory(
   } else result.steps.push({
     name: "restore-version", status: "skipped", observedAt: new Date(now()).toISOString(), reason: "variant-disabled",
   });
+  await measureStep(result, "delete-owned-artifacts", () => deleteOwnedFolder(graph, attempt, signal), now);
+}
+
+async function runAppFolder({ result, graph, attempt, signal, now, initial, updated }: FileWorkflow): Promise<void> {
+  const written = await measureStep(result, "write-app-data", async () => {
+    const folder = await openAppFolder(graph, attempt, signal);
+    return Object.assign(folder, { fileId: await writeFile(graph, folder, initial, signal, "state.json") });
+  }, now);
+  await measureStep(result, "read-app-data", async () => {
+    verifyBytes(await downloadFile(graph, written, written.fileId, signal), initial);
+  }, now);
+  await measureStep(result, "update-app-data", async () => {
+    const fileId = await writeFile(graph, written, updated, signal, "state.json");
+    if (fileId !== written.fileId) throw new IntegrationError("read-failure");
+    verifyBytes(await downloadFile(graph, written, fileId, signal), updated);
+  }, now);
+  await measureStep(result, "delete-app-scratch", () => deleteOwnedFolder(graph, attempt, signal), now);
 }
 
 /** Completes the selected OneDrive workflow before entering its independent cleanup window. */
-export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfolder" | "onedrive-versions"> = async (probe, context) => {
+export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfolder"> = async (probe, context) => {
   const { signal, telemetry, now = Date.now } = context;
   const startedAt = now();
   const result = context.result ?? baseResult(probe, startedAt);
@@ -113,11 +107,8 @@ export const oneDriveProbe: ProbeHandler<"onedrive-roundtrip" | "onedrive-appfol
     const workflow: FileWorkflow = {
       result, graph, attempt, signal, now, initial: payload(attempt, 1), updated: payload(attempt, 2),
     };
-    switch (probe.type) {
-      case "onedrive-roundtrip": await runRoundtrip(workflow); break;
-      case "onedrive-appfolder": await runAppFolder(workflow); break;
-      case "onedrive-versions": await runVersionHistory(workflow, context, startedAt); break;
-    }
+    if (appFolder) await runAppFolder(workflow);
+    else await runRoundtrip(workflow, context, startedAt);
     result.success = true;
     result.diagnosticContext.testStage = "complete";
   } catch (error) {

@@ -26,25 +26,24 @@ Use the mailbox address, not a manually assigned target ID or sender/recipient p
 Reporting groups do not grant mailbox access.
 
 The checked-in configuration runs every selected journey for every mailbox on
-aligned **300-second boundaries**, with a **240-second complete-journey deadline**.
+aligned **600-second boundaries**, with a **240-second complete-journey deadline**.
 Cadence and budgets come from `config.execution`, not hardcoded runtime limits:
 
 | Journey | Completed operation |
 | --- | --- |
-| `send-receive-mail` | Send to the same mailbox and verify its Inbox delivery |
-| `edit-reopen-draft` | Create, read, edit, reopen and delete an own-mailbox draft |
+| `send-receive-mail` | Create, read, edit and reopen a draft, then send it to the same mailbox and verify Inbox delivery |
 | `attachment-mail` | Send an attachment to self, download it and verify its bytes/hash |
 | `reply-mail` | Send and verify a SELF-REPLY to a retained received self-addressed fixture |
 | `recurring-calendar` | Create, verify, update and delete a private recurring series without attendees |
 
-With all three sending journeys selected, the nominal load is **864 submitted
-messages/day/mailbox**, or 25,920 per thirty days, plus the retained setup fixture,
-message copies, draft and calendar operations. A hundred mailboxes select 500
-journey attempts every five minutes; that is requested load, not proven capacity.
+With all three sending journeys selected, the nominal load is **432 submitted
+messages/day/mailbox**, or 12,960 per thirty days, plus the retained setup fixture,
+message copies, draft and calendar operations. A hundred mailboxes select 400
+journey attempts every ten minutes; that is requested load, not proven capacity.
 Agree on cadence, mail-flow restrictions, retention and an escalation owner.
 
-Cleanup is separately bounded; root policy retains **15-second Degraded /
-60-second Unhealthy latency thresholds**. Genuine service failures
+Cleanup is separately bounded; latency above **15 seconds is Degraded only**.
+Genuine service failures
 and journey deadline expiry remain failures. Worker cancellation and cleanup-only
 outcomes are Unknown without numeric success/failure samples; skipped actions are
 not failed requests.

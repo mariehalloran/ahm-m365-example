@@ -7,8 +7,10 @@ M365Synthetic_CL
 | where TenantAlias == '__TENANT__'
 | where '__GROUP__' == '' or set_has_element(GroupIds, '__GROUP__')
 | summarize arg_max(Timestamp, *) by EventId
-| where FailureCategory !in ('cancelled', 'cleanup-failure')
+| extend GraphServerErrorCount = coalesce(tolong(Dimensions.observedGraphServerErrorCount), iff(HttpStatus between (500 .. 599), long(1), long(0)))
+| where GraphServerErrorCount > 0 or FailureCategory !in ('cancelled', 'cleanup-failure')
+| extend Value = iff(GraphServerErrorCount > 0, 0.0, Value)
 | where Value in (0.0, 1.0) and isnotnull(DurationMs) and DurationMs >= 0
-| summarize Samples = count(), Value = __AGGREGATION__
-| where Samples >= __MINIMUM__ and isnotnull(Value)
+| summarize Samples = count(), GraphServerErrors = sum(GraphServerErrorCount), Value = __AGGREGATION__
+| where (Samples >= __MINIMUM__ or (__GRAPH_ERROR_COUNT_SIGNAL__ and GraphServerErrors > 0)) and isnotnull(Value)
 | project Value

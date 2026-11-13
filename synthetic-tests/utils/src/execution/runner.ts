@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../configuration/config.js";
 import {
-  isInconclusiveCategory, probeServices, resultSchema, type DiagnosticCategory, type Probe, type SyntheticResult, type Telemetry,
+  isInconclusiveCategory, observedGraphServerErrors, probeServices, resultSchema,
+  type DiagnosticCategory, type Probe, type SyntheticResult, type Telemetry,
 } from "../contracts.js";
 import type { GraphFileOperations } from "../integrations/graph.js";
 import { categoryOf, IntegrationError, withAbort } from "../integrations/http.js";
@@ -9,7 +10,7 @@ import { GraphRequestPermits, type PermitMeasurements } from "./graph-request-pe
 import { baseResult, simulate, type ProbeContext, type ProbeHandler } from "./probes.js";
 import type { CycleResults, ResultOutput } from "../reporting/results.js";
 import type { ExecutionReporter } from "../reporting/execution-reporter.js";
-import { withStepObserver } from "./steps.js";
+import { retainGraphServerFailure, withStepObserver } from "./steps.js";
 
 export type TeamsBotPairClients = Pick<ProbeContext, "teamsBot" | "teamsCalling" | "teamsCallingPeer">;
 
@@ -47,6 +48,12 @@ interface CycleContext {
 function schedule(milliseconds: number, action: () => void): () => void {
   const timer = setTimeout(action, milliseconds);
   return () => clearTimeout(timer);
+}
+
+/** Recognizes the caller's exact abort reason without masking an independently observed service error. */
+function interruptionCategory(error: unknown, signal: AbortSignal): DiagnosticCategory | undefined {
+  if (!signal.aborted || error !== signal.reason) return undefined;
+  return categoryOf(error) === "delivery-timeout" ? "delivery-timeout" : "cancelled";
 }
 
 /** Bounds handler settlement separately from business execution, including cleanup after cancellation. */
@@ -89,17 +96,22 @@ function interruptedResult(
     ? result.diagnosticCategory : undefined;
   const diagnosticCategory = primaryFailure ?? (failed?.status === "failed" ? failed.diagnosticCategory : category);
   const { deliveryDurationMs, publicationDurationMs, ...evidence } = result;
-  return {
+  return retainGraphServerFailure({
     ...evidence, success: false, diagnosticCategory,
+    diagnosticContext: {
+      ...result.diagnosticContext,
+      ...(observedGraphServerErrors(result.diagnosticContext) > 0 && (category === "cancelled" || category === "cleanup-failure")
+        ? { interruptionCategory: category } : {}),
+    },
     observedAt: new Date(observedAt).toISOString(), durationMs,
     // Only expiry of this journey's execution deadline can turn an interrupted action into a timeout sample.
     steps: result.steps.map(step => category === "delivery-timeout" && step.status === "failed" && step.diagnosticCategory === "cancelled"
       ? { ...step, diagnosticCategory: "delivery-timeout" } : step),
-    ...(isInconclusiveCategory(diagnosticCategory) ? {
+    ...(isInconclusiveCategory(diagnosticCategory) || observedGraphServerErrors(result.diagnosticContext) > 0 ? {
       ...(deliveryDurationMs === undefined ? {} : { deliveryDurationMs }),
       ...(publicationDurationMs === undefined ? {} : { publicationDurationMs }),
     } : {}),
-  };
+  });
 }
 
 /** Runs one complete journey, distinguishing its execution deadline from enclosing worker cancellation. */
@@ -152,11 +164,13 @@ async function runSingleProbe<P extends Probe>(
 
     const rawResult = await Promise.race([
       withStepObserver({
+        result: evidence,
         async completed(result, name) {
           try { await dependencies.reporter?.step(annotate(result), name); }
           catch (error) { cycle.publicationErrors.push(error); }
         },
-        category(category) {
+        category(category, error) {
+          category = interruptionCategory(error, probeSignal) ?? category;
           if (capacityShortfall && (category === "cancelled" || category === "delivery-timeout")) return "cancelled";
           return category === "cancelled" && execution.signal.aborted && !cycle.externalSignal?.aborted ? "delivery-timeout" : category;
         },
@@ -184,7 +198,7 @@ async function runSingleProbe<P extends Probe>(
       })).then(value => { handlerSettled = true; return value; }, error => { handlerSettled = true; throw error; }),
       deadline.promise,
     ]);
-    const parsedResult = resultSchema.safeParse(rawResult);
+    const parsedResult = resultSchema.safeParse(retainGraphServerFailure(rawResult));
     if (!parsedResult.success) {
       throw new IntegrationError("malformed-response");
     }
@@ -206,16 +220,17 @@ async function runSingleProbe<P extends Probe>(
     }
     return annotate(parsedResult.data);
   } catch (error) {
-    const observedCategory = categoryOf(error);
+    const observedCategory = interruptionCategory(error, probeSignal) ?? categoryOf(error);
     const category = capacityShortfall && (observedCategory === "delivery-timeout" || isInconclusiveCategory(observedCategory))
       ? "cancelled" : isInconclusiveCategory(observedCategory) && probeSignal.aborted
       ? categoryOf(probeSignal.reason) === "delivery-timeout" ? "delivery-timeout" : "cancelled"
       : observedCategory;
     const durationMs = Math.max(0, now() - attemptStartedAt);
     const partial = resultSchema.safeParse(interruptedResult(evidence, category, now(), durationMs));
-    const result = partial.success ? partial.data : {
+    const result = partial.success ? partial.data : retainGraphServerFailure({
       ...baseResult(probe, now()), durationMs, diagnosticCategory: category,
-    };
+      diagnosticContext: { ...evidence.diagnosticContext },
+    });
     result.diagnosticContext.testStage ??= "execution";
     telemetry.emit(isInconclusiveCategory(result.diagnosticCategory) ? "probe-execution-inconclusive" : "probe-execution-failed", {
       cycleId: cycle.cycleId,

@@ -7,7 +7,7 @@
         {
           "name": "send-receive-mail",
           "entityName": "exchange-global",
-          "displayName": "Send email to self and verify Inbox receipt",
+          "displayName": "Save, edit, reopen and send email to self",
           "group": {
             "entityName": "exchange-mail",
             "displayName": "Mail"
@@ -16,29 +16,6 @@
             {
               "name": "create-draft",
               "displayName": "Create email"
-            },
-            {
-              "name": "send",
-              "displayName": "Send email"
-            },
-            {
-              "name": "confirm-delivery",
-              "displayName": "Confirm receipt in own Inbox"
-            }
-          ]
-        },
-        {
-          "name": "edit-reopen-draft",
-          "entityName": "exchange-draft",
-          "displayName": "Save, edit and reopen draft",
-          "group": {
-            "entityName": "exchange-mail",
-            "displayName": "Mail"
-          },
-          "steps": [
-            {
-              "name": "create-draft",
-              "displayName": "Create draft"
             },
             {
               "name": "read-initial-draft",
@@ -53,8 +30,12 @@
               "displayName": "Reopen and verify draft"
             },
             {
-              "name": "delete-draft",
-              "displayName": "Delete draft"
+              "name": "send",
+              "displayName": "Send email"
+            },
+            {
+              "name": "confirm-delivery",
+              "displayName": "Confirm receipt in own Inbox"
             }
           ]
         },
@@ -192,7 +173,7 @@
         {
           "name": "user-drive-roundtrip",
           "entityName": "onedrive-planned-user-drive-roundtrip",
-          "displayName": "Create, reopen, verify and delete user-drive file",
+          "displayName": "Create, verify, version and delete user-drive file",
           "steps": [
             {
               "name": "step-1",
@@ -208,6 +189,22 @@
               "name": "step-3",
               "displayName": "Verify exact content hash",
               "telemetryName": "verify-file-hash"
+            },
+            {
+              "name": "update-document",
+              "displayName": "Update the document and verify current bytes"
+            },
+            {
+              "name": "list-versions",
+              "displayName": "Enumerate actual document version history"
+            },
+            {
+              "name": "read-prior-version",
+              "displayName": "Download prior version and verify bytes"
+            },
+            {
+              "name": "restore-version",
+              "displayName": "Optional: restore prior bytes and verify"
             },
             {
               "name": "step-4",
@@ -242,33 +239,6 @@
               "telemetryName": "delete-app-scratch"
             }
           ]
-        },
-        {
-          "name": "document-versions",
-          "entityName": "onedrive-planned-document-versions",
-          "displayName": "Update document and retrieve prior version",
-          "steps": [
-            {
-              "name": "step-1",
-              "displayName": "Write and verify two document revisions",
-              "telemetryName": "update-document"
-            },
-            {
-              "name": "step-2",
-              "displayName": "Enumerate actual document version history",
-              "telemetryName": "list-versions"
-            },
-            {
-              "name": "step-3",
-              "displayName": "Download prior version and verify bytes",
-              "telemetryName": "read-prior-version"
-            },
-            {
-              "name": "step-4",
-              "displayName": "Optional: restore downloaded prior bytes and verify",
-              "telemetryName": "restore-version"
-            }
-          ]
         }
       ]
     },
@@ -279,7 +249,7 @@
         {
           "name": "document-library-roundtrip",
           "entityName": "sharepoint-document-roundtrip",
-          "displayName": "Upload, reopen, verify and delete library document",
+          "displayName": "Upload, verify, version and delete library document",
           "steps": [
             {
               "name": "upload-document",
@@ -294,19 +264,8 @@
               "displayName": "Verify exact document bytes"
             },
             {
-              "name": "delete-document",
-              "displayName": "Delete owned artifacts and verify removal"
-            }
-          ]
-        },
-        {
-          "name": "document-versions",
-          "entityName": "sharepoint-document-versions",
-          "displayName": "Update library document and retrieve prior version",
-          "steps": [
-            {
               "name": "write-document-revisions",
-              "displayName": "Write and verify two document revisions"
+              "displayName": "Update the document and verify current bytes"
             },
             {
               "name": "list-document-versions",
@@ -317,7 +276,7 @@
               "displayName": "Download and verify prior-version bytes"
             },
             {
-              "name": "delete-version-document",
+              "name": "delete-document",
               "displayName": "Delete owned artifacts and verify removal"
             }
           ]

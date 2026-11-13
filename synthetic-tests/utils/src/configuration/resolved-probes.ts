@@ -28,7 +28,6 @@ const call = probeSchema.required({
 /** Discriminated union schema enforcing the required target fields for each live synthetic journey type. */
 export const liveProbeSchema = z.discriminatedUnion("type", [
   exchange.extend({ type: z.literal("exchange-mail-flow") }),
-  exchange.extend({ type: z.literal("exchange-draft") }),
   exchange.extend({ type: z.literal("exchange-attachment") }),
   exchange.extend({ type: z.literal("exchange-reply") }),
   exchange.extend({ type: z.literal("exchange-recurring-calendar") }),
@@ -36,15 +35,13 @@ export const liveProbeSchema = z.discriminatedUnion("type", [
   call.extend({ type: z.literal("teams-call") }),
   oneDrive.extend({ type: z.literal("onedrive-roundtrip") }),
   oneDrive.extend({ type: z.literal("onedrive-appfolder") }),
-  oneDrive.extend({ type: z.literal("onedrive-versions") }),
   sharePointDocument.extend({ type: z.literal("sharepoint-roundtrip") }),
-  sharePointDocument.extend({ type: z.literal("sharepoint-versions") }),
   sharePoint.required({ listId: true }).extend({ type: z.literal("sharepoint-list-item") }),
 ]);
 
 export type LiveProbe = z.infer<typeof liveProbeSchema>;
 type LiveProbeByType = { [Type in TestType]: Extract<LiveProbe, { type: Type }> };
 export type LiveProbeFor<Type extends TestType = TestType> = LiveProbeByType[Type];
-export type OneDriveProbe = LiveProbeFor<"onedrive-roundtrip" | "onedrive-appfolder" | "onedrive-versions">;
-export type SharePointProbe = LiveProbeFor<"sharepoint-roundtrip" | "sharepoint-versions" | "sharepoint-list-item">;
-export type SharePointDocumentProbe = LiveProbeFor<"sharepoint-roundtrip" | "sharepoint-versions">;
+export type OneDriveProbe = LiveProbeFor<"onedrive-roundtrip" | "onedrive-appfolder">;
+export type SharePointProbe = LiveProbeFor<"sharepoint-roundtrip" | "sharepoint-list-item">;
+export type SharePointDocumentProbe = LiveProbeFor<"sharepoint-roundtrip">;

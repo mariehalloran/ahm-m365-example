@@ -9,10 +9,10 @@ reports without a logging pipeline. With `true`, the Logs Ingestion API/DCR writ
 observations to Log Analytics and Azure Monitor Health Models evaluates KQL.
 Each service Function app has its own on-demand Flex Consumption plan; there is
 no Premium or always-ready baseline. Persistent journals fence duplicate execution.
-The model family has five models, 75 entities, 70 relationships and 51
+The model family has five models, 69 entities, 64 relationships and 48
 business-step entities before supporting context, including Exchange's Mail and
 Calendar rollup parents. Enabled Service Health adds four entities and
-relationships. SharePoint contributes three journeys and 13 business steps;
+relationships. SharePoint contributes two journeys and 12 business steps;
 configuration and administrative grants do not establish live worker acceptance.
 
 Exchange, Teams, OneDrive and enabled SharePoint use their own `execution` settings
@@ -24,11 +24,11 @@ Use the [shared worker guide](../synthetic-tests/utils/README.md) for commands a
 
 ## Scheduling and shutdown
 
-- Every selected Exchange, Teams, OneDrive and SharePoint journey runs every 600 seconds on aligned ten-minute boundaries. Five Exchange journeys across 100 mailboxes produce 500 case starts every ten minutes. Local `--once` is an immediate single-cycle diagnostic. Providers retain independent schedules (60 seconds in the checked-in config).
-- All live journeys have a 240-second execution deadline for the entire journey, not each step. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. Latency defaults are 15000 ms Degraded / 60000 ms Unhealthy; the explicit Teams channel-conversation override uses 30000/60000 ms for the journey and its business steps. These health thresholds are independent of execution deadlines. Actual Exchange Graph HTTP requests, including retries, polls and cleanup, share unchanged global/per-mailbox permits (32/two); there is no Exchange probe-count ceiling.
+- Every selected Exchange, Teams, OneDrive and SharePoint journey runs every 600 seconds on aligned ten-minute boundaries. Four Exchange journeys across 100 mailboxes produce 400 case starts every ten minutes. OneDrive and SharePoint each have two journeys; Teams remains unchanged. Product journeys run concurrently. Local `--once` is an immediate single-cycle diagnostic. Providers retain independent schedules (60 seconds in the checked-in config).
+- All live journeys have a 240-second execution deadline for the entire journey, not each step. Genuine journey deadline expiry contributes failure; worker cancellation and cleanup-only failure instead report Unknown without a numeric sample. Latency becomes Degraded above 15000 ms; the explicit Teams channel-conversation override uses 30000 ms for the journey and its business steps. Latency alone never becomes Unhealthy. These health thresholds are independent of execution deadlines. The four Exchange journeys each issue Graph requests sequentially, including retries, polls and cleanup, keeping scheduled work within four concurrent requests per mailbox.
 - Every synthetic lane bounds initialization, execution, cleanup and publication before its next slot (599 seconds with the current margin). Exchange reserves 12 seconds for cleanup settlement and 12 for publication, with an execution budget at most 275 seconds. Teams/OneDrive/SharePoint allow 12 seconds for settlement and 30 for publication, with a 252-second execution budget. Initialization and late starts cannot extend the four-minute journey deadline or overlap the next slot.
 - Non-Exchange capacity validation covers every selected lane, even small Teams cohorts, and rejects budgets that cannot cover all attempts or fit the cadence. The checked-in Teams lane runs six pair/target attempts at concurrency six; each OneDrive lane runs two accounts at default concurrency three. This is bounded capacity planning, not live throughput proof.
-- SharePoint has independent document, version-history and list-item lanes, each with a 240-second journey deadline, 600-second cadence, default concurrency three and 252-second cycle budget. Review real completion/cleanup before increasing targets.
+- SharePoint has independent document and list-item lanes, with version checks inside the document journey. Each lane has a 240-second journey deadline, 600-second cadence, default concurrency three and 252-second cycle budget. Review real completion/cleanup before increasing targets.
 - `exchange-cycle-capacity` emits expected/started/completed/timed-out/inconclusive attempts and permit waiting once per reporting group, separately from observed Exchange failures. This is not a live throughput guarantee.
 - Each lane never overlaps itself. Independent lanes/targets/journeys run concurrently; dependent business steps remain sequential. Missed slots log lane/first slot/count, not catch-up bursts. Slow lanes cannot block fast-lane reporting.
 - Lane observations describe only executed journeys/actions, not fabricated failed or Unknown samples for sibling lanes; provider status remains separate suppressed context.
@@ -119,8 +119,9 @@ records, and applies root-configured thresholds over `signalWindowMinutes`. The
 Healthy. Success is `100 * successful conclusive attempts / conclusive attempts`;
 latency includes conclusive failed attempts but excludes worker cancellations and
 cleanup-only failures. An all-Unknown cohort stays Unknown. Skipped/internal
-actions emit no success/failure sample. Defaults
-remain below 99%/95% success or above 15/60 seconds mean duration.
+actions emit no success/failure sample. Success below 99%/95% is Degraded/Unhealthy;
+mean duration above 15 seconds is Degraded only, or above 30 seconds for the
+configured Teams channel-conversation override.
 
 Each observation retains tenant, account, journey, step, duration, failure category,
 safe error detail, run/correlation IDs and reporting-group arrays. Group membership

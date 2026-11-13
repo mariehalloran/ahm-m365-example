@@ -1,9 +1,9 @@
 import {
-  isInconclusiveCategory, isReportedStep, journeyStepEntities, probeServices,
-  type DiagnosticCategory, type StepResult, type SyntheticResult,
+  isInconclusiveCategory, isReportedStep, journeyStepEntities, observedGraphServerErrors, probeServices,
+  type DiagnosticCategory, type HttpResponseDiagnostics, type StepResult, type SyntheticResult,
 } from "../contracts.js";
 
-export interface MeasurementSample {
+export interface MeasurementSample extends Partial<HttpResponseDiagnostics> {
   success: boolean | null;
   durationMs: number;
   observedAt: string;
@@ -11,6 +11,8 @@ export interface MeasurementSample {
   cleanupFailed?: boolean;
   cleanupFailure?: SyntheticResult["diagnosticContext"]["cleanupFailure"];
   detail?: string;
+  observedGraphServerErrorCount: number;
+  interruptionCategory?: "cancelled" | "cleanup-failure";
 }
 export interface SyntheticMeasurement extends MeasurementSample {
   entityName: string;
@@ -19,17 +21,32 @@ export interface SyntheticMeasurement extends MeasurementSample {
   step: string;
 }
 
+/** Keeps each measurement's own HTTP evidence; explicit zero disables the legacy status fallback. */
+function httpEvidence(evidence: Pick<SyntheticResult["diagnosticContext"],
+  "httpStatus" | "serviceErrorCode" | "requestId" | "retryAfter" | "observedGraphServerErrorCount"
+>) {
+  return {
+    ...(evidence.httpStatus === undefined ? {} : { httpStatus: evidence.httpStatus }),
+    ...(evidence.serviceErrorCode ? { serviceErrorCode: evidence.serviceErrorCode } : {}),
+    ...(evidence.requestId ? { requestId: evidence.requestId } : {}),
+    ...(evidence.retryAfter ? { retryAfter: evidence.retryAfter } : {}),
+    observedGraphServerErrorCount: observedGraphServerErrors(evidence),
+  };
+}
+
 /** Retains executed-step evidence without assigning a binary sample to an inconclusive action. */
 function stepSample(
   step: Exclude<StepResult, { status: "skipped" }>, durationMs = step.durationMs,
 ): MeasurementSample {
+  const evidence = httpEvidence(step);
   return {
-    success: step.status === "succeeded" ? true : isInconclusiveCategory(step.diagnosticCategory) ? null : false,
-    durationMs, observedAt: step.observedAt,
+    success: evidence.observedGraphServerErrorCount > 0 ? false
+      : step.status === "succeeded" ? true : isInconclusiveCategory(step.diagnosticCategory) ? null : false,
+    durationMs, observedAt: step.observedAt, ...evidence,
     ...(step.status === "failed" ? {
       diagnosticCategory: step.diagnosticCategory,
       ...(step.detail !== undefined ? { detail: step.detail } : {}),
-    } : {}),
+    } : evidence.observedGraphServerErrorCount > 0 ? { diagnosticCategory: "graph-unavailable" } : {}),
   };
 }
 
@@ -38,11 +55,15 @@ export function resultMeasurements(result: SyntheticResult): SyntheticMeasuremen
   const journey = probeServices[result.testType];
   const steps = result.steps.filter(step => isReportedStep(step.name));
   const failed = steps.find(step => step.status === "failed");
+  const evidence = httpEvidence(result.diagnosticContext);
   const measurements: SyntheticMeasurement[] = [{
     entityName: journey.entityName, journey: journey.journey, kind: "journey", step: "",
-    success: isInconclusiveCategory(result.diagnosticCategory) ? null : result.success,
-    durationMs: result.durationMs, observedAt: result.observedAt,
-    ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory } : {}),
+    success: evidence.observedGraphServerErrorCount > 0 ? false
+      : isInconclusiveCategory(result.diagnosticCategory) ? null : result.success,
+    durationMs: result.durationMs, observedAt: result.observedAt, ...evidence,
+    ...(result.diagnosticCategory ? { diagnosticCategory: result.diagnosticCategory }
+      : evidence.observedGraphServerErrorCount > 0 ? { diagnosticCategory: "graph-unavailable" } : {}),
+    ...(result.diagnosticContext.interruptionCategory ? { interruptionCategory: result.diagnosticContext.interruptionCategory } : {}),
     ...(result.diagnosticContext.cleanupSucceeded === false ? { cleanupFailed: true } : {}),
     ...(result.diagnosticContext.cleanupFailure ? { cleanupFailure: result.diagnosticContext.cleanupFailure } : {}),
     ...(failed?.detail !== undefined ? { detail: failed.detail }

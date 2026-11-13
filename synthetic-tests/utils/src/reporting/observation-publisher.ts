@@ -36,8 +36,8 @@ export function createObservationPublisher(
       await client.upload(rule!, "Custom-M365Synthetic", observations.map(row => ({ RawData: JSON.stringify(row) })), {
         abortSignal: signal,
         maxConcurrency: 1,
-        onError: async failure => { throw failure.cause; },
       });
+      signal.throwIfAborted();
     }
     telemetry.emit(client ? "observations-published" : "observation-preview", {
       observationCount: observations.length, destination: "DCR-LogsIngestion",
