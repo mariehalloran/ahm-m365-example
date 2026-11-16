@@ -96,7 +96,7 @@ Graph mail application grants: Exchange authorization is mailbox-scoped RBAC for
 The single root `logAnalytics.enabled` toggle selects the reporting path:
 
 - **Off:** execution Functions publish observed current-cycle results as direct
-  health reports. Both success percentage and mean duration use conclusive attempts;
+  health reports. Mean duration uses conclusive attempts;
   worker cancellations and cleanup-only failures report Unknown without a numeric
   sample, and skipped/internal actions contribute no sample. Reports expire after
   `healthModel.signalWindowMinutes`. There is no Event Hub, ingestion Function,
@@ -116,11 +116,9 @@ failures are explicit; simulation prints counts and does not publish cloud healt
 Health Models queries the table, deduplicates `EventId`, separates journey and step
 records, and applies root-configured thresholds over `signalWindowMinutes`. The
 `minimumSamples` gate and no-data queries produce Unknown rather than fabricated
-Healthy. Success is `100 * successful conclusive attempts / conclusive attempts`;
-latency includes conclusive failed attempts but excludes worker cancellations and
-cleanup-only failures. An all-Unknown cohort stays Unknown. Skipped/internal
-actions emit no success/failure sample. Success below 99%/95% is Degraded/Unhealthy;
-mean duration above 15 seconds is Degraded only, or above 30 seconds for the
+Healthy. Latency includes conclusive failed attempts but excludes worker cancellations
+and cleanup-only failures. An all-Unknown cohort stays Unknown. Skipped/internal
+actions emit no success/failure sample. Mean duration above 15 seconds is Degraded only, or above 30 seconds for the
 configured Teams channel-conversation override.
 
 Each observation retains tenant, account, journey, step, duration, failure category,
@@ -156,7 +154,7 @@ There is no result outbox; a crash before Logs Ingestion acceptance can lose
 unpublished observations. Durable acceptance and execution journals prevent blind
 replay, but do not make reporting exactly once or lossless.
 
-Each conclusive attempt contributes one binary success observation (1 or 0).
+Each conclusive attempt retains one binary outcome observation (1 or 0) for failure diagnostics; no success percentage is calculated or published.
 Worker cancellations and cleanup-only failures retain diagnostic observations
 with `value: null` and `dimensions.outcome: "unknown"`, and do not enter success
 or latency denominators. Console results use `outcome: "unknown"` and `success: null`;
@@ -199,8 +197,8 @@ worker/report-freshness monitoring or prove notification delivery.
 ## Log Analytics for administrators
 
 Only with `logAnalytics.enabled: true`, `npm run deploy` creates or reuses `law-<model>`, `appi-<model>` and the
-`M365Synthetic_CL` Analytics table. Six saved searches in **M365 Synthetic Monitoring**
-cover failures, affected users/groups, inconclusive outcomes, success rate, step latency and ingestion volume.
+`M365Synthetic_CL` Analytics table. Five saved searches in **M365 Synthetic Monitoring**
+cover failures, affected users/groups, inconclusive outcomes, step latency and ingestion volume.
 Their KQL is in [`health-model/queries/admin/`](../health-model/queries/admin/).
 Administrators need Log Analytics Reader. Data remains pay-as-you-go, with 30-day
 queryable retention; Capture retention is separately configured at root.
@@ -210,7 +208,6 @@ queryable retention; Capture retention is separately configured at root.
 | Synthetic failures by group and user | `failures-by-group.kql` | Failed journey/step observations with group, user, error, correlation and kind |
 | Impacted users by group | `impacted-users-by-group.kql` | `Group`, `User`, `Failures`, `Journeys`, `Errors`, `FirstFailure`, `LastFailure`: most affected first |
 | Unknown synthetic outcomes by group and user | `inconclusive-by-group.kql` | No-sample diagnostics with group, user, category, detail and correlation |
-| Success rate by group and journey | `success-by-group.kql` | Deduplicated conclusive attempts, Unknown count, success percentage and latency percentiles |
 | Latency and failures by journey step | `latency-by-step.kql` | Step mean, P95/max duration and failures |
 | Observation ingestion volume and duplicates | `ingestion-volume.kql` | Records, unique event IDs and billed GB by service/kind |
 

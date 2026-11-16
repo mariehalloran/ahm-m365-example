@@ -60,11 +60,11 @@ does not rename its bindings. See [generated IDs](./deployment.md#generated-ids-
 
 Each user group adds **one signal aggregation group, named after its `userGroupName`,
 to each Exchange/OneDrive journey entity** it has runnable users for. It holds the
-group's `observed-success-percentage` and `observed-mean-duration`,
+group's `observed-mean-duration` and `observed-graph-server-error-count`,
 queried as `group-<id>--tenant-<tenant>--<signal>`,
-for example `group-united-states-users--tenant-contoso--observed-success-percentage`.
+for example `group-united-states-users--tenant-contoso--observed-mean-duration`.
 `<tenant>` is the tenant entry's `id`; a group spanning tenants has one signal set
-per tenant, combined worst-of rather than as a pooled percentage. These are the only
+per tenant, combined worst-of. These are the only
 aggregation groups in the model; overall signals publish ungrouped.
 
 - No group or tenant entity branches, per-group models or per-account entities.
@@ -80,7 +80,7 @@ aggregation groups in the model; overall signals publish ungrouped.
   with location choices retained as observation dimensions.
 
 Naming rule: with one tenant in the config, overall signals keep their plain names
-(`observed-success-percentage`). With more than one, every overall model query
+(`observed-mean-duration`). With more than one, every overall model query
 uses `tenant-<tenant>--<signal>`, so tenants do not mask one another on
 the shared service model. Group signals stay `group-<id>--tenant-<tenant>--<signal>`
 and are never qualified twice. Adding a second tenant renames every overall signal in
@@ -109,14 +109,13 @@ With `logAnalytics.enabled: true`, `M365Synthetic_CL` retains `GroupIds` and `Gr
 observation. A shared account emits one observation, not one duplicate per group.
 Model queries filter memberships; administrator queries expand them only after
 event-ID deduplication. The five saved searches cover failures, impacted users,
-success rates, latency and ingestion volume. Teams and SharePoint arrays remain empty. See
+inconclusive outcomes, latency and ingestion volume. Teams and SharePoint arrays remain empty. See
 [Log Analytics for administrators](./operations.md#log-analytics-for-administrators).
 
 ## Limits
 
-- Group health joins each journey's worst-of composite, so a small group (one
-  account) can turn an entity Degraded or Unhealthy on a single failed attempt that
-  the overall percentage would absorb.
+- Group health joins each journey's duration and Graph 5xx signals into the normal
+  worst-of composite.
 - Each group adds journey-level signals, not models/entities per account. With logging
   off, direct report work grows with groups x journeys; when on, KQL evaluation does.
 - Unknown never overrides a known state, so a stopped worker is not visible through

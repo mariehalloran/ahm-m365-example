@@ -374,7 +374,7 @@ export async function verifyDirectReports(run: DeploymentRun, since: number): Pr
           group: group.id, attempts: selected.filter(probe => group.targetIds.includes(probe.id)).length,
         })),
       ].filter(scope => scope.attempts > 0)) {
-        for (const metric of ["observed-success-percentage", "observed-mean-duration", "observed-graph-server-error-count"]) {
+        for (const metric of ["observed-mean-duration", "observed-graph-server-error-count"]) {
           const signal = scope.group ? groupSignalName(scope.group, owner.tenant, metric)
             : owner.project.multiTenant ? tenantSignalName(owner.tenant, metric) : metric;
           expected.set(`${owner.type}/${probeServices[type].entityName}/${signal}`, scope.attempts);

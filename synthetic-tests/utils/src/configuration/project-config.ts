@@ -49,8 +49,6 @@ const healthModelSchema = z.object({
   alertActionGroupIds: z.array(actionGroupResourceId).max(5).default([]),
   signalWindowMinutes: z.number().int().min(1).max(10080),
   minimumSamples: z.number().int().min(1).max(1000000).default(1),
-  successDegradedPercent: z.number().min(0).max(100),
-  successUnhealthyPercent: z.number().min(0).max(100),
   ...latencyThresholdSchema.shape,
   journeyLatencyOverrides: z.record(serviceTypeSchema, z.record(z.string().min(1), latencyThresholdSchema)).default({}),
 }).strict();
@@ -195,9 +193,6 @@ function runtimeServices(services: TenantInventory["services"]): ProjectServices
 }
 
 function validateHealthPolicy(policy: ProjectDocument["healthModel"]): void {
-  if (policy.successUnhealthyPercent > policy.successDegradedPercent) {
-    throw new ConfigurationError("Success thresholds must order Degraded before Unhealthy");
-  }
   if (new Set(policy.alertActionGroupIds.map(id => id.toLowerCase())).size !== policy.alertActionGroupIds.length) {
     throw new ConfigurationError("healthModel.alertActionGroupIds must contain unique action group resource IDs (case-insensitive)");
   }

@@ -9,8 +9,6 @@
     ],
     "signalWindowMinutes": 30,
     "minimumSamples": 1,
-    "successDegradedPercent": 99,
-    "successUnhealthyPercent": 95,
     "latencyDegradedMilliseconds": 15000,
     "journeyLatencyOverrides": {
       "teams": {

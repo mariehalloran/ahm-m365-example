@@ -99,17 +99,6 @@ var signalScopes = concat(
 )
 var observationMetrics = [
   {
-    name: 'observed-success-percentage'
-    displayName: 'Observed success percentage'
-    dataUnit: 'Percent'
-    aggregation: 'avg(100.0 * Value)'
-    phase: ''
-    evaluationRules: {
-      degradedRule: { operator: 'LessThan', threshold: policy.successDegradedPercent }
-      unhealthyRule: { operator: 'LessThan', threshold: policy.successUnhealthyPercent }
-    }
-  }
-  {
     name: 'observed-mean-duration'
     displayName: 'Observed mean duration'
     dataUnit: 'Milliseconds'
@@ -131,27 +120,11 @@ var observationMetrics = [
 ]
 var callMetrics = [
   {
-    name: 'observed-call-connection-success-percentage'
-    displayName: 'Observed meeting connection success'
-    dataUnit: 'Percent'
-    aggregation: 'avg(100.0 * Value)'
-    phase: 'connection'
-    evaluationRules: observationMetrics[0].evaluationRules
-  }
-  {
     name: 'observed-call-mean-connection-duration'
     displayName: 'Observed mean meeting connection duration'
     dataUnit: 'Milliseconds'
     aggregation: 'avg(DurationMs)'
     phase: 'connection'
-    evaluationRules: observationMetrics[1].evaluationRules
-  }
-  {
-    name: 'observed-call-disconnection-success-percentage'
-    displayName: 'Observed meeting departure success'
-    dataUnit: 'Percent'
-    aggregation: 'avg(100.0 * Value)'
-    phase: 'disconnection'
     evaluationRules: observationMetrics[0].evaluationRules
   }
   {
@@ -160,7 +133,7 @@ var callMetrics = [
     dataUnit: 'Milliseconds'
     aggregation: 'avg(DurationMs)'
     phase: 'disconnection'
-    evaluationRules: observationMetrics[1].evaluationRules
+    evaluationRules: observationMetrics[0].evaluationRules
   }
 ]
 var nodes = concat(
@@ -318,7 +291,7 @@ resource entities 'Microsoft.CloudHealth/healthmodels/entities@2026-10-01-previe
       node.kind == 'journey'
         ? aggregationGroupsProperty(service.service == 'teams' ? [] : reportingGroupEntries(
             reportingGroups, service.service, node.journey,
-            ['observed-success-percentage', 'observed-mean-duration', 'observed-graph-server-error-count']
+            ['observed-mean-duration', 'observed-graph-server-error-count']
           ))
         : {}
     )

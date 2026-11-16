@@ -18,10 +18,9 @@ export interface DirectReportCycle extends CycleResults {
   containerRevision?: string;
 }
 export const teamsCallSignals = [
-  "observed-call-connection-success-percentage", "observed-call-mean-connection-duration",
-  "observed-call-disconnection-success-percentage", "observed-call-mean-disconnection-duration",
+  "observed-call-mean-connection-duration", "observed-call-mean-disconnection-duration",
 ] as const;
-const journeySignals = ["observed-success-percentage", "observed-mean-duration"] as const;
+const journeyDurationSignal = "observed-mean-duration";
 export const graphServerErrorSignal = "observed-graph-server-error-count";
 
 interface EntitySamples {
@@ -55,7 +54,7 @@ function collectEntitySamples(results: SyntheticResult[], level: "journey" | "al
 /** Evaluates conclusive samples; a real Graph 5xx overrides the minimum only for its error-count signal. */
 function measurementReports(
   project: ProjectConfig, service: ServiceConfig["type"], cycle: DirectReportCycle, entity: EntitySamples,
-  signals: readonly [string, string], group?: ReportingGroup,
+  durationSignal: string, group?: ReportingGroup,
 ): HealthReport[] {
   const { entityName, samples } = entity;
   if (!samples.length) return [];
@@ -64,7 +63,6 @@ function measurementReports(
   const graphServerErrors = samples.reduce((sum, sample) => sum + observedGraphServerErrors(sample), 0);
   const conclusive = samples.filter(sample => sample.success !== null || observedGraphServerErrors(sample) > 0);
   const available = conclusive.length >= policy.minimumSamples;
-  const succeeded = conclusive.filter(sample => sample.success && observedGraphServerErrors(sample) === 0).length;
   const serverError = samples.find(sample => observedGraphServerErrors(sample) > 0);
   const observedAt = samples.reduce((latest, sample) =>
     Date.parse(sample.observedAt) > Date.parse(latest.observedAt) ? sample : latest).observedAt;
@@ -74,7 +72,7 @@ function measurementReports(
     containerRevision: cycle.containerRevision?.slice(0, 128) ?? null,
     tenantAlias: project.tenant.id, journey: entity.journey, kind: entity.kind, step: entity.step,
     groupId: group?.id ?? "", samples: conclusive.length, attempts: samples.length,
-    inconclusive: samples.length - conclusive.length, minimumSamples: policy.minimumSamples, succeeded, observedAt,
+    inconclusive: samples.length - conclusive.length, minimumSamples: policy.minimumSamples, observedAt,
     observedGraphServerErrorCount: graphServerErrors,
     ...(serverError?.httpStatus === undefined ? {} : { httpStatus: serverError.httpStatus }),
     ...(serverError?.serviceErrorCode ? { serviceErrorCode: serverError.serviceErrorCode } : {}),
@@ -88,14 +86,7 @@ function measurementReports(
   };
   const measurements: { signalName: string; unit: string; value: number | undefined; rules: EvaluationRules }[] = [
     {
-      signalName: signals[0], unit: "Percent", value: available ? 100 * succeeded / conclusive.length : undefined,
-      rules: {
-        degradedRule: { operator: "LessThan", threshold: policy.successDegradedPercent },
-        unhealthyRule: { operator: "LessThan", threshold: policy.successUnhealthyPercent },
-      },
-    },
-    {
-      signalName: signals[1], unit: "Milliseconds",
+      signalName: durationSignal, unit: "Milliseconds",
       value: available ? conclusive.reduce((sum, sample) => sum + sample.durationMs, 0) / conclusive.length : undefined,
       rules: {
         degradedRule: { operator: "GreaterThan", threshold: latency.latencyDegradedMilliseconds },
@@ -130,12 +121,12 @@ function measurementReports(
 function callMeasurementReports(project: ProjectConfig, cycle: DirectReportCycle, results: SyntheticResult[]): HealthReport[] {
   const entities = collectEntitySamples(results, "call-phase");
   const phases = [
-    { name: "connection", signals: [teamsCallSignals[0], teamsCallSignals[1]] },
-    { name: "disconnection", signals: [teamsCallSignals[2], teamsCallSignals[3]] },
+    { name: "connection", durationSignal: teamsCallSignals[0] },
+    { name: "disconnection", durationSignal: teamsCallSignals[1] },
   ] as const;
   return phases.flatMap(phase => {
     const entity = entities.find(entity => entity.step === phase.name);
-    return entity ? measurementReports(project, "teams", cycle, entity, phase.signals) : [];
+    return entity ? measurementReports(project, "teams", cycle, entity, phase.durationSignal) : [];
   });
 }
 
@@ -147,13 +138,13 @@ export function directHealthReports(project: ProjectConfig, service: ServiceConf
     throw new Error("Health report service does not match its execution lane");
   }
   const reports = collectEntitySamples(results, "all").flatMap(entity =>
-    measurementReports(project, service.type, cycle, entity, journeySignals));
+    measurementReports(project, service.type, cycle, entity, journeyDurationSignal));
   if (service.type === "teams") return [...reports, ...callMeasurementReports(project, cycle, results)];
   for (const group of project.groups.filter(group => group.service === service.type)) {
     const members = new Set(group.targetIds);
     const groupResults = results.filter(result => members.has(result.testId));
     for (const entity of collectEntitySamples(groupResults, "journey")) {
-      reports.push(...measurementReports(project, service.type, cycle, entity, journeySignals, group));
+      reports.push(...measurementReports(project, service.type, cycle, entity, journeyDurationSignal, group));
     }
   }
   return reports;
@@ -169,15 +160,14 @@ export function measurementHealthReports(
     entityName: first.entityName, journey: first.journey, kind: first.kind, step: first.step,
     samples: observed.map(row => row.measurement),
   };
-  const signals = first.kind !== "call-phase" ? journeySignals
-    : first.step === "connection" ? [teamsCallSignals[0], teamsCallSignals[1]] as const
-      : [teamsCallSignals[2], teamsCallSignals[3]] as const;
-  const reports = measurementReports(project, service.type, cycle, entity, signals);
+  const durationSignal = first.kind !== "call-phase" ? journeyDurationSignal
+    : first.step === "connection" ? teamsCallSignals[0] : teamsCallSignals[1];
+  const reports = measurementReports(project, service.type, cycle, entity, durationSignal);
   if (first.kind === "journey" && service.type !== "teams") {
     for (const group of project.groups.filter(group => group.service === service.type)) {
       const members = new Set(group.targetIds);
       const samples = observed.filter(row => members.has(row.result.testId)).map(row => row.measurement);
-      reports.push(...measurementReports(project, service.type, cycle, { ...entity, samples }, signals, group));
+      reports.push(...measurementReports(project, service.type, cycle, { ...entity, samples }, durationSignal, group));
     }
   }
   return reports;
